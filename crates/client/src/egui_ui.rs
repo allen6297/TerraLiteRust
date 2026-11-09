@@ -19,9 +19,11 @@ use rebuild_world::Pack;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab};
 use crate::hotbar::{self, Hotbar};
 use crate::palette;
+use crate::player;
 use crate::texture::{self, Image};
 
 /// Overall egui zoom — matches the old `GUI_SCALE` target.
@@ -36,6 +38,16 @@ const CREATIVE_COLS: usize = 9;
 const INV_COLS: usize = 10;
 const INV_ROWS: usize = 4;
 const INV_BODY: usize = INV_COLS * INV_ROWS;
+/// Armor / accessory columns flanking the entity preview (GUI plan: 5 each).
+const EQUIP_ROWS: usize = 5;
+/// Soft-rendered player preview size in pixels.
+const PREVIEW_W: usize = 96;
+const PREVIEW_H: usize = 144;
+const PREVIEW_KEY: &str = "__player_preview__";
+
+/// Left-column UI row → engine armor slot (`None` = stub).
+/// Order is top→bottom: head, chest, legs(stub), feet, offhand(stub).
+const LEFT_ARMOR_MAP: [Option<usize>; EQUIP_ROWS] = [Some(0), Some(1), None, Some(2), None];
 
 // Terralite dark-well palette (matches gui.rs WELL / LIP / PANEL).
 const WELL: Color32 = Color32::from_rgb(5, 6, 10);
@@ -64,6 +76,8 @@ pub struct EguiHost {
     renderer: Renderer,
     /// Pending menu action from the last `run` (Play, Quit, …).
     pending: MenuAction,
+    /// True when the last `run` mutated hotbar / bag / armor.
+    touched: bool,
     /// Soft-rendered slot icons keyed by item id.
     icons: HashMap<String, TextureHandle>,
 }
@@ -91,6 +105,7 @@ impl EguiHost {
             winit,
             renderer,
             pending: MenuAction::None,
+            touched: false,
             icons: HashMap::new(),
         }
     }
@@ -101,6 +116,11 @@ impl EguiHost {
 
     pub fn take_action(&mut self) -> MenuAction {
         std::mem::replace(&mut self.pending, MenuAction::None)
+    }
+
+    /// True when the last `run` changed hotbar, bag, or worn armor.
+    pub fn take_touched(&mut self) -> bool {
+        std::mem::replace(&mut self.touched, false)
     }
 
     /// True when egui should own pointer/keyboard instead of the world.
@@ -116,9 +136,11 @@ impl EguiHost {
         gui: &mut Gui,
         hotbar: &mut Hotbar,
         bag: &mut hotbar::Bag,
+        armor: &mut Armor,
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
+        let mut touched = false;
         let icons = &mut self.icons;
         let output = self.ctx.run_ui(raw, |ui| {
             apply_theme(ui.ctx());
@@ -127,10 +149,11 @@ impl EguiHost {
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
             } else if gui.player_inv_open() {
-                draw_player_inventory(ui, gui, hotbar, bag, icons);
+                touched = draw_player_inventory(ui, gui, hotbar, bag, armor, icons);
             }
         });
         self.pending = pending;
+        self.touched = touched;
         self.winit
             .handle_platform_output(window, output.platform_output.clone());
         output
@@ -440,8 +463,10 @@ fn draw_player_inventory(
     gui: &mut Gui,
     hotbar: &mut Hotbar,
     bag: &mut hotbar::Bag,
+    armor: &mut Armor,
     icons: &mut HashMap<String, TextureHandle>,
-) {
+) -> bool {
+    let mut touched = false;
     egui::CentralPanel::default()
         .frame(Frame::new().fill(backdrop()))
         .show(ui, |ui| {
@@ -480,6 +505,10 @@ fn draw_player_inventory(
                     ui.add_space(10.0);
                     match gui.inv_tab() {
                         PlayerInvTab::Player => {
+                            if draw_player_detail(ui, hotbar, bag, armor, icons) {
+                                touched = true;
+                            }
+                            ui.add_space(12.0);
                             draw_inv_body_grid(ui, hotbar, bag, icons);
                         }
                         PlayerInvTab::Craft => {
@@ -497,6 +526,172 @@ fn draw_player_inventory(
                 });
             });
         });
+    touched
+}
+
+/// Center entity preview + left/right columns of [`EQUIP_ROWS`] slots.
+fn draw_player_detail(
+    ui: &mut Ui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    armor: &mut Armor,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let preview_h = SLOT * EQUIP_ROWS as f32 + SLOT_GAP * (EQUIP_ROWS as f32 - 1.0);
+    let preview_w = preview_h * (PREVIEW_W as f32 / PREVIEW_H as f32);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(SLOT_GAP + 4.0, SLOT_GAP);
+        // Left: armor column (wired head/chest/feet; stubs for legs + offhand).
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+            for row in 0..EQUIP_ROWS {
+                if equip_slot(ui, hotbar, bag, armor, icons, LEFT_ARMOR_MAP[row], true) {
+                    touched = true;
+                }
+            }
+        });
+        // Center: soft-rendered player body (bbmodel / F5-style).
+        draw_entity_preview(ui, icons, preview_w, preview_h);
+        // Right: accessory stubs (engine has no accessory slots yet).
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+            for _ in 0..EQUIP_ROWS {
+                if equip_slot(ui, hotbar, bag, armor, icons, None, false) {
+                    touched = true;
+                }
+            }
+        });
+    });
+    touched
+}
+
+fn draw_entity_preview(
+    ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
+    width: f32,
+    height: f32,
+) {
+    let (rect, _response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(4), SLOT_WELL);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0, SLOT_EDGE),
+        StrokeKind::Outside,
+    );
+    let lip = egui::Rect::from_min_max(
+        rect.left_top(),
+        egui::pos2(rect.right(), rect.top() + 2.0),
+    );
+    ui.painter()
+        .rect_filled(lip, CornerRadius::same(2), LIP.gamma_multiply(0.85));
+    let tex = player_preview_texture(ui.ctx(), icons);
+    let pad = 4.0;
+    ui.painter().image(
+        tex,
+        rect.shrink(pad),
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+}
+
+fn player_preview_texture(
+    ctx: &Context,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> TextureId {
+    if let Some(handle) = icons.get(PREVIEW_KEY) {
+        return handle.id();
+    }
+    let rgba = player::preview_rgba(PREVIEW_W, PREVIEW_H);
+    let image = egui::ColorImage::from_rgba_unmultiplied([PREVIEW_W, PREVIEW_H], &rgba);
+    let handle = ctx.load_texture(PREVIEW_KEY, image, TextureOptions::LINEAR);
+    let tex = handle.id();
+    icons.insert(PREVIEW_KEY.to_string(), handle);
+    tex
+}
+
+/// One equipment well. `engine_slot` wires into [`Armor`]; `None` is a stub.
+/// `armor_side` is true for the left column (accepts armor pieces).
+fn equip_slot(
+    ui: &mut Ui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    armor: &mut Armor,
+    icons: &mut HashMap<String, TextureHandle>,
+    engine_slot: Option<usize>,
+    armor_side: bool,
+) -> bool {
+    let worn_id = engine_slot.and_then(|slot| armor.worn().get(slot).copied().flatten());
+    let tex = worn_id.and_then(|id| icon_texture(ui.ctx(), icons, id));
+    let resp = slot_button(ui, tex, false, None);
+    if let Some(id) = worn_id {
+        let tip = gui::tip_for(id, Some(1));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+    } else if !armor_side {
+        resp.clone().on_hover_ui(|ui| {
+            show_tip(
+                ui,
+                &gui::ItemTip {
+                    name: "Accessory".into(),
+                    line: "empty — not wired yet".into(),
+                },
+            );
+        });
+    } else if engine_slot.is_none() {
+        resp.clone().on_hover_ui(|ui| {
+            show_tip(
+                ui,
+                &gui::ItemTip {
+                    name: "Equipment".into(),
+                    line: "empty — not wired yet".into(),
+                },
+            );
+        });
+    }
+    if !resp.clicked() {
+        return false;
+    }
+    let Some(slot) = engine_slot else {
+        return false;
+    };
+    click_armor_slot(hotbar, bag, armor, slot)
+}
+
+/// Equip the selected hotbar armor into `slot`, or take the worn piece off.
+fn click_armor_slot(
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    armor: &mut Armor,
+    slot: usize,
+) -> bool {
+    let held = hotbar.slot(hotbar.selected());
+    let held_fits = held.and_then(|id| {
+        let (piece_slot, _) = Pack::builtin().armor_of(id)?;
+        (piece_slot as usize == slot).then_some(id)
+    });
+    if let Some(id) = held_fits {
+        let id = rebuild_world::Block::new(id, 0).id;
+        let previous = armor.equip(slot, id);
+        hotbar.consume_selected();
+        if let Some(old) = previous {
+            if !hotbar.collect(old) {
+                let _ = bag.collect(old);
+            }
+        }
+        return true;
+    }
+    if let Some(old) = armor.clear(slot) {
+        if !hotbar.collect(old) {
+            let _ = bag.collect(old);
+        }
+        return true;
+    }
+    false
 }
 
 fn draw_inv_body_grid(
@@ -940,6 +1135,45 @@ mod tests {
         assert_eq!(INV_ROWS, 4);
         assert_eq!(INV_BODY, 40);
         assert_eq!(hotbar::SLOTS, 10);
+    }
+
+    #[test]
+    fn player_tab_has_two_equipment_columns_of_five() {
+        assert_eq!(EQUIP_ROWS, 5);
+        assert_eq!(LEFT_ARMOR_MAP.len(), 5);
+        // Engine armor: head / chest / feet — legs + offhand stay stubs.
+        assert_eq!(LEFT_ARMOR_MAP[0], Some(0));
+        assert_eq!(LEFT_ARMOR_MAP[1], Some(1));
+        assert_eq!(LEFT_ARMOR_MAP[2], None);
+        assert_eq!(LEFT_ARMOR_MAP[3], Some(2));
+        assert_eq!(LEFT_ARMOR_MAP[4], None);
+    }
+
+    #[test]
+    fn click_armor_slot_equips_matching_piece() {
+        let mut hotbar = Hotbar::new();
+        let mut bag = hotbar::Bag::new();
+        let mut armor = Armor::new();
+        // Slot 2 starts empty; collect one cap so consume clears the cell.
+        assert!(hotbar.select_digit(2));
+        assert!(hotbar.collect("leather_cap"));
+        assert!(click_armor_slot(&mut hotbar, &mut bag, &mut armor, 0));
+        assert_eq!(armor.worn()[0], Some("leather_cap"));
+        assert!(hotbar.slot(hotbar.selected()).is_none());
+        assert!(click_armor_slot(&mut hotbar, &mut bag, &mut armor, 0));
+        assert!(armor.worn()[0].is_none());
+        assert_eq!(hotbar.slot(hotbar.selected()), Some("leather_cap"));
+    }
+
+    #[test]
+    fn player_preview_texture_pixels_are_opaque() {
+        let rgba = player::preview_rgba(PREVIEW_W, PREVIEW_H);
+        assert_eq!(rgba.len(), PREVIEW_W * PREVIEW_H * 4);
+        let opaque = rgba.chunks_exact(4).filter(|px| px[3] > 200).count();
+        assert!(
+            opaque > PREVIEW_W * PREVIEW_H / 12,
+            "entity preview should show the body silhouette"
+        );
     }
 
     #[test]

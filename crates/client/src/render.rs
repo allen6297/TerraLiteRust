@@ -8103,8 +8103,10 @@ impl State {
                 &mut self.gui,
                 &mut self.hotbar,
                 &mut self.bag,
+                &mut self.armor,
             );
             let action = self.egui.take_action();
+            let touched = self.egui.take_touched();
             self.egui.paint(
                 &self.device,
                 &self.queue,
@@ -8118,6 +8120,9 @@ impl State {
                 self.hotbar_dirty = true;
                 self.bag_dirty = true;
                 self.apply_menu(action);
+            } else if touched {
+                self.hotbar_dirty = true;
+                self.bag_dirty = true;
             }
         }
 

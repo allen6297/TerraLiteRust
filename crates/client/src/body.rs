@@ -607,6 +607,11 @@ impl Armor {
         *cell = Some(id);
         old
     }
+
+    /// Take off the piece in `slot`.
+    pub fn clear(&mut self, slot: usize) -> Option<&'static str> {
+        self.slots.get_mut(slot).and_then(Option::take)
+    }
 }
 
 /// Hearts left, and whether the fall was fatal.
@@ -1267,6 +1272,8 @@ mod tests {
         assert!(worn.equip(0, "leather_cap").is_none());
         assert_eq!(worn.equip(0, "leather_cap"), Some("leather_cap"));
         assert_eq!(worn.worn()[0], Some("leather_cap"));
+        assert_eq!(worn.clear(0), Some("leather_cap"));
+        assert!(worn.worn()[0].is_none());
     }
 
     #[test]

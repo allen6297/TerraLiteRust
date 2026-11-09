@@ -76,6 +76,86 @@ pub fn peer_mesh(eye: [f32; 3], yaw: f32) -> Vec<Vertex> {
     blockbench::mesh(figure(), "idle", 0.0, yaw, feet, &[])
 }
 
+/// Soft-render the idle body for an egui inventory preview (third-person style).
+///
+/// Returns tightly packed RGBA8 pixels, `width * height * 4` bytes. Transparent
+/// outside the silhouette. The model faces the viewer with a slight yaw so both
+/// the front and a bit of the side read.
+pub fn preview_rgba(width: usize, height: usize) -> Vec<u8> {
+    let width = width.max(8);
+    let height = height.max(8);
+    // Mid-idle so the arms breathe; yaw keeps the face toward the camera (+Z).
+    let vertices = blockbench::mesh(figure(), "idle", 0.35, 0.0, [0.0, 0.0, 0.0], &[]);
+    soft_project(&vertices, width, height)
+}
+
+fn soft_project(vertices: &[Vertex], width: usize, height: usize) -> Vec<u8> {
+    let mut rgba = vec![0u8; width * height * 4];
+    let mut depth = vec![f32::INFINITY; width * height];
+    // Slight turn + elevated look, like F5 from in front.
+    let yaw = 0.45_f32;
+    let (sy, cy) = (yaw.sin(), yaw.cos());
+    let scale = height as f32 * 0.40;
+    let cx = width as f32 * 0.5;
+    let cy_screen = height as f32 * 0.55;
+    let body_mid = 0.95_f32;
+    let project = |p: [f32; 3]| -> (f32, f32, f32) {
+        let x = p[0] * cy + p[2] * sy;
+        let z = -p[0] * sy + p[2] * cy;
+        let sx = x * scale + cx;
+        let sy = (body_mid - p[1]) * scale + cy_screen;
+        (sx, sy, z)
+    };
+    for tri in vertices.chunks_exact(3) {
+        let (ax, ay, az) = project(tri[0].position);
+        let (bx, by, bz) = project(tri[1].position);
+        let (cxp, cyp, cz) = project(tri[2].position);
+        let color = tri[0].color;
+        let min_x = ax.min(bx).min(cxp).floor().max(0.0) as usize;
+        let max_x = ax
+            .max(bx)
+            .max(cxp)
+            .ceil()
+            .min(width as f32 - 1.0) as usize;
+        let min_y = ay.min(by).min(cyp).floor().max(0.0) as usize;
+        let max_y = ay
+            .max(by)
+            .max(cyp)
+            .ceil()
+            .min(height as f32 - 1.0) as usize;
+        let area = (bx - ax) * (cyp - ay) - (cxp - ax) * (by - ay);
+        if area.abs() < 1.0e-5 {
+            continue;
+        }
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let w0 = ((bx - px) * (cyp - py) - (cxp - px) * (by - py)) / area;
+                let w1 = ((cxp - px) * (ay - py) - (ax - px) * (cyp - py)) / area;
+                let w2 = 1.0 - w0 - w1;
+                if w0 < -0.01 || w1 < -0.01 || w2 < -0.01 {
+                    continue;
+                }
+                let z = az * w0 + bz * w1 + cz * w2;
+                let i = y * width + x;
+                if z >= depth[i] {
+                    continue;
+                }
+                depth[i] = z;
+                // Face lighting from the projected normal tilt.
+                let shade = (0.72 + 0.28 * w0).clamp(0.55, 1.0);
+                let o = i * 4;
+                rgba[o] = (color[0] * shade * 255.0).clamp(0.0, 255.0) as u8;
+                rgba[o + 1] = (color[1] * shade * 255.0).clamp(0.0, 255.0) as u8;
+                rgba[o + 2] = (color[2] * shade * 255.0).clamp(0.0, 255.0) as u8;
+                rgba[o + 3] = 255;
+            }
+        }
+    }
+    rgba
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +259,16 @@ mod tests {
         let bare = pose.vertices([0.0, EYE_HEIGHT, 0.0], true);
         assert!(bare.len() < full.len());
         assert!(bare.iter().all(|vertex| vertex.position[1] < 1.55));
+    }
+
+    #[test]
+    fn inventory_preview_paints_a_silhouette() {
+        let rgba = preview_rgba(64, 96);
+        assert_eq!(rgba.len(), 64 * 96 * 4);
+        let opaque = rgba.chunks_exact(4).filter(|px| px[3] > 200).count();
+        assert!(
+            opaque > 64 * 96 / 10,
+            "expected a player silhouette, got {opaque} opaque pixels"
+        );
     }
 }
