@@ -40,9 +40,18 @@ const SLOT_GAP: f32 = 5.0;
 const ICON_PX: usize = 64;
 /// Creative catalog grid width (GUI plan: 10-wide).
 const CREATIVE_COLS: usize = 10;
-/// Visible creative rows when the window is short (still taller than the old 5).
+/// Floor for visible creative rows on short windows.
 const CREATIVE_ROWS_MIN: f32 = 8.0;
-const CREATIVE_ROWS_MAX: f32 = 12.0;
+/// Soft ceiling so ultra-tall monitors do not grow forever.
+const CREATIVE_ROWS_MAX: f32 = 22.0;
+/// Target / clamp band for creative chrome vs window height.
+const CREATIVE_CHROME_FRAC: f32 = 0.78;
+const CREATIVE_CHROME_FRAC_MIN: f32 = 0.70;
+const CREATIVE_CHROME_FRAC_MAX: f32 = 0.85;
+/// Title / tabs / search / hotbar / close / panel margins above the item scroll.
+const CREATIVE_PANEL_OVERHEAD: f32 = 268.0;
+/// Extra vertical budget when EMI stacks under the catalog.
+const CREATIVE_STACKED_EMI_OVERHEAD: f32 = 210.0;
 /// Player inventory body grid (GUI plan: 4x10).
 const INV_COLS: usize = 10;
 const INV_ROWS: usize = 4;
@@ -408,13 +417,14 @@ fn draw_creative(
             // Center the chrome block (not top-left). Estimate height so EMI
             // either sits beside or stacks below while staying on-screen.
             let chrome_h = creative_chrome_height(grid_h, side_by_side);
-            let top_pad = ((avail_h - chrome_h) * 0.5).clamp(8.0, avail_h * 0.18);
+            // Keep gutters modest once chrome already owns ~70–85% of height.
+            let top_pad = ((avail_h - chrome_h) * 0.5).clamp(4.0, avail_h * 0.12);
             ui.with_layout(Layout::top_down(Align::Center), |ui| {
                 ui.add_space(top_pad);
                 ui.set_max_width(content_w);
                 egui::ScrollArea::vertical()
                     .id_salt("creative_chrome")
-                    .max_height((avail_h - top_pad).max(grid_h + 120.0))
+                    .max_height((avail_h - top_pad).max(chrome_h.min(avail_h * CREATIVE_CHROME_FRAC_MAX)))
                     .show(ui, |ui| {
                         ui.set_width(content_w);
                         ui.set_max_width(content_w);
@@ -437,8 +447,19 @@ fn draw_creative(
 /// How tall the creative item grid can grow for this window.
 fn creative_grid_height(avail_h: f32, side_by_side: bool) -> f32 {
     // Title / tabs / search / hotbar / close / panel chrome. Stacked EMI eats more.
-    let overhead = if side_by_side { 268.0 } else { 268.0 + 210.0 };
-    let usable = (avail_h * 0.90 - overhead).max(SLOT * CREATIVE_ROWS_MIN);
+    let overhead = if side_by_side {
+        CREATIVE_PANEL_OVERHEAD
+    } else {
+        CREATIVE_PANEL_OVERHEAD + CREATIVE_STACKED_EMI_OVERHEAD
+    };
+    // Own most of the vertical screen; leave a thin gutter for centering + EMI.
+    let target = (avail_h * CREATIVE_CHROME_FRAC).clamp(
+        avail_h * CREATIVE_CHROME_FRAC_MIN,
+        avail_h * CREATIVE_CHROME_FRAC_MAX,
+    );
+    let usable = (target - overhead)
+        .min(avail_h * CREATIVE_CHROME_FRAC_MAX - overhead)
+        .max(SLOT * CREATIVE_ROWS_MIN);
     let pitch = SLOT + SLOT_GAP;
     let rows = (usable / pitch)
         .floor()
@@ -447,11 +468,11 @@ fn creative_grid_height(avail_h: f32, side_by_side: bool) -> f32 {
 }
 
 fn creative_chrome_height(grid_h: f32, side_by_side: bool) -> f32 {
-    let main = 268.0 + grid_h;
+    let main = CREATIVE_PANEL_OVERHEAD + grid_h;
     if side_by_side {
         main
     } else {
-        main + 210.0
+        main + CREATIVE_STACKED_EMI_OVERHEAD
     }
 }
 
@@ -1779,9 +1800,21 @@ mod tests {
             short > five,
             "creative should show more than five rows even on a short window ({short} vs {five})"
         );
-        assert!(tall >= short);
+        assert!(tall > short);
         let min_h = SLOT * CREATIVE_ROWS_MIN + SLOT_GAP * (CREATIVE_ROWS_MIN - 1.0);
         assert!(short + 0.5 >= min_h);
+        // Tall windows should clear the old 12-row ceiling and fill most of the screen.
+        let twelve = SLOT * 12.0 + SLOT_GAP * 11.0;
+        assert!(
+            tall > twelve,
+            "creative should grow past 12 rows on a tall window ({tall} vs {twelve})"
+        );
+        let chrome = creative_chrome_height(tall, true);
+        let frac = chrome / 1080.0;
+        assert!(
+            (CREATIVE_CHROME_FRAC_MIN - 0.02..=CREATIVE_CHROME_FRAC_MAX + 0.03).contains(&frac),
+            "expected ~70–85% chrome height, got {frac:.3} ({chrome} / 1080)"
+        );
     }
 
     #[test]
