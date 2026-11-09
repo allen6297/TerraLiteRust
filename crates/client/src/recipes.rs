@@ -267,6 +267,27 @@ impl Book {
             .find(|recipe| recipe.result == id)
             .map(|recipe| recipe.ingredients.clone())
     }
+
+    /// Nine-cell shape for `id`, when the recipe is shaped.
+    pub fn pattern_of(&self, id: &str) -> Option<&[String]> {
+        self.recipes
+            .iter()
+            .find(|recipe| recipe.result == id)
+            .and_then(|recipe| recipe.pattern.as_deref())
+    }
+
+    /// Results that list `id` as an ingredient (EMI USES panel).
+    pub fn uses_of(&self, id: &str) -> Vec<String> {
+        let mut uses = Vec::new();
+        for recipe in &self.recipes {
+            if recipe.ingredients.iter().any(|item| item == id) {
+                uses.push(recipe.result.clone());
+            }
+        }
+        uses.sort();
+        uses.dedup();
+        uses
+    }
 }
 
 pub fn load_book() -> Result<Book, String> {
@@ -1161,5 +1182,7 @@ mod tests {
         );
         assert!(book.inputs("cobblestone").is_none());
         assert_eq!(book.detail("stone"), "cobblestone makes stone");
+        assert!(book.uses_of("cobblestone").iter().any(|id| id == "stone"));
+        assert!(book.pattern_of("stone").is_none());
     }
 }

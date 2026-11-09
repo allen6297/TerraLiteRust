@@ -5,16 +5,17 @@
 //! save, quit leaves. Up and down move the row. Enter or Space activates it.
 //! Escape during play releases the mouse, then opens pause: resume, settings,
 //! or quit to the title. E opens the player inventory (PLAYER | Craft tabs,
-//! 4x10 body slots + hotbar x10). Escape or E closes it. Craft tab hosts a
-//! 2x2 input + OUT wired to the recipe book; EMI / recipe browser comes later.
+//! 4x10 body slots + hotbar x10) with an EMI sidebar on the right. Escape or E
+//! closes it. Craft tab hosts a 2x2 input + OUT wired to the recipe book. EMI
+//! lists searchable recipe-book items; a selected item shows CRAFTING and USES.
 //! F on a placed crafting table opens a textured 3x3. The items in the grid
 //! match a book recipe, and Enter takes the result. F on a furnace opens
 //! input, fuel, and output. Cobblestone cooks into stone, and stone bricks
 //! cook into cracked stone bricks, while oak log or coal ore sits in the fuel slot. Keys 1 through 9 and 0 move one from the hotbar.
 //! I opens the creative inventory: category tabs with arrows, a 10-wide grid
-//! of placeable blocks, and the hotbar x10 under it. Arrows move the cursor.
-//! Enter on a block puts a full stack in the selected hotbar slot. Keys 1
-//! through 9 and 0 pick the hotbar slot. EMI comes later.
+//! of placeable blocks, the hotbar x10 under it, and EMI on the right. Arrows
+//! move the cursor. Enter on a block puts a full stack in the selected hotbar
+//! slot. Keys 1 through 9 and 0 pick the hotbar slot.
 //! Screens name their chrome in JSON (`panel`, `button`, `header` block ids).
 //! Those ids sample the pack atlas, so a panel is stone and a button is cobblestone.
 //! A mod screen, such as the guide on G, opens on the key in its JSON.
@@ -617,6 +618,10 @@ pub struct Gui {
     /// Letters typed on the creative grid. Empty shows the whole tab.
     /// A space is a word break, and the match uses the readable name.
     catalog_query: String,
+    /// EMI sidebar search (player inventory + creative). Empty shows every book entry.
+    emi_query: String,
+    /// Selected EMI item id. `None` hides CRAFTING / USES panels.
+    emi_id: Option<String>,
     command_open: bool,
     command_selected: usize,
     /// `(id, label)` for registered commands. The label is what the screen draws.
@@ -769,6 +774,8 @@ impl Gui {
                 catalog_at: 0,
                 catalog_tab: 0,
                 catalog_query: String::new(),
+                emi_query: String::new(),
+                emi_id: None,
                 command_open: false,
                 command_selected: 0,
                 commands: Vec::new(),
@@ -878,6 +885,8 @@ impl Gui {
                     catalog_at: 0,
                     catalog_tab: 0,
                     catalog_query: String::new(),
+                    emi_query: String::new(),
+                    emi_id: None,
                     command_open: false,
                     command_selected: 0,
                     commands: Vec::new(),
@@ -997,6 +1006,8 @@ impl Gui {
             catalog_at: 0,
             catalog_tab: 0,
             catalog_query: String::new(),
+            emi_query: String::new(),
+            emi_id: None,
             command_open: false,
             command_selected: 0,
             commands: Vec::new(),
@@ -1212,15 +1223,88 @@ impl Gui {
     pub fn close_bag(&mut self) {
         self.bag_open = false;
         self.catalog_query.clear();
+        self.clear_emi();
     }
 
     pub fn close_items(&mut self) {
         self.open = false;
         self.extra = None;
         self.inv_tab = PlayerInvTab::Player;
+        self.clear_emi();
     }
 
-    /// Recipe-book rows for EMI / Craft (not drawn on E until those slices).
+    fn clear_emi(&mut self) {
+        self.emi_query.clear();
+        self.emi_id = None;
+    }
+
+    pub fn emi_query(&self) -> &str {
+        &self.emi_query
+    }
+
+    pub fn set_emi_query(&mut self, query: &str) {
+        self.emi_query = query.to_string();
+    }
+
+    pub fn emi_selected(&self) -> Option<&str> {
+        self.emi_id.as_deref()
+    }
+
+    pub fn select_emi(&mut self, id: &str) {
+        self.emi_id = Some(id.to_string());
+        // Keep legacy items-list selection in sync when the id is a book row.
+        if let Some(index) = self.rows().iter().position(|row| row == id) {
+            self.selected = index;
+        }
+    }
+
+    /// Recipe-book entries filtered by the EMI search (readable name match).
+    pub fn emi_rows(&self) -> Vec<String> {
+        let mut rows: Vec<String> = self
+            .book
+            .entries()
+            .into_iter()
+            .filter(|id| creative_hit(id, &self.emi_query))
+            .collect();
+        let needle = fold_name(&self.emi_query);
+        if !needle.is_empty() {
+            rows.sort_by(|left, right| {
+                let rank = |id: &str| {
+                    let folded = fold_name(id);
+                    let shown = fold_name(&recipes::display_name(id));
+                    if folded.starts_with(&needle) || shown.starts_with(&needle) {
+                        0
+                    } else {
+                        1
+                    }
+                };
+                rank(left).cmp(&rank(right))
+            });
+        }
+        rows
+    }
+
+    /// Ingredients that craft the selected EMI item, when it is a result.
+    pub fn emi_crafting(&self) -> Option<Vec<String>> {
+        let id = self.emi_id.as_deref()?;
+        self.book.inputs(id)
+    }
+
+    /// Shaped 3×3 for the selected EMI item, when the recipe is shaped.
+    pub fn emi_pattern(&self) -> Option<Vec<String>> {
+        let id = self.emi_id.as_deref()?;
+        self.book.pattern_of(id).map(|cells| cells.to_vec())
+    }
+
+    /// Results that use the selected EMI item as an ingredient.
+    pub fn emi_uses(&self) -> Vec<String> {
+        let Some(id) = self.emi_id.as_deref() else {
+            return Vec::new();
+        };
+        self.book.uses_of(id)
+    }
+
+    /// Recipe-book rows for EMI / Craft.
     #[allow(dead_code)]
     pub fn item_rows(&self) -> Vec<String> {
         self.rows()
@@ -1234,6 +1318,9 @@ impl Gui {
     #[allow(dead_code)]
     pub fn select_item_row(&mut self, index: usize) {
         self.selected = index;
+        if let Some(id) = self.rows().get(index) {
+            self.emi_id = Some(id.clone());
+        }
     }
 
     #[allow(dead_code)]
@@ -1241,17 +1328,27 @@ impl Gui {
         self.book.detail(id)
     }
 
-    /// Craft the selected recipe-book row into the hotbar / bag (EMI / Craft).
-    #[allow(dead_code)]
+    /// Craft the selected EMI / items-list recipe into the hotbar / bag.
     pub fn craft_selected_into(
         &self,
         bar: &mut hotbar::Hotbar,
         bag: &mut hotbar::Bag,
     ) -> bool {
-        let Some((result, inputs)) = self.craft_job() else {
+        let Some((result, inputs)) = self.craft_job_for_emi() else {
             return false;
         };
         hotbar::craft_carried(bar, bag, &inputs, &result)
+    }
+
+    /// Prefer the EMI selection; fall back to the legacy items-list row.
+    fn craft_job_for_emi(&self) -> Option<(String, Vec<String>)> {
+        if let Some(id) = self.emi_id.clone() {
+            let inputs = self.book.inputs(&id)?;
+            if !inputs.is_empty() {
+                return Some((id, inputs));
+            }
+        }
+        self.craft_job()
     }
 
     /// Id from the screen file, `inventory` while the bag is open, `commands` for that list, or `""`.
@@ -7065,6 +7162,8 @@ mod tests {
             catalog_at: 0,
             catalog_tab: 0,
             catalog_query: String::new(),
+            emi_query: String::new(),
+            emi_id: None,
             command_open: false,
             command_selected: 0,
             commands: Vec::new(),
