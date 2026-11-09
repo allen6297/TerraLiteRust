@@ -1,0 +1,8 @@
+{
+  "id": "book",
+  "title": "Guide",
+  "open": "g",
+  "close": "escape",
+  "kind": "list",
+  "labels": ["marker", "page", "post", "slip", "night", "chest", "key"]
+}

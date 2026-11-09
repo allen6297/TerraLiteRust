@@ -1,0 +1,131 @@
+{
+  "credit": "Made with Blockbench",
+  "meta": { "format_version": "4.10", "model_format": "free" },
+  "name": "axolotl",
+  "elements": [
+    {
+      "name": "body",
+      "from": [1, 2, 3],
+      "to": [15, 9, 11],
+      "origin": [8, 5, 7],
+      "color": [0.96, 0.36, 0.58]
+    },
+    {
+      "name": "head",
+      "from": [4, 4, 10],
+      "to": [12, 10, 16],
+      "origin": [8, 6, 10],
+      "color": [0.98, 0.52, 0.68]
+    },
+    {
+      "name": "tail",
+      "from": [5, 3, 0],
+      "to": [11, 7, 4],
+      "origin": [8, 5, 4],
+      "color": [0.90, 0.28, 0.50]
+    },
+    {
+      "name": "gill_l",
+      "from": [2, 6, 8],
+      "to": [5, 14, 11],
+      "origin": [3.5, 8, 9.5],
+      "color": [0.98, 0.18, 0.42]
+    },
+    {
+      "name": "gill_r",
+      "from": [11, 6, 8],
+      "to": [14, 14, 11],
+      "origin": [12.5, 8, 9.5],
+      "color": [0.98, 0.18, 0.42]
+    },
+    {
+      "name": "eye",
+      "from": [6, 7, 15],
+      "to": [7, 8, 16],
+      "origin": [6.5, 7.5, 15],
+      "color": [0.08, 0.08, 0.10]
+    }
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "loop": "loop",
+      "length": 2.4,
+      "animators": {
+        "gill_l": {
+          "name": "gill_l",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "0", "y": "0", "z": "8" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "13.9" }] },
+            { "channel": "rotation", "time": 1.2, "data_points": [{ "x": "0", "y": "0", "z": "16" }] },
+            { "channel": "rotation", "time": 1.6, "data_points": [{ "x": "0", "y": "0", "z": "13.9" }] },
+            { "channel": "rotation", "time": 2.0, "data_points": [{ "x": "0", "y": "0", "z": "8" }] },
+            { "channel": "rotation", "time": 2.4, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        },
+        "gill_r": {
+          "name": "gill_r",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "0", "y": "0", "z": "-8" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "-13.9" }] },
+            { "channel": "rotation", "time": 1.2, "data_points": [{ "x": "0", "y": "0", "z": "-16" }] },
+            { "channel": "rotation", "time": 1.6, "data_points": [{ "x": "0", "y": "0", "z": "-13.9" }] },
+            { "channel": "rotation", "time": 2.0, "data_points": [{ "x": "0", "y": "0", "z": "-8" }] },
+            { "channel": "rotation", "time": 2.4, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        }
+      }
+    },
+    {
+      "name": "walk",
+      "loop": "loop",
+      "length": 1.6,
+      "animators": {
+        "tail": {
+          "name": "tail",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.2, "data_points": [{ "x": "5.4", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "9.9", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.6, "data_points": [{ "x": "12.9", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "14", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 1.0, "data_points": [{ "x": "12.9", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 1.2, "data_points": [{ "x": "9.9", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 1.4, "data_points": [{ "x": "5.4", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 1.6, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        },
+        "gill_l": {
+          "name": "gill_l",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.2, "data_points": [{ "x": "0", "y": "0", "z": "7.1" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "0", "y": "0", "z": "10" }] },
+            { "channel": "rotation", "time": 0.6, "data_points": [{ "x": "0", "y": "0", "z": "7.1" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 1.0, "data_points": [{ "x": "0", "y": "0", "z": "-7.1" }] },
+            { "channel": "rotation", "time": 1.2, "data_points": [{ "x": "0", "y": "0", "z": "-10" }] },
+            { "channel": "rotation", "time": 1.4, "data_points": [{ "x": "0", "y": "0", "z": "-7.1" }] },
+            { "channel": "rotation", "time": 1.6, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        },
+        "gill_r": {
+          "name": "gill_r",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.2, "data_points": [{ "x": "0", "y": "0", "z": "-7.1" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "0", "y": "0", "z": "-10" }] },
+            { "channel": "rotation", "time": 0.6, "data_points": [{ "x": "0", "y": "0", "z": "-7.1" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 1.0, "data_points": [{ "x": "0", "y": "0", "z": "7.1" }] },
+            { "channel": "rotation", "time": 1.2, "data_points": [{ "x": "0", "y": "0", "z": "10" }] },
+            { "channel": "rotation", "time": 1.4, "data_points": [{ "x": "0", "y": "0", "z": "7.1" }] },
+            { "channel": "rotation", "time": 1.6, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        }
+      }
+    }
+  ]
+}

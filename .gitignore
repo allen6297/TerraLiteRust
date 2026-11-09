@@ -1,0 +1,45 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Build / native artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dylib
+*.so
+*.exe
+*.pdb
+
+# Secrets / credentials (never invent values — just ignore patterns)
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+credentials
+credentials.*
+secrets
+secrets.*
+
+# Logs / crash dumps
+*.log
+logs/
+crash-reports/
+
+# OS / IDE local state
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+*.iml
+.vscode/
+*.swp
+*~

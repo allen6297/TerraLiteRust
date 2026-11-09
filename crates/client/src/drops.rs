@@ -1,0 +1,603 @@
+//! Items left where a block broke.
+//!
+//! A drop is a tile from the pack atlas that faces the camera eye. The mesh
+//! is rebuilt every frame, so a step or a turn cannot leave it edge-on. It
+//! is not saved and does not enter the hotbar until the player walks into
+//! it. A full hotbar leaves it where it is, unless the caller also offers
+//! the inventory. Sparks stay small untextured cubes.
+
+use rebuild_world::Block;
+
+use crate::hotbar::Hotbar;
+use crate::mesh::Vertex;
+use crate::palette;
+
+/// Half the width of a dropped item, in blocks. Pickup uses the same reach.
+const HALF: f32 = 0.12;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Drop {
+    pub id: &'static str,
+    pub center: [f32; 3],
+    /// A pickup hook already refused this drop while the player is touching it.
+    refused: bool,
+}
+
+struct Mote {
+    center: [f32; 3],
+    velocity: [f32; 3],
+    color: [f32; 3],
+    life: f32,
+}
+
+#[derive(Default)]
+pub struct Drops {
+    items: Vec<Drop>,
+    motes: Vec<Mote>,
+}
+
+impl Drops {
+    pub fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            motes: Vec::new(),
+        }
+    }
+
+    /// Chips from a broken block. They fly out and fade faster than a spark.
+    pub fn puff(&mut self, origin: [f32; 3], color: [f32; 3]) {
+        const DIRS: [[f32; 3]; 8] = [
+            [1.6, 2.2, 0.4],
+            [-1.8, 1.8, 0.2],
+            [0.4, 2.6, -1.5],
+            [-0.3, 1.4, -1.7],
+            [1.4, 2.0, 1.3],
+            [-1.5, 2.4, 1.1],
+            [0.2, 3.0, 0.2],
+            [-0.6, 1.6, -0.4],
+        ];
+        for dir in DIRS {
+            self.motes.push(Mote {
+                center: origin,
+                velocity: dir,
+                color,
+                life: 0.35,
+            });
+        }
+    }
+
+    /// A short rising burst. Commands and a registered particle use this.
+    pub fn burst(&mut self, origin: [f32; 3], color: [f32; 3]) {
+        const DIRS: [[f32; 3]; 6] = [
+            [0.4, 1.4, 0.1],
+            [-0.5, 1.1, 0.2],
+            [0.2, 1.6, -0.4],
+            [-0.2, 1.0, -0.5],
+            [0.6, 1.3, 0.4],
+            [-0.35, 1.5, 0.25],
+        ];
+        for dir in DIRS {
+            self.motes.push(Mote {
+                center: origin,
+                velocity: dir,
+                color,
+                life: 0.7,
+            });
+        }
+    }
+
+    /// Move the burst. True when any mote is still in the air, so the mesh should update.
+    pub fn tick_motes(&mut self, dt: f32) -> bool {
+        if self.motes.is_empty() {
+            return false;
+        }
+        let step = dt.max(0.0);
+        for mote in &mut self.motes {
+            mote.life -= step;
+            mote.center[0] += mote.velocity[0] * step;
+            mote.center[1] += mote.velocity[1] * step;
+            mote.center[2] += mote.velocity[2] * step;
+            mote.velocity[1] -= 2.4 * step;
+        }
+        self.motes.retain(|mote| mote.life > 0.0);
+        true
+    }
+
+    /// Leave one cube for `id`. A solid cell keeps the cube on top of it.
+    pub fn spawn(&mut self, id: &str, cell: [i32; 3], remains_solid: bool) {
+        if id.is_empty() || id == "air" {
+            return;
+        }
+        self.items.push(Drop {
+            id: Block::new(id, 0).id,
+            center: center_for(cell, remains_solid),
+            refused: false,
+        });
+    }
+
+    /// Drops the body just started touching and a hook has not refused yet.
+    /// Walking off a refused drop clears it, so the next touch asks again.
+    pub fn pending_pickups(&mut self, body_min: [f32; 3], body_max: [f32; 3]) -> Vec<&'static str> {
+        let mut ids = Vec::new();
+        for drop in &mut self.items {
+            if !overlaps(drop.center, body_min, body_max) {
+                drop.refused = false;
+                continue;
+            }
+            if !drop.refused {
+                ids.push(drop.id);
+            }
+        }
+        ids
+    }
+
+    /// Add overlapping drops to `hotbar`. A drop the bar cannot take stays.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn pickup(&mut self, body_min: [f32; 3], body_max: [f32; 3], hotbar: &mut Hotbar) -> bool {
+        self.pickup_filtered(body_min, body_max, hotbar, &[])
+    }
+
+    /// Like [`Drops::pickup`], and any id in `refuse` stays on the ground.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn pickup_filtered(
+        &mut self,
+        body_min: [f32; 3],
+        body_max: [f32; 3],
+        hotbar: &mut Hotbar,
+        refuse: &[&str],
+    ) -> bool {
+        let before = self.items.len();
+        self.items.retain_mut(|drop| {
+            if !overlaps(drop.center, body_min, body_max) {
+                return true;
+            }
+            if refuse.iter().any(|id| *id == drop.id) {
+                drop.refused = true;
+                return true;
+            }
+            !hotbar.collect(drop.id)
+        });
+        self.items.len() != before
+    }
+
+    /// Like [`Drops::pickup`], then the inventory when the hotbar cannot take it.
+    pub fn pickup_carried(
+        &mut self,
+        body_min: [f32; 3],
+        body_max: [f32; 3],
+        hotbar: &mut Hotbar,
+        bag: &mut crate::hotbar::Bag,
+        refuse: &[&str],
+    ) -> bool {
+        let before = self.items.len();
+        self.items.retain_mut(|drop| {
+            if !overlaps(drop.center, body_min, body_max) {
+                return true;
+            }
+            if refuse.iter().any(|id| *id == drop.id) {
+                drop.refused = true;
+                return true;
+            }
+            if hotbar.collect(drop.id) {
+                return false;
+            }
+            !bag.collect(drop.id)
+        });
+        self.items.len() != before
+    }
+
+    /// The nearest food drop inside `reach`, if the fox can walk to it.
+    pub fn food_near(&self, at: [f32; 3], reach: f32) -> Option<[f32; 3]> {
+        self.nearest_food(at, reach).map(|drop| drop.center)
+    }
+
+    /// Remove the nearest food drop inside `reach`.
+    pub fn take_food(&mut self, at: [f32; 3], reach: f32) -> Option<&'static str> {
+        let index = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, drop)| is_food(drop.id) && dist2(drop.center, at) <= reach * reach)
+            .min_by(|(_, left), (_, right)| {
+                dist2(left.center, at).total_cmp(&dist2(right.center, at))
+            })
+            .map(|(index, _)| index)?;
+        Some(self.items.remove(index).id)
+    }
+
+    /// Dropped items the crosshair can name. Each box is the pickup sprite.
+    pub fn boxes(&self) -> impl Iterator<Item = (&'static str, [f32; 3], [f32; 3])> + '_ {
+        self.items.iter().map(|drop| {
+            let [x, y, z] = drop.center;
+            (
+                drop.id,
+                [x - HALF, y - HALF, z - HALF],
+                [x + HALF, y + HALF, z + HALF],
+            )
+        })
+    }
+
+    fn nearest_food(&self, at: [f32; 3], reach: f32) -> Option<&Drop> {
+        self.items
+            .iter()
+            .filter(|drop| is_food(drop.id) && dist2(drop.center, at) <= reach * reach)
+            .min_by(|left, right| dist2(left.center, at).total_cmp(&dist2(right.center, at)))
+    }
+
+    /// Items face +Z. Sparks stay cubes. Tests use this facing.
+    #[cfg(test)]
+    pub fn vertices(&self) -> Vec<Vertex> {
+        self.vertices_facing([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+    }
+
+    /// Item tiles face the camera. `right` and `up` are that camera's axes.
+    #[cfg(test)]
+    pub fn vertices_facing(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
+        let mut vertices = Vec::with_capacity(self.items.len() * 6 + self.motes.len() * 36);
+        for drop in &self.items {
+            push_billboard(&mut vertices, drop.center, HALF, drop.id, right, up);
+        }
+        for mote in &self.motes {
+            push_box(&mut vertices, mote.center, 0.04, mote.color);
+        }
+        vertices
+    }
+
+    /// Each item points at `eye`. Sparks stay cubes.
+    pub fn vertices_toward(&self, eye: [f32; 3]) -> Vec<Vertex> {
+        let mut vertices = Vec::with_capacity(self.items.len() * 6 + self.motes.len() * 36);
+        for drop in &self.items {
+            let (right, up) = axes_toward(drop.center, eye);
+            push_billboard(&mut vertices, drop.center, HALF, drop.id, right, up);
+        }
+        for mote in &self.motes {
+            push_box(&mut vertices, mote.center, 0.04, mote.color);
+        }
+        vertices
+    }
+}
+
+/// Right and up for a quad whose face points from `center` at `eye`.
+fn axes_toward(center: [f32; 3], eye: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let mut to_eye = sub(eye, center);
+    if len2(to_eye) < 1.0e-6 {
+        to_eye = [0.0, 0.0, 1.0];
+    } else {
+        to_eye = normalize(to_eye);
+    }
+    let mut right = cross([0.0, 1.0, 0.0], to_eye);
+    if len2(right) < 1.0e-6 {
+        right = [1.0, 0.0, 0.0];
+    } else {
+        right = normalize(right);
+    }
+    let up = normalize(cross(to_eye, right));
+    (right, up)
+}
+
+pub fn center_for(cell: [i32; 3], remains_solid: bool) -> [f32; 3] {
+    let y = if remains_solid {
+        cell[1] as f32 + 1.2
+    } else {
+        cell[1] as f32 + 0.32
+    };
+    [cell[0] as f32 + 0.5, y, cell[2] as f32 + 0.5]
+}
+
+fn is_food(id: &str) -> bool {
+    rebuild_world::Pack::builtin().food_of(id).is_some()
+}
+
+/// Pale dust for stone, near-black for coal, and a warm chip for iron.
+pub fn chip_color(id: &str) -> [f32; 3] {
+    match id {
+        "coal_ore" => [0.14, 0.14, 0.16],
+        "iron_ore" => [0.86, 0.58, 0.36],
+        _ => [0.78, 0.76, 0.70],
+    }
+}
+
+fn dist2(from: [f32; 3], to: [f32; 3]) -> f32 {
+    let dx = from[0] - to[0];
+    let dy = from[1] - to[1];
+    let dz = from[2] - to[2];
+    dx * dx + dy * dy + dz * dz
+}
+
+fn overlaps(center: [f32; 3], min: [f32; 3], max: [f32; 3]) -> bool {
+    (0..3).all(|axis| center[axis] + HALF > min[axis] && center[axis] - HALF < max[axis])
+}
+
+fn push_box(out: &mut Vec<Vertex>, center: [f32; 3], half: f32, color: [f32; 3]) {
+    let min = [center[0] - half, center[1] - half, center[2] - half];
+    let max = [center[0] + half, center[1] + half, center[2] + half];
+    let corner = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], max[2]],
+        [min[0], max[1], max[2]],
+    ];
+    const FACES: [[usize; 4]; 6] = [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [3, 2, 6, 7],
+        [0, 3, 7, 4],
+        [1, 2, 6, 5],
+    ];
+    const NORMALS: [[f32; 3]; 6] = [
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+    ];
+    for (face, normal) in FACES.into_iter().zip(NORMALS) {
+        let tri = [face[0], face[1], face[2], face[0], face[2], face[3]];
+        for index in tri {
+            out.push(Vertex {
+                position: corner[index],
+                color,
+                normal,
+                uv: [0.0, 0.0],
+                textured: 0.0,
+                block: color,
+                bounce: [0.0, 0.0, 0.0],
+                ao: 1.0,
+            });
+        }
+    }
+}
+
+fn push_billboard(
+    out: &mut Vec<Vertex>,
+    center: [f32; 3],
+    half: f32,
+    id: &str,
+    right: [f32; 3],
+    up: [f32; 3],
+) {
+    let right = scale(right, half);
+    let up = scale(up, half);
+    let corner = [
+        add(center, add(scale(right, -1.0), scale(up, -1.0))),
+        add(center, add(right, scale(up, -1.0))),
+        add(center, add(right, up)),
+        add(center, add(scale(right, -1.0), up)),
+    ];
+    let uv = [[0.0, 0.999], [0.999, 0.999], [0.999, 0.0], [0.0, 0.0]];
+    let normal = normalize(cross(right, up));
+    let textured = crate::texture::block_face(id);
+    let color = if textured > 0.0 {
+        [1.0, 1.0, 1.0]
+    } else {
+        palette::color(id, 0)
+    };
+    let block = if textured > 0.0 {
+        [0.45, 0.45, 0.45]
+    } else {
+        color
+    };
+    let tri = [0, 1, 2, 0, 2, 3];
+    for index in tri {
+        out.push(Vertex {
+            position: corner[index],
+            color,
+            normal,
+            uv: uv[index],
+            textured,
+            block,
+            bounce: [0.0, 0.0, 0.0],
+            ao: 1.0,
+        });
+    }
+}
+
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale(v: [f32; 3], by: f32) -> [f32; 3] {
+    [v[0] * by, v[1] * by, v[2] * by]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn len2(v: [f32; 3]) -> f32 {
+    v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = len2(v).sqrt();
+    if len < 1.0e-6 {
+        [0.0, 0.0, 1.0]
+    } else {
+        scale(v, 1.0 / len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hotbar::Hotbar;
+
+    #[test]
+    fn a_break_spawns_a_small_cube_and_skips_the_hotbar() {
+        let mut drops = Drops::new();
+        let bar = Hotbar::new();
+        let before = bar.count(0);
+        drops.spawn("grass", [8, 0, 14], false);
+        assert_eq!(drops.items.len(), 1);
+        assert_eq!(bar.count(0), before);
+        assert!(bar.slot(1).is_none());
+
+        let center = center_for([8, 0, 14], false);
+        assert_eq!(center, [8.5, 0.32, 14.5]);
+        let solid = center_for([9, 1, 13], true);
+        assert_eq!(solid[1], 2.2);
+
+        let vertices = drops.vertices();
+        assert_eq!(vertices.len(), 6);
+        let face = crate::texture::block_face("grass");
+        assert!(face > 0.0);
+        assert!(vertices.iter().all(|vertex| {
+            vertex.color == [1.0, 1.0, 1.0]
+                && vertex.textured == face
+                && within(vertex.position, center)
+        }));
+        assert!(vertices.iter().any(|vertex| vertex.uv[0] > 0.5));
+    }
+
+    #[test]
+    fn a_nearby_food_drop_can_be_taken_and_stone_stays() {
+        let mut drops = Drops::new();
+        drops.spawn("stone", [6, 1, 6], false);
+        drops.spawn("apple", [7, 1, 6], false);
+        let at = [6.2, 1.0, 6.2];
+        let spot = drops.food_near(at, 6.0).expect("apple");
+        assert!(spot[0] > 7.0);
+        assert_eq!(drops.take_food(at, 6.0), Some("apple"));
+        assert!(drops.food_near(at, 6.0).is_none());
+        assert_eq!(drops.items.len(), 1);
+    }
+
+    #[test]
+    fn a_drop_turns_to_face_the_player() {
+        let mut drops = Drops::new();
+        drops.spawn("grass", [0, 1, 0], false);
+        let center = drops.items[0].center;
+        let south = drops.vertices_toward([center[0], center[1], center[2] + 4.0]);
+        let east = drops.vertices_toward([center[0] + 4.0, center[1], center[2]]);
+        let above = drops.vertices_toward([center[0], center[1] + 4.0, center[2]]);
+        assert_eq!(south.len(), 6);
+        assert!(south.iter().all(|vertex| vertex.normal[2] > 0.9));
+        assert!(east.iter().all(|vertex| vertex.normal[0] > 0.9));
+        assert!(above.iter().all(|vertex| vertex.normal[1] > 0.9));
+        assert_ne!(south[0].position, east[0].position);
+        assert_ne!(south[0].position, above[0].position);
+    }
+
+    #[test]
+    fn walking_into_a_drop_adds_one_and_a_full_bar_leaves_it() {
+        let mut drops = Drops::new();
+        let mut bar = Hotbar::new();
+        drops.spawn("grass", [2, 1, 2], false);
+        drops.spawn("stone", [2, 1, 2], false);
+        let missed = ([10.0, 0.0, 10.0], [10.6, 1.8, 10.6]);
+        assert!(!drops.pickup(missed.0, missed.1, &mut bar));
+        assert_eq!(drops.items.len(), 2);
+        assert!(bar.slot(1).is_none());
+
+        let center = center_for([2, 1, 2], false);
+        let body = (
+            [center[0] - 0.3, center[1] - 0.2, center[2] - 0.3],
+            [center[0] + 0.3, center[1] + 1.6, center[2] + 0.3],
+        );
+        assert!(drops.pickup(body.0, body.1, &mut bar));
+        assert!(drops.items.is_empty());
+        assert_eq!(bar.slot(1), Some("grass"));
+        assert_eq!(bar.count(1), 1);
+        assert_eq!(bar.slot(2), Some("stone"));
+        assert_eq!(bar.count(2), 1);
+
+        let mut full = Hotbar::new();
+        for id in [
+            "grass", "stone", "dirt", "oak_log", "wool", "sand", "gravel", "planks", "glass",
+        ] {
+            for _ in 0..64 {
+                assert!(full.collect(id));
+            }
+        }
+        assert!(!full.collect("brick"));
+        let mut left = Drops::new();
+        left.spawn("brick", [4, 1, 4], false);
+        let center = center_for([4, 1, 4], false);
+        let body = (
+            [center[0] - 0.3, center[1] - 0.2, center[2] - 0.3],
+            [center[0] + 0.3, center[1] + 1.6, center[2] + 0.3],
+        );
+        assert!(!left.pickup(body.0, body.1, &mut full));
+        assert_eq!(left.items.len(), 1);
+        assert_eq!(left.items[0].id, "brick");
+    }
+
+    #[test]
+    fn a_melon_break_is_four_slices_you_can_pick_up() {
+        let (id, count) = rebuild_world::harvest_of("melon");
+        assert_eq!((id, count), ("melon_slice", 4));
+        let mut drops = Drops::new();
+        let mut bar = Hotbar::new();
+        for _ in 0..count {
+            drops.spawn(id, [2, 1, 2], false);
+        }
+        assert_eq!(drops.items.len(), 4);
+        let center = center_for([2, 1, 2], false);
+        let body = (
+            [center[0] - 0.3, center[1] - 0.2, center[2] - 0.3],
+            [center[0] + 0.3, center[1] + 1.6, center[2] + 0.3],
+        );
+        assert!(drops.pickup(body.0, body.1, &mut bar));
+        assert!(drops.items.is_empty());
+        assert!(bar.holds("melon_slice", 4));
+    }
+
+    #[test]
+    fn a_spark_rises_and_then_fades() {
+        let mut drops = Drops::new();
+        drops.burst([1.0, 2.0, 3.0], [1.0, 0.8, 0.2]);
+        assert_eq!(drops.vertices().len(), 6 * 36);
+        assert!(drops.tick_motes(0.1));
+        assert!(!drops.vertices().is_empty());
+        assert!(drops.tick_motes(2.0));
+        assert!(drops.vertices().is_empty());
+        assert!(!drops.tick_motes(0.1));
+    }
+
+    #[test]
+    fn a_break_puff_throws_chips_that_fade() {
+        let mut drops = Drops::new();
+        drops.puff([4.0, 2.0, 4.0], chip_color("stone"));
+        assert_eq!(drops.vertices().len(), 8 * 36);
+        assert!(drops.tick_motes(0.1));
+        assert!(drops.tick_motes(0.4));
+        assert!(drops.vertices().is_empty());
+    }
+
+    #[test]
+    fn coal_chips_are_dark_and_iron_chips_are_warm() {
+        let mut coal = Drops::new();
+        coal.puff([0.0, 1.0, 0.0], chip_color("coal_ore"));
+        let mut iron = Drops::new();
+        iron.puff([0.0, 1.0, 0.0], chip_color("iron_ore"));
+        let mut stone = Drops::new();
+        stone.puff([0.0, 1.0, 0.0], chip_color("stone"));
+        let dark = coal.vertices()[0].color;
+        let warm = iron.vertices()[0].color;
+        let pale = stone.vertices()[0].color;
+        assert!(dark[0] < 0.3 && dark[1] < 0.3 && dark[2] < 0.3);
+        assert!(warm[0] > warm[2]);
+        assert!(warm[0] > pale[0]);
+        assert!((pale[0] - pale[2]).abs() < 0.15);
+        assert_ne!(dark, warm);
+        assert_eq!(chip_color("cobblestone"), chip_color("stone"));
+    }
+
+    fn within(position: [f32; 3], center: [f32; 3]) -> bool {
+        (0..3).all(|axis| (position[axis] - center[axis]).abs() <= HALF + 1.0e-4)
+    }
+}

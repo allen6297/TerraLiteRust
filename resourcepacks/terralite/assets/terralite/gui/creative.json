@@ -1,0 +1,10 @@
+{
+  "id": "inventory",
+  "title": "Creative",
+  "open": "i",
+  "close": "escape",
+  "kind": "creative",
+  "panel": "stone",
+  "button": "cobblestone",
+  "header": "deepslate"
+}

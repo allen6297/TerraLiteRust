@@ -1,0 +1,18 @@
+[package]
+name = "rebuild-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Connect to the local server, mesh the world, and walk around it."
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+env_logger = "0.11.11"
+glam = "0.34.2"
+png = "0.17.16"
+pollster = "1.0.1"
+rebuild-world = { version = "0.1.0", path = "../world" }
+serde_json = "1.0.140"
+wgpu = "30.0.1"
+winit = "0.30.13"

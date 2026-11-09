@@ -1,0 +1,29 @@
+{
+  "elements": [
+    {
+      "from": [
+        7,
+        13,
+        7
+      ],
+      "to": [
+        9,
+        16,
+        9
+      ]
+    },
+    {
+      "from": [
+        1,
+        4,
+        7
+      ],
+      "to": [
+        15,
+        13,
+        9
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/hanging_sign.png"
+}

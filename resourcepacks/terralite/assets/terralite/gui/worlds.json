@@ -1,0 +1,11 @@
+{
+  "id": "worlds",
+  "title": "Worlds",
+  "open": "escape",
+  "close": "escape",
+  "kind": "menu",
+  "panel": "stone",
+  "button": "cobblestone",
+  "header": "deepslate",
+  "labels": ["back"]
+}

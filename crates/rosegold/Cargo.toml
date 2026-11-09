@@ -1,0 +1,10 @@
+[package]
+name = "rebuild-rosegold"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Terralite host API for RoseGold mods."
+
+[dependencies]
+rosegold-eval = { path = "../../../RoseGoldRust/crates/rosegold-eval" }

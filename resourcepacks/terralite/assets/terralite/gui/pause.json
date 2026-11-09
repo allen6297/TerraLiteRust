@@ -1,0 +1,11 @@
+{
+  "id": "pause",
+  "title": "Paused",
+  "open": "escape",
+  "close": "escape",
+  "kind": "menu",
+  "panel": "stone",
+  "button": "cobblestone",
+  "header": "deepslate",
+  "labels": ["resume", "settings", "title"]
+}

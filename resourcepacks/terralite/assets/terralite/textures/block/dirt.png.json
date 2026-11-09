@@ -1,0 +1,10 @@
+{
+	"random_texture": true,
+    "textures": {
+        "0": "terralite:block/dirt",
+        "1": "terralite:block/dirt_alt_1",
+        "2": "terralite:block/dirt_alt_2",
+        "3": "terralite:block/dirt_alt_3",
+        "particle": "terralite:block/dirt"
+    }
+}

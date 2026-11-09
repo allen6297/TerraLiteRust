@@ -1,0 +1,17 @@
+{
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/red_nether_bricks.png"
+}

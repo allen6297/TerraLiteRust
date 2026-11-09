@@ -1,0 +1,17 @@
+{
+  "elements": [
+    {
+      "from": [
+        5,
+        0,
+        5
+      ],
+      "to": [
+        11,
+        6,
+        11
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/dirt.png"
+}

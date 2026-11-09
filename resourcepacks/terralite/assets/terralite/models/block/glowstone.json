@@ -1,0 +1,25 @@
+{
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/glowstone.png",
+  "light": {
+    "color": [
+      1,
+      0.8,
+      0.2
+    ],
+    "level": 15
+  }
+}

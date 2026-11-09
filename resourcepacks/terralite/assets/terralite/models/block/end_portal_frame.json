@@ -1,0 +1,17 @@
+{
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        13,
+        16
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/end_portal_frame.png"
+}

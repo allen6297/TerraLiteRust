@@ -1,0 +1,127 @@
+{
+  "credit": "Made with Blockbench",
+  "meta": {
+    "format_version": "4.10",
+    "model_format": "free"
+  },
+  "name": "chicken",
+  "elements": [
+    {
+      "name": "body",
+      "type": "cube",
+      "from": [3, 4, 3],
+      "to": [13, 12, 12],
+      "origin": [8, 4, 8],
+      "color": [0.95, 0.95, 0.96]
+    },
+    {
+      "name": "head",
+      "type": "cube",
+      "from": [5, 11, 10],
+      "to": [11, 16, 16],
+      "origin": [8, 11, 10],
+      "color": [0.95, 0.95, 0.96]
+    },
+    {
+      "name": "beak",
+      "type": "cube",
+      "from": [6, 11, 15],
+      "to": [10, 13, 18],
+      "origin": [8, 11, 10],
+      "color": [0.95, 0.72, 0.18]
+    },
+    {
+      "name": "comb",
+      "type": "cube",
+      "from": [6, 15, 13],
+      "to": [10, 18, 16],
+      "origin": [8, 11, 10],
+      "color": [0.86, 0.16, 0.18]
+    },
+    {
+      "name": "leg_l",
+      "type": "cube",
+      "from": [4, 0, 6],
+      "to": [6, 5, 8],
+      "origin": [5, 5, 7],
+      "color": [0.93, 0.55, 0.28]
+    },
+    {
+      "name": "leg_r",
+      "type": "cube",
+      "from": [10, 0, 6],
+      "to": [12, 5, 8],
+      "origin": [11, 5, 7],
+      "color": [0.93, 0.55, 0.28]
+    },
+    {
+      "name": "egg",
+      "type": "cube",
+      "from": [10, 0, 8],
+      "to": [19, 10, 18],
+      "origin": [14, 0, 14],
+      "color": [0.98, 0.9, 0.55]
+    }
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "loop": "loop",
+      "length": 0.8,
+      "animators": {
+        "head": {
+          "name": "head",
+          "type": "bone",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "40", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        },
+        "beak": {
+          "name": "beak",
+          "type": "bone",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "40", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        },
+        "comb": {
+          "name": "comb",
+          "type": "bone",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "0", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.4, "data_points": [{ "x": "40", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.8, "data_points": [{ "x": "0", "y": "0", "z": "0" }] }
+          ]
+        }
+      }
+    },
+    {
+      "name": "walk",
+      "loop": "loop",
+      "length": 0.6,
+      "animators": {
+        "leg_l": {
+          "name": "leg_l",
+          "type": "bone",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "32", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.3, "data_points": [{ "x": "-32", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.6, "data_points": [{ "x": "32", "y": "0", "z": "0" }] }
+          ]
+        },
+        "leg_r": {
+          "name": "leg_r",
+          "type": "bone",
+          "keyframes": [
+            { "channel": "rotation", "time": 0, "data_points": [{ "x": "-32", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.3, "data_points": [{ "x": "32", "y": "0", "z": "0" }] },
+            { "channel": "rotation", "time": 0.6, "data_points": [{ "x": "-32", "y": "0", "z": "0" }] }
+          ]
+        }
+      }
+    }
+  ]
+}

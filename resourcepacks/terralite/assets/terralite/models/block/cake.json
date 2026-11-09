@@ -1,0 +1,17 @@
+{
+  "elements": [
+    {
+      "from": [
+        1,
+        0,
+        1
+      ],
+      "to": [
+        15,
+        8,
+        15
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/cake.png"
+}

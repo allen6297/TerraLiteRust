@@ -1,0 +1,10 @@
+[package]
+name = "rebuild-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Listen on localhost and author break and place for one world."
+
+[dependencies]
+rebuild-world = { version = "0.1.0", path = "../world" }

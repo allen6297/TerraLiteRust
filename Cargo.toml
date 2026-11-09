@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["crates/world", "crates/server", "crates/client", "crates/rosegold"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.87"
+publish = false

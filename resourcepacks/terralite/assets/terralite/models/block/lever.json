@@ -1,0 +1,17 @@
+{
+  "elements": [
+    {
+      "from": [
+        7,
+        0,
+        7
+      ],
+      "to": [
+        9,
+        12,
+        9
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/oak_log.png"
+}

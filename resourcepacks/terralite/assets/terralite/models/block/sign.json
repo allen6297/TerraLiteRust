@@ -1,0 +1,111 @@
+{
+  "credit": "Made with Blockbench",
+  "format_version": "4.10",
+  "elements": [
+    {
+      "name": "post",
+      "type": "cube",
+      "from": [
+        6,
+        0,
+        6
+      ],
+      "to": [
+        10,
+        12,
+        10
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            6,
+            4,
+            10,
+            16
+          ],
+          "texture": "#0"
+        },
+        "east": {
+          "uv": [
+            6,
+            4,
+            10,
+            16
+          ],
+          "texture": "#0"
+        },
+        "south": {
+          "uv": [
+            6,
+            4,
+            10,
+            16
+          ],
+          "texture": "#0"
+        },
+        "west": {
+          "uv": [
+            6,
+            4,
+            10,
+            16
+          ],
+          "texture": "#0"
+        },
+        "up": {
+          "uv": [
+            6,
+            6,
+            10,
+            10
+          ],
+          "texture": "#0"
+        },
+        "down": {
+          "uv": [
+            6,
+            6,
+            10,
+            10
+          ],
+          "texture": "#0"
+        }
+      }
+    },
+    {
+      "name": "board",
+      "type": "cube",
+      "from": [
+        1,
+        7,
+        8
+      ],
+      "to": [
+        15,
+        15,
+        8
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            1,
+            1,
+            15,
+            9
+          ],
+          "texture": "#0"
+        },
+        "south": {
+          "uv": [
+            1,
+            1,
+            15,
+            9
+          ],
+          "texture": "#0"
+        }
+      }
+    }
+  ],
+  "texture": "assets/terralite/textures/sign.png"
+}

@@ -1,0 +1,62 @@
+{
+  "blocks": [
+    { "x": -32, "y": 4, "z": -105, "id": "air", "metadata": 0 },
+    { "x": -31, "y": 4, "z": -105, "id": "air", "metadata": 0 },
+    { "x": -32, "y": 5, "z": -105, "id": "air", "metadata": 0 },
+    { "x": -32, "y": 4, "z": -104, "id": "rosegold:rose_bud", "metadata": 0 },
+    { "x": -31, "y": 4, "z": -104, "id": "air", "metadata": 0 },
+    { "x": -30, "y": 4, "z": -104, "id": "guide:post", "metadata": 0 },
+    { "x": -32, "y": 4, "z": -103, "id": "guide:marker", "metadata": 0 },
+    { "x": -16, "y": 2, "z": -17, "id": "air", "metadata": 0 },
+    { "x": -16, "y": 3, "z": -17, "id": "air", "metadata": 0 },
+    { "x": 2, "y": 1, "z": 4, "id": "wool", "metadata": 0 },
+    { "x": 3, "y": 1, "z": 4, "id": "wool", "metadata": 0 },
+    { "x": 4, "y": 1, "z": 4, "id": "wool", "metadata": 0 },
+    { "x": 6, "y": 1, "z": 4, "id": "wool", "metadata": 0 },
+    { "x": 7, "y": 1, "z": 4, "id": "cobblestone", "metadata": 0 },
+    { "x": 8, "y": 1, "z": 4, "id": "cobblestone", "metadata": 0 },
+    { "x": 6, "y": 1, "z": 8, "id": "air", "metadata": 0 },
+    { "x": 15, "y": 1, "z": 8, "id": "air", "metadata": 0 },
+    { "x": 16, "y": 1, "z": 8, "id": "air", "metadata": 0 },
+    { "x": -17, "y": 2, "z": 8, "id": "air", "metadata": 0 },
+    { "x": -1, "y": 1, "z": 10, "id": "air", "metadata": 0 },
+    { "x": 9, "y": 1, "z": 10, "id": "cobblestone", "metadata": 0 },
+    { "x": 31, "y": 1, "z": 10, "id": "rosegold:rose_block", "metadata": 0 },
+    { "x": 10, "y": 1, "z": 11, "id": "cobblestone", "metadata": 0 },
+    { "x": 5, "y": 1, "z": 12, "id": "rosegold:rose_block", "metadata": 0 },
+    { "x": 6, "y": 1, "z": 12, "id": "cobblestone", "metadata": 0 },
+    { "x": 5, "y": 1, "z": 13, "id": "rosegold:rose_block", "metadata": 0 },
+    { "x": 9, "y": 1, "z": 13, "id": "stone", "metadata": 0 },
+    { "x": 10, "y": 1, "z": 13, "id": "deepslate", "metadata": 0 },
+    { "x": 6, "y": 1, "z": 14, "id": "air", "metadata": 0 },
+    { "x": 8, "y": 1, "z": 14, "id": "cobblestone", "metadata": 0 },
+    { "x": 14, "y": 1, "z": 14, "id": "air", "metadata": 0 },
+    { "x": 8, "y": 2, "z": 14, "id": "cobblestone", "metadata": 0 },
+    { "x": 9, "y": 3, "z": 14, "id": "rosegold:rose_block", "metadata": 0 },
+    { "x": 1, "y": 1, "z": 31, "id": "cobblestone", "metadata": 0 },
+    { "x": 1, "y": 2, "z": 32, "id": "air", "metadata": 0 },
+    { "x": 2, "y": 2, "z": 32, "id": "air", "metadata": 0 },
+    { "x": -21, "y": 6, "z": 52, "id": "air", "metadata": 0 }
+  ],
+  "inventory": [
+    { "slot": 0, "id": "cobblestone", "count": 5 },
+    { "slot": 1, "id": "guide:marker", "count": 2 },
+    { "slot": 2, "id": "guide:post", "count": 2 },
+    { "slot": 3, "id": "rosegold:rose_block", "count": 3 },
+    { "slot": 4, "id": "rosegold:rose_bud", "count": 2 },
+    { "slot": 5, "id": "water", "count": 1 },
+    { "slot": 6, "id": "dirt", "count": 1 },
+    { "slot": 7, "id": "guide:chest", "count": 1 }
+  ],
+  "hotbar": {
+    "selected": 1,
+    "slots": [
+      { "slot": 0, "id": "cobblestone", "count": 58 },
+      { "slot": 1, "id": "guide:marker", "count": 60 },
+      { "slot": 2, "id": "guide:post", "count": 60 },
+      { "slot": 3, "id": "rosegold:rose_block", "count": 60 },
+      { "slot": 4, "id": "rosegold:rose_bud", "count": 61 }
+    ]
+  },
+  "player": { "x": -28.3105, "y": -81.5911, "z": -105.3496, "yaw": 2.4552, "pitch": -0.4065 }
+}

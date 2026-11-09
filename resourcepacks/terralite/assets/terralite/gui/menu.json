@@ -1,0 +1,11 @@
+{
+  "id": "menu",
+  "title": "Terralite",
+  "open": "escape",
+  "close": "escape",
+  "kind": "menu",
+  "panel": "stone",
+  "button": "cobblestone",
+  "header": "deepslate",
+  "labels": ["play", "join", "settings", "worlds", "quit"]
+}

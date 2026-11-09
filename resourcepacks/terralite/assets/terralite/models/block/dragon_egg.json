@@ -1,0 +1,41 @@
+{
+  "elements": [
+    {
+      "from": [
+        5,
+        0,
+        5
+      ],
+      "to": [
+        11,
+        4,
+        11
+      ]
+    },
+    {
+      "from": [
+        3,
+        4,
+        3
+      ],
+      "to": [
+        13,
+        11,
+        13
+      ]
+    },
+    {
+      "from": [
+        5,
+        11,
+        5
+      ],
+      "to": [
+        11,
+        15,
+        11
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/dragon_egg.png"
+}

@@ -1,0 +1,4 @@
+{
+  "enabled": true,
+  "shader": "assets/terralite/shaders/frame.wgsl"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "settings",
+  "title": "Settings",
+  "open": "escape",
+  "close": "escape",
+  "kind": "menu",
+  "panel": "stone",
+  "button": "cobblestone",
+  "header": "deepslate",
+  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "back"]
+}

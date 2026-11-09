@@ -1,0 +1,12 @@
+[package]
+name = "rebuild-world"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Minecraft 1.8 Anvil region and chunk loader (numeric ids and metadata)."
+
+[dependencies]
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+serde_json = "1.0.140"
+rebuild-rosegold = { version = "0.1.0", path = "../rosegold" }

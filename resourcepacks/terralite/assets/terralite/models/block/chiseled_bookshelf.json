@@ -1,0 +1,17 @@
+{
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        2
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/chiseled_bookshelf.png"
+}

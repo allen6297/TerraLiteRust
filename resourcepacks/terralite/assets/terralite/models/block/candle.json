@@ -1,0 +1,29 @@
+{
+  "elements": [
+    {
+      "from": [
+        7,
+        0,
+        7
+      ],
+      "to": [
+        9,
+        6,
+        9
+      ]
+    },
+    {
+      "from": [
+        7,
+        6,
+        7
+      ],
+      "to": [
+        9,
+        8,
+        9
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/candle.png"
+}

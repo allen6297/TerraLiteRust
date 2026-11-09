@@ -1,0 +1,39 @@
+{
+  "credit": "Made with Blockbench",
+  "meta": {
+    "format_version": "4.10",
+    "model_format": "free"
+  },
+  "name": "perch",
+  "elements": [
+    {
+      "name": "post",
+      "type": "cube",
+      "from": [
+        6,
+        0,
+        6
+      ],
+      "to": [
+        10,
+        8,
+        10
+      ]
+    },
+    {
+      "name": "seat",
+      "type": "cube",
+      "from": [
+        2,
+        8,
+        2
+      ],
+      "to": [
+        14,
+        11,
+        14
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/oak_log.png"
+}

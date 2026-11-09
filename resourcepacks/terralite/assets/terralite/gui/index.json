@@ -1,0 +1,10 @@
+{
+  "id": "index",
+  "title": "Items",
+  "open": "e",
+  "close": "escape",
+  "panel": "stone",
+  "button": "cobblestone",
+  "header": "deepslate",
+  "labels": ["stone", "grass", "dirt", "cobblestone", "oak_log", "wool"]
+}

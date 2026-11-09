@@ -1,0 +1,657 @@
+{
+  "meta": {
+    "format_version": "5.0",
+    "model_format": "free",
+    "box_uv": false
+  },
+  "name": "Grass",
+  "model_identifier": "",
+  "visible_box": [
+    1,
+    1,
+    0
+  ],
+  "variable_placeholders": "",
+  "multi_file_ruleset": "",
+  "variable_placeholder_buttons": [],
+  "timeline_setups": [],
+  "unhandled_root_fields": {},
+  "resolution": {
+    "width": 16,
+    "height": 16
+  },
+  "elements": [
+    {
+      "name": "mesh",
+      "color": 6,
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "shading": "flat",
+      "export": true,
+      "visibility": true,
+      "locked": false,
+      "render_order": "default",
+      "scope": 0,
+      "allow_mirror_modeling": true,
+      "vertices": {
+        "pzma": [
+          8,
+          16,
+          8
+        ],
+        "BkWk": [
+          8,
+          16,
+          -8
+        ],
+        "7ABa": [
+          8,
+          0,
+          8
+        ],
+        "Ekz5": [
+          8,
+          0,
+          -8
+        ],
+        "8ixG": [
+          -8,
+          16,
+          8
+        ],
+        "BpIY": [
+          -8,
+          16,
+          -8
+        ],
+        "zxwO": [
+          -8,
+          0,
+          8
+        ],
+        "dCwO": [
+          -8,
+          0,
+          -8
+        ]
+      },
+      "faces": {
+        "3FggKd5n": {
+          "uv": {
+            "Ekz5": [
+              16,
+              16
+            ],
+            "BkWk": [
+              16,
+              0
+            ],
+            "7ABa": [
+              0,
+              16
+            ],
+            "pzma": [
+              0,
+              0
+            ]
+          },
+          "texture": 2,
+          "vertices": [
+            "BkWk",
+            "pzma",
+            "7ABa",
+            "Ekz5"
+          ]
+        },
+        "D8h0fy2C": {
+          "uv": {
+            "dCwO": [
+              0,
+              16
+            ],
+            "zxwO": [
+              16,
+              16
+            ],
+            "BpIY": [
+              0,
+              0
+            ],
+            "8ixG": [
+              16,
+              0
+            ]
+          },
+          "texture": 2,
+          "vertices": [
+            "zxwO",
+            "8ixG",
+            "BpIY",
+            "dCwO"
+          ]
+        },
+        "VInXal4b": {
+          "uv": {
+            "BpIY": [
+              0,
+              0
+            ],
+            "8ixG": [
+              0,
+              16
+            ],
+            "BkWk": [
+              16,
+              0
+            ],
+            "pzma": [
+              16,
+              16
+            ]
+          },
+          "texture": 1,
+          "vertices": [
+            "8ixG",
+            "pzma",
+            "BkWk",
+            "BpIY"
+          ]
+        },
+        "RXUbOcQo": {
+          "uv": {
+            "dCwO": [
+              0,
+              16
+            ],
+            "Ekz5": [
+              16,
+              16
+            ],
+            "zxwO": [
+              0,
+              0
+            ],
+            "7ABa": [
+              16,
+              0
+            ]
+          },
+          "texture": 2,
+          "vertices": [
+            "Ekz5",
+            "7ABa",
+            "zxwO",
+            "dCwO"
+          ]
+        },
+        "BLtcJ5G9": {
+          "uv": {
+            "zxwO": [
+              0,
+              16
+            ],
+            "7ABa": [
+              16,
+              16
+            ],
+            "8ixG": [
+              0,
+              0
+            ],
+            "pzma": [
+              16,
+              0
+            ]
+          },
+          "texture": 2,
+          "vertices": [
+            "7ABa",
+            "pzma",
+            "8ixG",
+            "zxwO"
+          ]
+        },
+        "e9rf8Xey": {
+          "uv": {
+            "dCwO": [
+              16,
+              16
+            ],
+            "BpIY": [
+              16,
+              0
+            ],
+            "Ekz5": [
+              0,
+              16
+            ],
+            "BkWk": [
+              0,
+              0
+            ]
+          },
+          "texture": 2,
+          "vertices": [
+            "BpIY",
+            "BkWk",
+            "Ekz5",
+            "dCwO"
+          ]
+        }
+      },
+      "type": "mesh",
+      "uuid": "8e042d79-b22e-18d0-04dd-3bb37c253672"
+    },
+    {
+      "name": "plane",
+      "color": 3,
+      "origin": [
+        0,
+        16,
+        -8
+      ],
+      "rotation": [
+        -80,
+        0,
+        0
+      ],
+      "shading": "flat",
+      "export": true,
+      "visibility": true,
+      "locked": false,
+      "render_order": "default",
+      "scope": 0,
+      "allow_mirror_modeling": true,
+      "vertices": {
+        "r8Dc": [
+          8,
+          0,
+          0
+        ],
+        "EYPp": [
+          8,
+          0,
+          -8
+        ],
+        "09Ur": [
+          -8,
+          0,
+          0
+        ],
+        "6ZqS": [
+          -8,
+          0,
+          -8
+        ]
+      },
+      "faces": {
+        "mvibalPt": {
+          "uv": {
+            "09Ur": [
+              16,
+              0
+            ],
+            "6ZqS": [
+              16,
+              8
+            ],
+            "EYPp": [
+              0,
+              8
+            ],
+            "r8Dc": [
+              0,
+              0
+            ]
+          },
+          "texture": 0,
+          "vertices": [
+            "r8Dc",
+            "EYPp",
+            "6ZqS",
+            "09Ur"
+          ]
+        }
+      },
+      "type": "mesh",
+      "uuid": "cae14b60-0080-43d2-f803-01765796a00f"
+    },
+    {
+      "name": "plane",
+      "color": 3,
+      "origin": [
+        0,
+        16,
+        8
+      ],
+      "rotation": [
+        -100,
+        0,
+        -180
+      ],
+      "shading": "flat",
+      "export": true,
+      "visibility": true,
+      "locked": false,
+      "render_order": "default",
+      "scope": 0,
+      "allow_mirror_modeling": true,
+      "vertices": {
+        "r8Dc": [
+          8,
+          0,
+          0
+        ],
+        "EYPp": [
+          8,
+          0,
+          -8
+        ],
+        "09Ur": [
+          -8,
+          0,
+          0
+        ],
+        "6ZqS": [
+          -8,
+          0,
+          -8
+        ]
+      },
+      "faces": {
+        "mvibalPt": {
+          "uv": {
+            "09Ur": [
+              16,
+              0
+            ],
+            "6ZqS": [
+              16,
+              8
+            ],
+            "EYPp": [
+              0,
+              8
+            ],
+            "r8Dc": [
+              0,
+              0
+            ]
+          },
+          "texture": 0,
+          "vertices": [
+            "r8Dc",
+            "EYPp",
+            "6ZqS",
+            "09Ur"
+          ]
+        }
+      },
+      "type": "mesh",
+      "uuid": "80e5a3a1-dd43-6002-6d04-3c17c75f96d7"
+    },
+    {
+      "name": "plane",
+      "color": 3,
+      "origin": [
+        8,
+        16,
+        0
+      ],
+      "rotation": [
+        -90,
+        -10,
+        -90
+      ],
+      "shading": "flat",
+      "export": true,
+      "visibility": true,
+      "locked": false,
+      "render_order": "default",
+      "scope": 0,
+      "allow_mirror_modeling": true,
+      "vertices": {
+        "r8Dc": [
+          8,
+          0,
+          0
+        ],
+        "EYPp": [
+          8,
+          0,
+          -8
+        ],
+        "09Ur": [
+          -8,
+          0,
+          0
+        ],
+        "6ZqS": [
+          -8,
+          0,
+          -8
+        ]
+      },
+      "faces": {
+        "mvibalPt": {
+          "uv": {
+            "09Ur": [
+              16,
+              0
+            ],
+            "6ZqS": [
+              16,
+              8
+            ],
+            "EYPp": [
+              0,
+              8
+            ],
+            "r8Dc": [
+              0,
+              0
+            ]
+          },
+          "texture": 0,
+          "vertices": [
+            "r8Dc",
+            "EYPp",
+            "6ZqS",
+            "09Ur"
+          ]
+        }
+      },
+      "type": "mesh",
+      "uuid": "4990867b-94a0-91fe-4cb2-4023b1bc0fb9"
+    },
+    {
+      "name": "plane",
+      "color": 3,
+      "origin": [
+        -8,
+        16,
+        0
+      ],
+      "rotation": [
+        -90,
+        10,
+        -90
+      ],
+      "shading": "flat",
+      "export": true,
+      "visibility": true,
+      "locked": false,
+      "render_order": "default",
+      "scope": 0,
+      "allow_mirror_modeling": true,
+      "vertices": {
+        "r8Dc": [
+          8,
+          0,
+          0
+        ],
+        "EYPp": [
+          8,
+          0,
+          -8
+        ],
+        "09Ur": [
+          -8,
+          0,
+          0
+        ],
+        "6ZqS": [
+          -8,
+          0,
+          -8
+        ]
+      },
+      "faces": {
+        "mvibalPt": {
+          "uv": {
+            "09Ur": [
+              0,
+              0
+            ],
+            "6ZqS": [
+              0,
+              8
+            ],
+            "EYPp": [
+              16,
+              8
+            ],
+            "r8Dc": [
+              16,
+              0
+            ]
+          },
+          "texture": 0,
+          "vertices": [
+            "r8Dc",
+            "EYPp",
+            "6ZqS",
+            "09Ur"
+          ]
+        }
+      },
+      "type": "mesh",
+      "uuid": "76f3677f-eae0-5a64-85d2-379d29f8c383"
+    }
+  ],
+  "groups": [],
+  "outliner": [
+    "8e042d79-b22e-18d0-04dd-3bb37c253672",
+    "cae14b60-0080-43d2-f803-01765796a00f",
+    "80e5a3a1-dd43-6002-6d04-3c17c75f96d7",
+    "4990867b-94a0-91fe-4cb2-4023b1bc0fb9",
+    "76f3677f-eae0-5a64-85d2-379d29f8c383"
+  ],
+  "textures": [
+    {
+      "name": "grass_block_side_overlay.png",
+      "relative_path": "../../textures/block/grass_block_side_overlay.png",
+      "folder": "",
+      "namespace": "",
+      "id": "0",
+      "group": "",
+      "scope": 0,
+      "width": 16,
+      "height": 16,
+      "uv_width": 16,
+      "uv_height": 16,
+      "particle": false,
+      "use_as_default": false,
+      "layers_enabled": false,
+      "sync_to_project": "",
+      "file_format": "png",
+      "render_mode": "default",
+      "render_sides": "auto",
+      "wrap_mode": "limited",
+      "pbr_channel": "color",
+      "fps": 7,
+      "frame_time": 1,
+      "frame_order_type": "loop",
+      "frame_order": "",
+      "frame_interpolate": false,
+      "visible": true,
+      "internal": true,
+      "saved": true,
+      "uuid": "bab8ead2-bb4e-a30a-d77c-1caa5909854d",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAz0lEQVR4AeyQoQoCURBFZ19Vi4IgbPSTxOhX+BGCyS/QYBWDBqNFDJtsyhoFxWAy++QMb5bHi0ZZYZx7z9y9sOtWx7lnTped7tl24U0bh5lmMzByTsJvXz6CEon19XWvuOl+u6eMnBYYWB9aeijOTYEVZaPyCPPTzRsr5LQAkHe8QtswAEVsKzdvOcch737I6KSeoviO12D4c8vxIEPzINs8+vZ0EvvJaJjhKbS8vgJhDgzagmgm9TCyjBYQAKZDIGX4OK8FwF+nLhD5g2/wBQAA//+l31CsAAAABklEQVQDAIuwfSGfnLOhAAAAAElFTkSuQmCC"
+    },
+    {
+      "name": "grass_block_top.png",
+      "relative_path": "../../textures/block/grass_block_top.png",
+      "folder": "",
+      "namespace": "",
+      "id": "1",
+      "group": "",
+      "scope": 0,
+      "width": 16,
+      "height": 16,
+      "uv_width": 16,
+      "uv_height": 16,
+      "particle": false,
+      "use_as_default": false,
+      "layers_enabled": false,
+      "sync_to_project": "",
+      "file_format": "png",
+      "render_mode": "default",
+      "render_sides": "auto",
+      "wrap_mode": "limited",
+      "pbr_channel": "color",
+      "fps": 7,
+      "frame_time": 1,
+      "frame_order_type": "loop",
+      "frame_order": "",
+      "frame_interpolate": false,
+      "visible": true,
+      "internal": true,
+      "saved": true,
+      "uuid": "7e1c7065-149b-aac2-1c0e-fc7e8939f4c1",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABZklEQVR4AUzRr0pEURAG8OuJCgYtCtaNRtlq9RHEV/ABBLMPINgVQQTBJmi0yWISk2wVtGgQtF73N/Bd7sLszHx/5sw5t53eXfRHlzcVt0/nvV68vD1UPeZS49R0rVv89qeri/+ue56vVPb3OP+Uup3Jb2Xc5tpf1Tj1x/dyVwMAGGLg1nqvrWA8Odiu2h+NLAxpDGnev5aUwya7k43qz+5nHbGGJh58bYAQiFxHfz37Ga6gH29Ga/PGoBHWA+Y0JleQnZaaDsbTGDRM1lMTIyOERQc3iB5eV9DEBLS6bCBOzZiBweQaQBDT4d60HgzJ5N4yjZNlvQPVNQCgcYIXVweLCQf3ZnIOrM8YMGKn2kCEcx1GbwEXDqkNgEhiYAapnUQcXnaADK/PmMagrMpsIE4t42XbBBs+I0IgZdNjyCC4yEMbUm+g8KoyAbMs1K5h7fDHV6+oikagIpLHg8amvAuezjDefwAAAP//IukK6AAAAAZJREFUAwDEkAhO6+NMUAAAAABJRU5ErkJggg=="
+    },
+    {
+      "name": "dirt.png",
+      "relative_path": "../../textures/block/dirt.png",
+      "folder": "",
+      "namespace": "",
+      "id": "2",
+      "group": "",
+      "scope": 0,
+      "width": 16,
+      "height": 16,
+      "uv_width": 16,
+      "uv_height": 16,
+      "particle": false,
+      "use_as_default": false,
+      "layers_enabled": false,
+      "sync_to_project": "",
+      "file_format": "png",
+      "render_mode": "default",
+      "render_sides": "auto",
+      "wrap_mode": "limited",
+      "pbr_channel": "color",
+      "fps": 7,
+      "frame_time": 1,
+      "frame_order_type": "loop",
+      "frame_order": "",
+      "frame_interpolate": false,
+      "visible": true,
+      "internal": true,
+      "saved": true,
+      "uuid": "025befa6-95c5-46dd-bbcb-705674702fae",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABQUlEQVR4AWzSP0pDQRDH8WUrBQsjEW0sLBQlYCMIKew8ghfwDB7CW1la2whiYycKIbEQtJH4PkMmrMkL+b7585vZWXa33l6dzW/Oj4K764t5C62l1fi0WrrfzmCzYPL5U/LHH50My3B7I1NFbm9/q4BPqAogYAkQf7x/Mf94ep4UZDJ2kEE2tnHkTsdlOvvO9NIaGAtEUZeWSLow/uLpw/3SF0ew+NSX11msvios9DCX44NyfDgI3ydrDa6/o7FcLw7RgfWdRTbU3bfHuIFMsFZm+6AhtWoKJBOxbZqMLE5L46urCpBJgph1PmxiAJ/VzI9b4LQoyGZ+oml10NoCWeBlol04d+ZNpL9cwBTFaU1DLphauzO5qgECaAA/EZtauhdpV6Dpi1tQIJE27z63SYMXqQZixC1wWtpGU2Bq32v8AwAA//+2LUsAAAAABklEQVQDAHex0UUagyYtAAAAAElFTkSuQmCC"
+    }
+  ],
+  "texture": "assets/terralite/textures/grass.png"
+}
