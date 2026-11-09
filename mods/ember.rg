@@ -4,6 +4,8 @@
 // Playtest: Items list → ember:glow_brick / ember:ember → place near stairs → dig (harder than dirt) → see the warm light.
 
 import ModAPI;
+import Blocks;
+import Items;
 
 fn on_init() {
     var Mod: TLMod = ModAPI.createMod("ember", "1.0.0");
@@ -13,7 +15,7 @@ fn on_init() {
     Register.BLOCK.open();
     Register.ITEM.open();
 
-    var brick = ModAPI.defineBlock(
+    var brick = Blocks.defineBlock(
         "ember",
         "glow_brick",
         "assets/ember/models/block/glow_brick.json",
@@ -21,7 +23,7 @@ fn on_init() {
         2.0,
         12
     );
-    var ember = ModAPI.defineItem("ember", "ember", brick, 16);
+    var ember = Items.defineItem("ember", "ember", brick, 16);
     Register.recipe(brick, ember);
     Mod.log("registered " + brick + " and " + ember);
 }
