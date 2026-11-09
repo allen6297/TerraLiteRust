@@ -1580,10 +1580,34 @@ fn register(
             .set_script_model(id, model, source)
             .map_err(|err| format!("block.model: {err}"))?;
     }
+    for (id, seconds) in &found.block_hardness {
+        let hardness: f32 = seconds
+            .parse()
+            .map_err(|_| format!("block.hardness: bad seconds {seconds}"))?;
+        Pack::builtin()
+            .set_script_hardness(id, hardness, source)
+            .map_err(|err| format!("block.hardness: {err}"))?;
+    }
+    for (id, level) in &found.block_lights {
+        let level: u8 = level
+            .parse()
+            .map_err(|_| format!("block.light: bad level {level}"))?;
+        Pack::builtin()
+            .set_script_light(id, level, source)
+            .map_err(|err| format!("block.light: {err}"))?;
+    }
     for (item, block) in &found.item_places {
         Pack::builtin()
             .set_item_places(item, block, source)
             .map_err(|err| format!("item.places: {err}"))?;
+    }
+    for (item, count) in &found.item_stacks {
+        let count: u16 = count
+            .parse()
+            .map_err(|_| format!("item.stack: bad count {count}"))?;
+        Pack::builtin()
+            .set_item_stack(item, count, source)
+            .map_err(|err| format!("item.stack: {err}"))?;
     }
     for (result, ingredient) in &found.recipes {
         Pack::builtin()
@@ -1802,7 +1826,7 @@ fn answer(
         Query::PlayerY => Ok(Answer::Float(axis(view, 1))),
         Query::PlayerZ => Ok(Answer::Float(axis(view, 2))),
         Query::Exists { id } => Ok(Answer::Bool(pack.contains_item(&id))),
-        Query::MaxCount { id } => Ok(Answer::Int(if pack.contains_item(&id) { 64 } else { 0 })),
+        Query::MaxCount { id } => Ok(Answer::Int(i64::from(pack.max_stack(&id)))),
         Query::Say { text } => {
             let line = crate::net::chat_line(&text);
             if line.is_empty() {

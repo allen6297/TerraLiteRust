@@ -24,8 +24,12 @@
 //! `block.register(namespace, path)` and `item.register(namespace, path)` run in
 //! `main` and add `namespace:path`. Each returns that id. `block.texture(id, path)`
 //! attaches a pack PNG (or another block's texture). `block.model(id, model)`
-//! uses a pack shape or model; the default is `cube`. A script block places from
-//! the hotbar, and `world.set_block` writes it. A script item is not a block.
+//! uses a pack shape, pack model, or a mod file under
+//! `assets/<ns>/models/block/<id>.json` / `.bbmodel`; the default is `cube`.
+//! `block.hardness(id, seconds)` sets dig time. `block.light(id, level)` emits
+//! warm light `1..=15`. `item.stack(id, count)` sets the hotbar limit `1..=64`.
+//! A script block places from the hotbar, and `world.set_block` writes it. A
+//! script item is not a block.
 //! `events.entity_spawn` is `fn(kind: String, x: Int, y: Int, z: Int)`
 //! and runs once for `"player"`, then for the demo `"pig"` and `"zombie"`.
 //! `events.entity_hurt` is `fn(kind: String, amount: Int): Bool`.
@@ -164,8 +168,14 @@ pub struct ScriptLoad {
     pub block_textures: Vec<(String, String)>,
     /// `(block id, shape or model id)` from `block.model`.
     pub block_models: Vec<(String, String)>,
+    /// `(block id, seconds text)` from `block.hardness`.
+    pub block_hardness: Vec<(String, String)>,
+    /// `(block id, level text)` from `block.light`.
+    pub block_lights: Vec<(String, String)>,
     /// `(item id, block id)` from `item.places`.
     pub item_places: Vec<(String, String)>,
+    /// `(item id, count text)` from `item.stack`.
+    pub item_stacks: Vec<(String, String)>,
     /// `(result id, ingredient id)` from `recipe.register`.
     pub recipes: Vec<(String, String)>,
     /// `(result id, "a+b")` from `recipe.shapeless`.
@@ -373,7 +383,10 @@ impl Host {
                                 }
                                 let mut block_textures = Vec::new();
                                 let mut block_models = Vec::new();
+                                let mut block_hardness = Vec::new();
+                                let mut block_lights = Vec::new();
                                 let mut item_places = Vec::new();
+                                let mut item_stacks = Vec::new();
                                 let mut recipes = Vec::new();
                                 let mut shapeless = Vec::new();
                                 let mut shaped = Vec::new();
@@ -387,7 +400,10 @@ impl Host {
                                     match kind.as_str() {
                                         "texture" => block_textures.push(pair),
                                         "model" => block_models.push(pair),
+                                        "hardness" => block_hardness.push(pair),
+                                        "light" => block_lights.push(pair),
                                         "places" => item_places.push(pair),
+                                        "stack" => item_stacks.push(pair),
                                         "recipe" => recipes.push(pair),
                                         "shapeless" => shapeless.push(pair),
                                         "shaped" => shaped.push(pair),
@@ -404,7 +420,10 @@ impl Host {
                                     entities,
                                     block_textures,
                                     block_models,
+                                    block_hardness,
+                                    block_lights,
                                     item_places,
+                                    item_stacks,
                                     recipes,
                                     shapeless,
                                     shaped,

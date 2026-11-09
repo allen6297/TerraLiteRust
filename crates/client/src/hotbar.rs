@@ -191,6 +191,12 @@ const STACK: u16 = 64;
 const DIGIT_CELL: f32 = 2.0;
 const DIGIT_GAP: f32 = 2.0;
 
+/// Per-item hotbar limit. Script `item.stack` can lower it; default is 64.
+fn stack_cap(id: &str) -> u16 {
+    let cap = Pack::builtin().max_stack(id);
+    if cap == 0 { STACK } else { cap.min(STACK) }
+}
+
 /// Three-wide rows, top to bottom. The high bit is the left column.
 const GLYPHS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b101, 0b101, 0b111],
@@ -228,7 +234,7 @@ fn fresh(id: &'static str, count: u16) -> Item {
     } else {
         Item {
             id,
-            count,
+            count: count.min(stack_cap(id)),
             uses: 0,
             keen: false,
         }
@@ -248,7 +254,7 @@ fn restored(id: &'static str, saved: u16) -> Item {
     } else {
         Item {
             id,
-            count: saved.min(STACK),
+            count: saved.min(stack_cap(id)),
             uses: 0,
             keen: false,
         }
@@ -874,12 +880,13 @@ impl Hotbar {
             return false;
         }
         let id = Block::new(id, 0).id;
+        let cap = stack_cap(id);
         if !is_tool(id) {
             if let Some(slot) = self
                 .slots
                 .iter_mut()
                 .flatten()
-                .find(|slot| slot.id == id && slot.count < STACK)
+                .find(|slot| slot.id == id && slot.count < cap)
             {
                 slot.count += 1;
                 return true;
@@ -901,10 +908,11 @@ impl Hotbar {
         if is_tool(id) {
             return self.slots.iter().any(|slot| slot.is_none());
         }
+        let cap = stack_cap(id);
         self.slots
             .iter()
             .flatten()
-            .any(|slot| slot.id == id && slot.count < STACK)
+            .any(|slot| slot.id == id && slot.count < cap)
             || self.slots.iter().any(|slot| slot.is_none())
     }
 
@@ -1027,12 +1035,13 @@ impl Hotbar {
 
     /// Free stack space for `id` after spending one from the selected slot.
     fn room_after_one_spent(&self, id: &str) -> u16 {
+        let cap = stack_cap(id);
         let mut room = 0u16;
         for (index, slot) in self.slots.iter().enumerate() {
             match slot {
-                Some(item) if index == self.selected && item.count <= 1 => room += STACK,
-                Some(item) if item.id == id && item.count < STACK => room += STACK - item.count,
-                None => room += STACK,
+                Some(item) if index == self.selected && item.count <= 1 => room += cap,
+                Some(item) if item.id == id && item.count < cap => room += cap - item.count,
+                None => room += cap,
                 _ => {}
             }
         }
@@ -1199,10 +1208,11 @@ impl Bag {
         if is_tool(id) {
             return self.slots.iter().any(|slot| slot.is_none());
         }
+        let cap = stack_cap(id);
         self.slots
             .iter()
             .flatten()
-            .any(|slot| slot.id == id && slot.count < STACK)
+            .any(|slot| slot.id == id && slot.count < cap)
             || self.slots.iter().any(|slot| slot.is_none())
     }
 
@@ -1212,12 +1222,13 @@ impl Bag {
             return false;
         }
         let id = Block::new(id, 0).id;
+        let cap = stack_cap(id);
         if !is_tool(id) {
             if let Some(slot) = self
                 .slots
                 .iter_mut()
                 .flatten()
-                .find(|slot| slot.id == id && slot.count < STACK)
+                .find(|slot| slot.id == id && slot.count < cap)
             {
                 slot.count += 1;
                 return true;
@@ -1263,7 +1274,7 @@ impl Bag {
             return false;
         };
         match slot {
-            Some(item) if item.id == id && item.uses == 0 && item.count < STACK => {
+            Some(item) if item.id == id && item.uses == 0 && item.count < stack_cap(id) => {
                 item.count += 1;
                 true
             }

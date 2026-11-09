@@ -230,6 +230,8 @@ struct ScriptBlock {
     texture: Option<&'static str>,
     /// Shape or model id. `None` uses the cube shape.
     model: Option<String>,
+    /// Colored light from `block.light`. `None` emits nothing.
+    light: Option<Light>,
 }
 
 struct ScriptItem {
@@ -237,6 +239,8 @@ struct ScriptItem {
     source: String,
     /// Block id a hotbar place of this item becomes. `None` does not place.
     places: Option<String>,
+    /// Hotbar stack limit from `item.stack`. `None` means 64.
+    max_count: Option<u16>,
 }
 
 struct ScriptRecipe {
@@ -715,6 +719,7 @@ impl Pack {
             source: source.to_string(),
             texture: None,
             model: None,
+            light: None,
         });
         Ok(id)
     }
@@ -819,8 +824,59 @@ impl Pack {
             id: id.clone(),
             source: source.to_string(),
             places: None,
+            max_count: None,
         });
         Ok(id)
+    }
+
+    /// Warm light `1..=15` on a script block. The same script can set it again.
+    pub fn set_script_light(&self, id: &str, level: u8, source: &str) -> Result<(), String> {
+        if !(1..=15).contains(&level) {
+            return Err(format!("block {id} light level {level} is outside 1..=15"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(block) = script.blocks.iter_mut().find(|block| block.id == id) else {
+            return Err(format!("unknown block {id}"));
+        };
+        if !source.is_empty() && block.source != source {
+            return Err(format!("block {id} belongs to another script"));
+        }
+        block.light = Some(Light {
+            color: [1.0, 0.35, 0.1],
+            level,
+        });
+        Ok(())
+    }
+
+    /// Hotbar stack limit `1..=64` for a script item. The same script can set it again.
+    pub fn set_item_stack(&self, item: &str, count: u16, source: &str) -> Result<(), String> {
+        if !(1..=64).contains(&count) {
+            return Err(format!("item {item} stack must be from 1 to 64"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entry) = script.items.iter_mut().find(|entry| entry.id == item) else {
+            return Err(format!("unknown item {item}"));
+        };
+        if !source.is_empty() && entry.source != source {
+            return Err(format!("item {item} belongs to another script"));
+        }
+        entry.max_count = Some(count);
+        Ok(())
+    }
+
+    /// Hotbar stack limit for an item. Missing or unknown is 64 when the item exists, else 0.
+    pub fn max_stack(&self, id: &str) -> u16 {
+        if !self.contains_item(id) {
+            return 0;
+        }
+        self.script
+            .lock()
+            .expect("script registry")
+            .items
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.max_count)
+            .unwrap_or(64)
     }
 
     /// A hotbar place of `item` becomes `block`. Both ids must already exist.
@@ -900,6 +956,16 @@ impl Pack {
             .iter()
             .find(|block| block.id == id)
             .map(|block| block.hardness)
+    }
+
+    fn script_light(&self, id: &str) -> Option<Light> {
+        self.script
+            .lock()
+            .expect("script registry")
+            .blocks
+            .iter()
+            .find(|block| block.id == id)
+            .and_then(|block| block.light)
     }
 
     fn script_texture(&self, id: &str) -> Option<&'static str> {
@@ -1573,6 +1639,9 @@ impl Pack {
                 color: [1.0, 0.55, 0.2],
                 level: 15,
             });
+        }
+        if let Some(light) = self.script_light(block.id) {
+            return Some(light);
         }
         self.blocks.get(block.id).and_then(BlockEntry::light)
     }

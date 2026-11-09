@@ -8,7 +8,7 @@ use rebuild_world::{Hooks, load_dir};
 fn shipped_mods_still_load_with_the_guide() {
     let mut hooks = Hooks::new();
     let loaded = load_dir(Path::new(r"C:\CODE\TerraLite\mods"), &mut hooks).expect("mods load");
-    assert_eq!(loaded.len(), 30);
+    assert_eq!(loaded.len(), 31);
     let guide = Path::new("k's-guide").join("src").join("mod.rg");
     assert!(
         loaded
@@ -118,11 +118,36 @@ fn shipped_mods_still_load_with_the_guide() {
     assert!(loaded.iter().any(|(path, hooks)| {
         path.ends_with("glow.rg") && hooks.iter().any(|hook| hook.id() == "glow")
     }));
+    assert!(
+        loaded
+            .iter()
+            .any(|(path, _hooks)| path.ends_with("ember.rg"))
+    );
     let pack = rebuild_world::Pack::builtin();
     assert!(pack.contains_item("wand:rose"));
     assert!(pack.contains_item("mob:calm"));
     assert!(pack.contains_item("hit:glove"));
     assert!(pack.contains_block("guide:marker"));
+    assert!(pack.contains_block("ember:glow_brick"));
+    assert!(pack.contains_item("ember:ember"));
+    assert_eq!(
+        pack.hardness_of(rebuild_world::Block::new("ember:glow_brick", 0)),
+        Some(2.0)
+    );
+    assert_eq!(
+        pack.light_of(rebuild_world::Block::new("ember:glow_brick", 0))
+            .map(|light| light.level),
+        Some(12)
+    );
+    assert_eq!(pack.max_stack("ember:ember"), 16);
+    assert_eq!(
+        pack.placed_block("ember:ember").as_deref(),
+        Some("ember:glow_brick")
+    );
+    assert_eq!(
+        pack.texture_of(rebuild_world::Block::new("ember:glow_brick", 0)),
+        Some("assets/ember/textures/glow_brick.png")
+    );
     assert_eq!(
         pack.hardness_of(rebuild_world::Block::new("guide:marker", 0)),
         Some(2.5)
