@@ -33,7 +33,8 @@ pub const SCALE: f32 = 1.5;
 const SLOT: f32 = 36.0;
 const SLOT_GAP: f32 = 5.0;
 const ICON_PX: usize = 48;
-const CREATIVE_COLS: usize = 9;
+/// Creative catalog grid width (GUI plan: 10-wide).
+const CREATIVE_COLS: usize = 10;
 /// Player inventory body grid (GUI plan: 4x10).
 const INV_COLS: usize = 10;
 const INV_ROWS: usize = 4;
@@ -347,7 +348,7 @@ fn draw_creative(
     ui: &mut Ui,
     gui: &mut Gui,
     hotbar: &mut Hotbar,
-    bag: &mut hotbar::Bag,
+    _bag: &mut hotbar::Bag,
     icons: &mut HashMap<String, TextureHandle>,
 ) {
     let tabs = ["all", "build", "nature", "ore", "light", "more"];
@@ -358,10 +359,15 @@ fn draw_creative(
                 let panel_w = SLOT * CREATIVE_COLS as f32
                     + SLOT_GAP * (CREATIVE_COLS as f32 - 1.0)
                     + 28.0;
-                show_panel(ui, panel_w.max(520.0), |ui| {
+                show_panel(ui, panel_w.max(420.0), |ui| {
                     title_label(ui, "CREATIVE");
                     ui.add_space(8.0);
-                    ui.horizontal_wrapped(|ui| {
+                    // Category tabs with flanking arrows (GUI plan L7).
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::splat(4.0);
+                        if category_arrow(ui, "<").clicked() {
+                            gui.cycle_catalog_tab(false);
+                        }
                         for (index, name) in tabs.iter().enumerate() {
                             let selected = gui.catalog_tab() == index;
                             let fill = if selected { SELECT } else { BUTTON };
@@ -375,10 +381,13 @@ fn draw_creative(
                             .fill(fill)
                             .stroke(Stroke::new(1.0, if selected { SELECT } else { SLOT_EDGE }))
                             .corner_radius(CornerRadius::same(3))
-                            .min_size(Vec2::new(56.0, 26.0));
+                            .min_size(Vec2::new(52.0, 26.0));
                             if ui.add(tab).clicked() {
                                 gui.set_catalog_tab(index);
                             }
+                        }
+                        if category_arrow(ui, ">").clicked() {
+                            gui.cycle_catalog_tab(true);
                         }
                     });
                     ui.add_space(4.0);
@@ -423,32 +432,9 @@ fn draw_creative(
                             });
                     }
                     ui.add_space(10.0);
-                    ui.label(RichText::new("bag").color(MUTED).size(13.0));
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                        for slot in 0..hotbar::PACK {
-                            let id = bag.slot(slot).unwrap_or("");
-                            let count = bag.count(slot);
-                            let tex = if id.is_empty() {
-                                None
-                            } else {
-                                icon_texture(ui.ctx(), icons, id)
-                            };
-                            let resp = slot_button(
-                                ui,
-                                tex,
-                                false,
-                                if count > 1 { Some(count) } else { None },
-                            );
-                            if !id.is_empty() {
-                                let tip = gui::tip_for(id, Some(count));
-                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                if resp.clicked() {
-                                    let _ = hotbar.give_stack(id);
-                                }
-                            }
-                        }
-                    });
+                    ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
+                    ui.add_space(4.0);
+                    draw_hotbar_row(ui, hotbar, icons);
                     ui.add_space(8.0);
                     if close_button(ui, "Close (I)").clicked() {
                         gui.close_bag();
@@ -456,6 +442,16 @@ fn draw_creative(
                 });
             });
         });
+}
+
+fn category_arrow(ui: &mut Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).size(14.0).color(INK))
+            .fill(BUTTON)
+            .stroke(Stroke::new(1.0, SLOT_EDGE))
+            .corner_radius(CornerRadius::same(3))
+            .min_size(Vec2::new(28.0, 26.0)),
+    )
 }
 
 fn draw_player_inventory(
@@ -1277,6 +1273,25 @@ mod tests {
         assert_eq!(INV_ROWS, 4);
         assert_eq!(INV_BODY, 40);
         assert_eq!(hotbar::SLOTS, 10);
+    }
+
+    #[test]
+    fn creative_grid_is_ten_wide_with_hotbar() {
+        assert_eq!(CREATIVE_COLS, 10);
+        assert_eq!(hotbar::SLOTS, 10);
+        assert_eq!(Gui::catalog_tab_count(), 6);
+    }
+
+    #[test]
+    fn cycle_catalog_tab_wraps_categories() {
+        let mut gui = Gui::new();
+        assert_eq!(gui.catalog_tab(), 0);
+        gui.cycle_catalog_tab(false);
+        assert_eq!(gui.catalog_tab(), Gui::catalog_tab_count() - 1);
+        gui.cycle_catalog_tab(true);
+        assert_eq!(gui.catalog_tab(), 0);
+        gui.cycle_catalog_tab(true);
+        assert_eq!(gui.catalog_tab(), 1);
     }
 
     #[test]

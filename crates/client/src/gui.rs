@@ -11,10 +11,10 @@
 //! match a book recipe, and Enter takes the result. F on a furnace opens
 //! input, fuel, and output. Cobblestone cooks into stone, and stone bricks
 //! cook into cracked stone bricks, while oak log or coal ore sits in the fuel slot. Keys 1 through 9 and 0 move one from the hotbar.
-//! I opens the creative inventory: a grid of placeable blocks from the pack,
-//! plus the nine carried slots. Arrows move the cursor. Enter on a block puts
-//! a full stack in the selected hotbar slot. Enter on a carried slot moves one
-//! into the hotbar. Keys 1 through 9 and 0 stash one from that hotbar slot.
+//! I opens the creative inventory: category tabs with arrows, a 10-wide grid
+//! of placeable blocks, and the hotbar x10 under it. Arrows move the cursor.
+//! Enter on a block puts a full stack in the selected hotbar slot. Keys 1
+//! through 9 and 0 pick the hotbar slot. EMI comes later.
 //! Screens name their chrome in JSON (`panel`, `button`, `header` block ids).
 //! Those ids sample the pack atlas, so a panel is stone and a button is cobblestone.
 //! A mod screen, such as the guide on G, opens on the key in its JSON.
@@ -85,7 +85,7 @@ const DETAIL: [f32; 3] = [1.0, 0.92, 0.55];
 const BUTTON: [f32; 3] = [0.14, 0.15, 0.19];
 const ROW: [f32; 3] = [0.09, 0.10, 0.13];
 const BACKDROP: [f32; 3] = [0.012, 0.014, 0.02];
-const CREATIVE_COLS: usize = 9;
+const CREATIVE_COLS: usize = 10;
 const CREATIVE_ROWS: usize = 4;
 const CREATIVE_CELL: f32 = 32.0;
 const CREATIVE_GAP: f32 = 4.0;
@@ -1166,6 +1166,25 @@ impl Gui {
         self.catalog_tab = tab % TABS.len();
         self.catalog_at = 0;
         self.catalog_on = true;
+    }
+
+    /// Step category tabs (`true` = next / `>` , `false` = prev / `<`).
+    pub fn cycle_catalog_tab(&mut self, forward: bool) {
+        let last = TABS.len() - 1;
+        self.catalog_tab = if forward {
+            (self.catalog_tab + 1) % TABS.len()
+        } else if self.catalog_tab == 0 {
+            last
+        } else {
+            self.catalog_tab - 1
+        };
+        self.catalog_at = 0;
+        self.catalog_on = true;
+    }
+
+    /// Number of creative category tabs.
+    pub fn catalog_tab_count() -> usize {
+        TABS.len()
     }
 
     pub fn catalog_query(&self) -> &str {
@@ -2703,16 +2722,7 @@ impl Gui {
             return true;
         }
         if code == KeyCode::Tab || code == KeyCode::BracketLeft {
-            let last = TABS.len() - 1;
-            self.catalog_tab = if code == KeyCode::Tab {
-                (self.catalog_tab + 1) % TABS.len()
-            } else if self.catalog_tab == 0 {
-                last
-            } else {
-                self.catalog_tab - 1
-            };
-            self.catalog_at = 0;
-            self.catalog_on = true;
+            self.cycle_catalog_tab(code == KeyCode::Tab);
             return true;
         }
         if code == KeyCode::Backspace {
@@ -5427,7 +5437,7 @@ fn nudge_grid(selected: usize, cols: usize, count: usize, code: KeyCode) -> Opti
     Some((row * cols + col).min(count - 1))
 }
 
-/// Creative grid of pack blocks, then the nine carried slots.
+/// Creative grid of pack blocks (10-wide), then the bag row (legacy path).
 fn creative_quads(
     width: f32,
     height: f32,
@@ -8320,6 +8330,13 @@ mod tests {
         assert!(creative_view(0, "zzzz").is_empty());
         assert_eq!(creative_empty_line(""), "no blocks");
         assert_eq!(creative_empty_line("zzzz"), "nothing matches");
+        assert_eq!(CREATIVE_COLS, 10);
+        assert_eq!(Gui::catalog_tab_count(), TABS.len());
+        let mut cycle = Gui::from_screen(shipped());
+        cycle.cycle_catalog_tab(false);
+        assert_eq!(cycle.catalog_tab(), TABS.len() - 1);
+        cycle.cycle_catalog_tab(true);
+        assert_eq!(cycle.catalog_tab(), 0);
         assert!(gui.on_press(KeyCode::KeyI));
         assert!(gui.on_press(KeyCode::KeyO));
         assert!(gui.on_press(KeyCode::KeyA));
