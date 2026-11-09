@@ -837,6 +837,8 @@ pub struct State {
     sipping: bool,
     /// Hearts hit zero. Enter, Space, Escape, or a click respawns.
     dead: bool,
+    /// Alt place-shape picker for stone / oak families.
+    shape_pick: crate::shape_pick::ShapePick,
     /// The plate the player is standing on, and the gate it opened.
     plate_held: Option<PlateHold>,
     /// A neighbor to close once the open place has been answered.
@@ -1625,6 +1627,7 @@ impl State {
             sip: 0.0,
             sipping: false,
             dead: false,
+            shape_pick: crate::shape_pick::ShapePick::new(),
             plate_held: None,
             plate_close: None,
             lever_follow: None,
@@ -4293,9 +4296,14 @@ impl State {
         if self.try_saddle() || self.try_bucket() || self.try_place_boat() {
             return;
         }
-        let Some(mut block) = self.hotbar.selected_block() else {
+        let Some(held) = self.hotbar.selected_block() else {
             return;
         };
+        self.shape_pick.clamp_to(Some(held.id));
+        let mut block = self
+            .shape_pick
+            .resolve(held.id)
+            .unwrap_or(held);
         let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
             return;
         };
@@ -4794,6 +4802,7 @@ impl State {
         self.input.jump = false;
         self.input.fast = false;
         self.input.crouch = false;
+        self.shape_pick.open = false;
         self.dig.set_held(false);
     }
 
@@ -5040,12 +5049,49 @@ impl State {
             }
             return;
         }
+        if self.playing
+            && !self.dead
+            && matches!(code, KeyCode::AltLeft | KeyCode::AltRight)
+        {
+            let held = self.hotbar.slot(self.hotbar.selected());
+            self.shape_pick.clamp_to(held);
+            let can_pick = held.is_some_and(|id| crate::shape_pick::ShapePick::options(id).len() > 1);
+            if pressed && can_pick {
+                self.shape_pick.open = true;
+            } else if !pressed {
+                self.shape_pick.open = false;
+            }
+            return;
+        }
+        if self.shape_pick.open && pressed {
+            let held = self.hotbar.slot(self.hotbar.selected()).unwrap_or("");
+            if let Some(digit) = Self::hotbar_digit(code) {
+                let _ = self.shape_pick.pick_digit(held, digit);
+                return;
+            }
+            match code {
+                KeyCode::ArrowLeft | KeyCode::ArrowUp => {
+                    self.shape_pick.cycle(held, false);
+                    return;
+                }
+                KeyCode::ArrowRight | KeyCode::ArrowDown => {
+                    self.shape_pick.cycle(held, true);
+                    return;
+                }
+                KeyCode::Escape => {
+                    self.shape_pick.open = false;
+                    return;
+                }
+                _ => {}
+            }
+        }
         if pressed {
             if let Some(digit) = Self::hotbar_digit(code) {
                 if self.hotbar.select_digit(digit) {
                     self.hotbar_dirty = true;
                     let index = (digit - 1) as usize;
                     let block = self.hotbar.slot(index).unwrap_or("").to_string();
+                    self.shape_pick.clamp_to(Some(block.as_str()));
                     let slots = hotbar_slots(&self.hotbar);
                     let view = client_view(&slots, &self.hotbar, self.camera.eye, self.clock);
                     self.hooks
@@ -5571,6 +5617,12 @@ impl State {
     pub fn pointer_scroll(&mut self, down: bool) {
         if self.map_open && self.holding_map() {
             self.hotbar.zoom_map(down);
+            return;
+        }
+        if self.shape_pick.open {
+            if let Some(held) = self.hotbar.slot(self.hotbar.selected()) {
+                self.shape_pick.cycle(held, down);
+            }
             return;
         }
         if self.menu.is_open() {
@@ -7886,12 +7938,34 @@ impl State {
         if !self.menu.is_open() && !self.dead && !self.screen_open() {
             let looked = self.inspect_id();
             let held = self.hotbar.slot(self.hotbar.selected());
+            self.shape_pick.clamp_to(held);
+            let held_override = held.and_then(|id| self.shape_pick.held_label(id));
             quads.extend(gui::look_quads(
                 self.size.width as f32,
                 self.size.height as f32,
                 looked.as_deref(),
                 held,
+                held_override.as_deref(),
             ));
+            if self.shape_pick.open {
+                if let Some(held) = held {
+                    let options = crate::shape_pick::ShapePick::options(held);
+                    if options.len() > 1 {
+                        let labels: Vec<&str> =
+                            options.iter().map(|shape| shape.label()).collect();
+                        let selected = options
+                            .iter()
+                            .position(|shape| *shape == self.shape_pick.shape)
+                            .unwrap_or(0);
+                        quads.extend(gui::shape_picker_quads(
+                            self.size.width as f32,
+                            self.size.height as f32,
+                            &labels,
+                            selected,
+                        ));
+                    }
+                }
+            }
         }
         if self.holding_compass() && !self.menu.is_open() {
             let (yaw, _) = self.camera.yaw_pitch();

@@ -2,13 +2,15 @@
 //!
 //! Each block is a `.json` or `.bbmodel` under
 //! `assets/terralite/models/block/<id>`. Named shapes used by metadata variants
-//! (and the script default `cube`) live under `assets/terralite/models/shapes/`.
-//! A block model can name a PNG (`texture`) and a colored light (`light`).
-//! Hardness, and the block a break leaves behind, live in the data pack. Those
-//! registries are what the world and the mesher look up. An id that was not
-//! registered has no shape, so it does not mesh. A texture path with no file
-//! is skipped. Dropping a model file under `models/block/` is enough for that
-//! id to mesh.
+//! (door open, wall torch, script default `cube`, …) live under
+//! `assets/terralite/models/shapes/`. Place variants (slab, stairs, plate) are
+//! separate per-block models; the client Alt picker maps a block family onto
+//! those ids. A block model can name a PNG (`texture`) and a colored light
+//! (`light`). Hardness, and the block a break leaves behind, live in the data
+//! pack. Those registries are what the world and the mesher look up. An id that
+//! was not registered has no shape, so it does not mesh. A texture path with no
+//! file is skipped. Dropping a model file under `models/block/` is enough for
+//! that id to mesh.
 
 use std::fs;
 use std::path::{Path, PathBuf};

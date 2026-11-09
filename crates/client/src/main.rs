@@ -23,6 +23,7 @@ mod player;
 mod recipes;
 mod render;
 mod shade;
+mod shape_pick;
 mod sheep;
 mod texture;
 mod trace;

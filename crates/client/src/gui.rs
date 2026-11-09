@@ -4303,7 +4303,14 @@ pub fn look_label(id: &str) -> Option<String> {
 
 /// A small cross at the center. `id` is the looked-at block, entity, or fluid.
 /// `held` is the selected hotbar item. Each name sits on the same plate.
-pub fn look_quads(width: f32, height: f32, id: Option<&str>, held: Option<&str>) -> Vec<Quad> {
+/// `held_override` replaces the hotbar name when a place shape is armed.
+pub fn look_quads(
+    width: f32,
+    height: f32,
+    id: Option<&str>,
+    held: Option<&str>,
+    held_override: Option<&str>,
+) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
@@ -4319,8 +4326,101 @@ pub fn look_quads(width: f32, height: f32, id: Option<&str>, held: Option<&str>)
         let plate_h = 16.0;
         push_name_plate(&mut quads, width, height, &label, cx, cy - 8.0 - plate_h);
     }
-    if let Some(label) = held.and_then(look_label) {
+    let held_label = held_override
+        .map(str::to_string)
+        .or_else(|| held.and_then(look_label));
+    if let Some(label) = held_label {
         push_name_plate(&mut quads, width, height, &label, cx, 98.0);
+    }
+    quads
+}
+
+/// Alt place-shape menu. `labels` are the option names; `selected` is highlighted.
+pub fn shape_picker_quads(
+    width: f32,
+    height: f32,
+    labels: &[&str],
+    selected: usize,
+) -> Vec<Quad> {
+    if width <= 0.0 || height <= 0.0 || labels.is_empty() {
+        return Vec::new();
+    }
+    let row_h = 22.0;
+    let pad = 10.0;
+    let title = "shape";
+    let mut content_w = measure(title, 1.0);
+    for (index, label) in labels.iter().enumerate() {
+        let line = format!("{}  {}", index + 1, label);
+        content_w = content_w.max(measure(&line, 1.0));
+    }
+    let panel_w = (content_w + pad * 2.0).max(120.0);
+    let panel_h = pad + 18.0 + row_h * labels.len() as f32 + pad;
+    let left = width * 0.5 - panel_w * 0.5;
+    let bottom = height * 0.5 - panel_h * 0.5;
+    let mut quads = Vec::new();
+    quads.push(pixel_quad(
+        width,
+        height,
+        left - 2.0,
+        bottom - 2.0,
+        left + panel_w + 2.0,
+        bottom + panel_h + 2.0,
+        FRAME,
+    ));
+    quads.push(pixel_quad(
+        width,
+        height,
+        left,
+        bottom,
+        left + panel_w,
+        bottom + panel_h,
+        PANEL,
+    ));
+    quads.push(pixel_quad(
+        width,
+        height,
+        left,
+        bottom + panel_h - 2.0,
+        left + panel_w,
+        bottom + panel_h,
+        LIP,
+    ));
+    let title_w = measure(title, 1.0);
+    draw_text(
+        &mut quads,
+        width,
+        height,
+        left + (panel_w - title_w) * 0.5,
+        bottom + panel_h - pad - 14.0,
+        title,
+        DETAIL,
+        1.0,
+    );
+    for (index, label) in labels.iter().enumerate() {
+        let row_bottom = bottom + pad + row_h * (labels.len() - 1 - index) as f32;
+        let chosen = index == selected;
+        if chosen {
+            quads.push(pixel_quad(
+                width,
+                height,
+                left + 4.0,
+                row_bottom,
+                left + panel_w - 4.0,
+                row_bottom + row_h - 2.0,
+                SELECT,
+            ));
+        }
+        let line = format!("{}  {}", index + 1, label);
+        draw_text(
+            &mut quads,
+            width,
+            height,
+            left + pad,
+            row_bottom + 3.0,
+            &line,
+            if chosen { INK } else { LABEL },
+            1.0,
+        );
     }
     quads
 }
@@ -6858,15 +6958,15 @@ mod tests {
         assert_eq!(look_label("iron_pickaxe").as_deref(), Some("Iron Pickaxe"));
         assert!(look_label("air").is_none());
         assert!(look_label("").is_none());
-        let bare = look_quads(200.0, 100.0, None, None);
+        let bare = look_quads(200.0, 100.0, None, None, None);
         assert_eq!(bare.len(), 4);
         assert!(bare.iter().all(|quad| quad.color != WELL));
         assert!(
-            look_quads(200.0, 100.0, Some("air"), None)
+            look_quads(200.0, 100.0, Some("air"), None, None)
                 .iter()
                 .all(|quad| quad.color != WELL)
         );
-        let named = look_quads(200.0, 100.0, Some("oak_log"), None);
+        let named = look_quads(200.0, 100.0, Some("oak_log"), None, None);
         let plate = named
             .iter()
             .find(|quad| quad.color == WELL)
@@ -6875,7 +6975,7 @@ mod tests {
         assert!((plate.min[0] + plate.max[0]).abs() < 0.05);
         assert!(named.iter().any(|quad| quad.color == LIP));
         assert!(named.iter().any(|quad| quad.color == INK));
-        let held = look_quads(200.0, 400.0, None, Some("cobblestone"));
+        let held = look_quads(200.0, 400.0, None, Some("cobblestone"), None);
         let held_plate = held
             .iter()
             .find(|quad| quad.color == WELL)
@@ -6887,9 +6987,15 @@ mod tests {
         assert!((held_plate.min[0] + held_plate.max[0]).abs() < 0.05);
         assert!(held.iter().any(|quad| quad.color == LIP));
         assert!(held.iter().any(|quad| quad.color == INK));
-        let both = look_quads(200.0, 400.0, Some("pig"), Some("dirt"));
+        let both = look_quads(200.0, 400.0, Some("pig"), Some("dirt"), None);
         assert_eq!(both.iter().filter(|quad| quad.color == WELL).count(), 2);
-        assert!(look_quads(0.0, 100.0, Some("stone"), Some("dirt")).is_empty());
+        assert!(look_quads(0.0, 100.0, Some("stone"), Some("dirt"), None).is_empty());
+        let shaped = look_quads(200.0, 400.0, None, Some("stone"), Some("Stone Stairs · stairs"));
+        assert!(shaped.iter().any(|quad| quad.color == WELL));
+        let picker = shape_picker_quads(400.0, 300.0, &["block", "slab", "stairs"], 1);
+        assert!(picker.iter().any(|quad| quad.color == SELECT));
+        assert!(picker.iter().any(|quad| quad.color == PANEL));
+        assert!(shape_picker_quads(0.0, 100.0, &["block"], 0).is_empty());
         let bite = bite_quads(200.0, 100.0, 1.0, false);
         let sip = bite_quads(200.0, 100.0, 1.0, true);
         assert_eq!(bite.len(), 1);
