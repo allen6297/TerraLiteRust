@@ -1405,104 +1405,6 @@ pub fn push_model_icon(
     true
 }
 
-fn shade_rgb(color: [f32; 3], factor: f32) -> [f32; 3] {
-    [
-        (color[0] * factor).clamp(0.0, 1.0),
-        (color[1] * factor).clamp(0.0, 1.0),
-        (color[2] * factor).clamp(0.0, 1.0),
-    ]
-}
-
-fn push_icon_strip(
-    quads: &mut Vec<Quad>,
-    width: f32,
-    height: f32,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    color: [f32; 3],
-    id: &str,
-) {
-    if x1 - x0 < 0.5 || y1 - y0 < 0.5 {
-        return;
-    }
-    quads.push(pixel_quad(width, height, x0, y0, x1, y1, color).face(id, 1.0, 1.0));
-}
-
-/// Isometric cube for a pack/script block. Top diamond + shaded side halves.
-fn push_isometric_block(
-    quads: &mut Vec<Quad>,
-    width: f32,
-    height: f32,
-    x: f32,
-    y: f32,
-    size: f32,
-    id: &str,
-) {
-    let base = palette::color(id, 0);
-    let top = shade_rgb(base, 1.16);
-    let left = shade_rgb(base, 0.70);
-    let right = shade_rgb(base, 0.88);
-    let cx = x + size * 0.5;
-    let hw = size * 0.42;
-    let hh = size * 0.21;
-    let depth = size * 0.44;
-    // South tip of the top diamond; sides hang below it.
-    let mid_y = y + size * 0.36;
-
-    // Side faces first so the top diamond paints over the seam.
-    let side_rows = depth.ceil().max(1.0) as i32;
-    for row in 0..side_rows {
-        let t = (row as f32 + 0.5) / side_rows as f32;
-        let yy = mid_y - t * depth;
-        // Inset the outer edges slightly as we go down for a soft foreshorten.
-        let inset = hw * 0.08 * t;
-        push_icon_strip(
-            quads,
-            width,
-            height,
-            cx - hw + inset,
-            yy,
-            cx,
-            yy + 1.0,
-            left,
-            id,
-        );
-        push_icon_strip(
-            quads,
-            width,
-            height,
-            cx,
-            yy,
-            cx + hw - inset,
-            yy + 1.0,
-            right,
-            id,
-        );
-    }
-
-    // Top diamond.
-    let top_rows = (hh * 2.0).ceil().max(1.0) as i32;
-    for row in 0..top_rows {
-        let t = (row as f32 + 0.5) / top_rows as f32;
-        let yy = mid_y + t * hh * 2.0;
-        let along = 1.0 - (2.0 * t - 1.0).abs();
-        let half = hw * along;
-        push_icon_strip(
-            quads,
-            width,
-            height,
-            cx - half,
-            yy,
-            cx + half,
-            yy + 1.0,
-            top,
-            id,
-        );
-    }
-}
-
 fn push_flat_icon(
     quads: &mut Vec<Quad>,
     width: f32,
@@ -1517,8 +1419,10 @@ fn push_flat_icon(
     );
 }
 
-/// Slot icon: Blockbench model, else isometric block, else flat item face.
-/// Always draws something for a non-empty id.
+/// Slot icon: Blockbench model when present, otherwise a flat atlas face.
+///
+/// Custom isometric scanlines (ab667ef) drew house/pentagon silhouettes; egui
+/// menus own block presentation going forward, so HUD slots stay flat.
 pub fn push_slot_icon(
     quads: &mut Vec<Quad>,
     width: f32,
@@ -1533,17 +1437,6 @@ pub fn push_slot_icon(
     }
     if push_model_icon(quads, width, height, x, y, size, id) {
         return;
-    }
-    let pack = Pack::builtin();
-    if pack.contains_block(id) {
-        push_isometric_block(quads, width, height, x, y, size, id);
-        return;
-    }
-    if let Some(placed) = pack.placed_block(id) {
-        if pack.contains_block(&placed) {
-            push_isometric_block(quads, width, height, x, y, size, &placed);
-            return;
-        }
     }
     push_flat_icon(quads, width, height, x, y, size, id);
 }

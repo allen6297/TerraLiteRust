@@ -1121,8 +1121,83 @@ impl Gui {
         self.bag_open
     }
 
+    /// Items / recipes list (E), not creative and not a RoseGold/extra panel.
+    pub fn items_list_open(&self) -> bool {
+        self.open && self.extra.is_none() && self.built_at.is_none() && !self.bag_open
+    }
+
     pub fn bag_selected(&self) -> usize {
         self.bag_selected
+    }
+
+    pub fn catalog_tab(&self) -> usize {
+        self.catalog_tab
+    }
+
+    pub fn set_catalog_tab(&mut self, tab: usize) {
+        self.catalog_tab = tab % TABS.len();
+        self.catalog_at = 0;
+        self.catalog_on = true;
+    }
+
+    pub fn catalog_query(&self) -> &str {
+        &self.catalog_query
+    }
+
+    pub fn set_catalog_query(&mut self, query: &str) {
+        self.catalog_query = query.to_string();
+        self.catalog_at = 0;
+    }
+
+    pub fn catalog_index(&self) -> usize {
+        self.catalog_at
+    }
+
+    pub fn set_catalog_index(&mut self, index: usize) {
+        self.catalog_at = index;
+        self.catalog_on = true;
+    }
+
+    pub fn creative_ids(&self) -> Vec<String> {
+        creative_view(self.catalog_tab, &self.catalog_query)
+    }
+
+    pub fn close_bag(&mut self) {
+        self.bag_open = false;
+        self.catalog_query.clear();
+    }
+
+    pub fn close_items(&mut self) {
+        self.open = false;
+        self.extra = None;
+    }
+
+    pub fn item_rows(&self) -> Vec<String> {
+        self.rows()
+    }
+
+    pub fn selected_row(&self) -> usize {
+        self.selected
+    }
+
+    pub fn select_item_row(&mut self, index: usize) {
+        self.selected = index;
+    }
+
+    pub fn item_detail(&self, id: &str) -> String {
+        self.book.detail(id)
+    }
+
+    /// Craft the selected items-list recipe into the hotbar / bag.
+    pub fn craft_selected_into(
+        &self,
+        bar: &mut hotbar::Hotbar,
+        bag: &mut hotbar::Bag,
+    ) -> bool {
+        let Some((result, inputs)) = self.craft_job() else {
+            return false;
+        };
+        hotbar::craft_carried(bar, bag, &inputs, &result)
     }
 
     /// Id from the screen file, `inventory` while the bag is open, `commands` for that list, or `""`.
@@ -3702,6 +3777,75 @@ impl Menu {
         self.selected = 0;
     }
 
+    pub fn page_title(&self) -> &'static str {
+        match self.page {
+            MenuPage::Main => "TERRALITE",
+            MenuPage::Settings => "SETTINGS",
+            MenuPage::Worlds => "WORLDS",
+            MenuPage::Pause => "PAUSED",
+            MenuPage::Closed => "",
+        }
+    }
+
+    pub fn menu_rows(&self) -> Vec<String> {
+        self.rows()
+    }
+
+    pub fn selected_row(&self) -> usize {
+        self.selected
+    }
+
+    pub fn row_detail(&self, label: &str) -> String {
+        match label {
+            "play" => format!("solo {}, {}", self.size.label(), self.world_name),
+            "join" if self.size_locked => "already on the server".to_string(),
+            "join" if !self.join_note.is_empty() => self.join_note.clone(),
+            "join" => "localhost".to_string(),
+            "settings" => "world size, sun, sound, bob, and trace".to_string(),
+            "worlds" => "load or start a named save".to_string(),
+            "quit" => "leave the game".to_string(),
+            "resume" => "return to the world".to_string(),
+            "title" => "quit to the menu".to_string(),
+            "world" if self.size_locked => format!(
+                "server {}, {} by {} chunks",
+                self.size.label(),
+                self.size.side(),
+                self.size.side()
+            ),
+            "world" => format!(
+                "{}, {} by {} chunks",
+                self.size.label(),
+                self.size.side(),
+                self.size.side()
+            ),
+            "hemisphere" => format!("{} sun", self.hemisphere.label()),
+            "volume" if self.muted => "muted".to_string(),
+            "volume" => "sound on".to_string(),
+            "view_bob" => format!("bob {}", self.bob.label()),
+            "trace" if self.trace => "soft sun".to_string(),
+            "trace" => "raster sun".to_string(),
+            "back" => "return to the menu".to_string(),
+            "new" => "start a blank save".to_string(),
+            _ if self.page == MenuPage::Settings && self.category_heading(label) => {
+                self.category_text(label)
+            }
+            _ if self.page == MenuPage::Settings => self.setting_line(label),
+            _ if self.page == MenuPage::Worlds && self.size_locked => {
+                "the server has the world".to_string()
+            }
+            _ if self.page == MenuPage::Worlds && label == self.world_name => {
+                format!("{label}, ready to play")
+            }
+            _ if self.page == MenuPage::Worlds => format!("save {label}"),
+            _ => String::new(),
+        }
+    }
+
+    pub fn activate_row(&mut self, index: usize) -> MenuAction {
+        self.selected = index;
+        self.activate()
+    }
+
     /// Leave settings for the page that opened it. Escape on pause resumes.
     pub fn escape(&mut self) -> MenuAction {
         match self.page {
@@ -4137,15 +4281,17 @@ pub fn feel_quads(
 ) -> Vec<Quad> {
     let (width, height) = gui_space(width, height);
     if menu.is_open() {
-        let mut quads = menu.quads(width, height);
-        quads.extend(gui.chat_quads(width, height));
-        return quads;
+        // egui draws pause / settings / title; keep chat on the quad path.
+        return gui.chat_quads(width, height);
     }
     if dead {
         return death_quads(width, height);
     }
     let mut quads = hotbar::bar_lifted(width, height, hotbar, punch.max(0.0) * 10.0);
-    quads.extend(gui.paint(width, height, bag));
+    // Creative + items list are egui; stations and RoseGold GUIAPI stay here.
+    if !gui.bag_open() && !gui.items_list_open() {
+        quads.extend(gui.paint(width, height, bag));
+    }
     quads.extend(gui.chat_quads(width, height));
     quads.extend(health_quads(width, height, hearts));
     quads.extend(hunger_quads(width, height, food));
@@ -6511,6 +6657,10 @@ fn brand(text: &str) -> String {
     text.to_ascii_uppercase()
 }
 
+pub fn title_case_label(text: &str) -> String {
+    title_case(text)
+}
+
 fn title_case(text: &str) -> String {
     let mut out = String::new();
     let mut cap = true;
@@ -6890,17 +7040,8 @@ mod tests {
             10,
             [None; 3],
         );
-        let open = ui_quads(
-            1280.0,
-            720.0,
-            &Hotbar::new(),
-            &bag,
-            &gui,
-            &Menu::closed(),
-            10,
-            10,
-            [None; 3],
-        );
+        // Items list is egui at runtime; legacy paint still draws the panel for tests / GUIAPI bridge.
+        let open = gui.paint(1280.0 / GUI_SCALE, 720.0 / GUI_SCALE, &bag);
         let cobble = crate::texture::block_face("cobblestone");
         let stone = palette::color("stone", 0);
         assert!(cobble > 0.0);
@@ -8294,7 +8435,8 @@ mod tests {
         let mut menu = Menu::new();
         assert!(menu.is_open());
         assert!(!menu.is_settings());
-        let quads = ui_quads(
+        // feel_quads leaves the title menu to egui; legacy menu.quads still paints for tests.
+        let hud = ui_quads(
             1280.0,
             720.0,
             &Hotbar::new(),
@@ -8306,11 +8448,11 @@ mod tests {
             [None; 3],
         );
         assert!(
-            quads
-                .iter()
+            hud.iter()
                 .all(|quad| quad.color != palette::color("cobblestone", 0)),
             "the menu hides the hotbar"
         );
+        let quads = menu.quads(1280.0 / GUI_SCALE, 720.0 / GUI_SCALE);
         assert!(
             quads
                 .iter()

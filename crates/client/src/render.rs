@@ -798,6 +798,8 @@ pub struct State {
     port: u16,
     gui: gui::Gui,
     menu: gui::Menu,
+    /// Pause / settings / creative / items — egui on wgpu. World stays separate.
+    egui: crate::egui_ui::EguiHost,
     /// True after Play, until quit to title.
     playing: bool,
     loaded_world: String,
@@ -1551,6 +1553,7 @@ impl State {
         let pack = rebuild_world::Pack::builtin();
         hotbar.stock_blocks(&pack.script_block_ids());
         hotbar.stock_items(&pack.placeable_item_ids());
+        let egui = crate::egui_ui::EguiHost::new(&window, &device, view_format);
         let mut state = Self {
             instance,
             window,
@@ -1604,6 +1607,7 @@ impl State {
             port,
             gui: gui::Gui::new(),
             menu: gui::Menu::new(),
+            egui,
             playing: false,
             loaded_world: crate::net::DEFAULT_WORLD.to_string(),
             audio: crate::audio::Audio::new(),
@@ -4751,6 +4755,23 @@ impl State {
 
     pub fn menu_open(&self) -> bool {
         self.menu.is_open()
+    }
+
+    /// Forward a winit event to egui. True when the game should ignore it.
+    /// Escape is never blocked so pause / creative / items can still close.
+    pub fn egui_on_event(&mut self, event: &winit::event::WindowEvent) -> bool {
+        let consumed = self.egui.on_window_event(&self.window, event);
+        if !consumed || !crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui) {
+            return false;
+        }
+        !matches!(
+            event,
+            winit::event::WindowEvent::KeyboardInput {
+                event: key,
+                ..
+            } if key.state == winit::event::ElementState::Pressed
+                && matches!(key.physical_key, winit::keyboard::PhysicalKey::Code(KeyCode::Escape))
+        )
     }
 
     pub fn is_dead(&self) -> bool {
@@ -8073,6 +8094,31 @@ impl State {
             pass.set_vertex_buffer(0, self.ui_vertex_buf.slice(..));
             pass.set_index_buffer(self.ui_index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..ui_indices.len() as u32, 0, 0..1);
+        }
+
+        if crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui) {
+            let full = self.egui.run(
+                &self.window,
+                &mut self.menu,
+                &mut self.gui,
+                &mut self.hotbar,
+                &mut self.bag,
+            );
+            let action = self.egui.take_action();
+            self.egui.paint(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &color_view,
+                self.size.width,
+                self.size.height,
+                full,
+            );
+            if action != gui::MenuAction::None {
+                self.hotbar_dirty = true;
+                self.bag_dirty = true;
+                self.apply_menu(action);
+            }
         }
 
         self.queue.submit([encoder.finish()]);

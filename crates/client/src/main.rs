@@ -7,6 +7,7 @@ mod commands;
 mod daylight;
 mod dig;
 mod drops;
+mod egui_ui;
 mod gui;
 mod hotbar;
 mod jobs;
@@ -240,6 +241,14 @@ impl ApplicationHandler for App {
             }
             return;
         };
+        let egui_ate = !matches!(
+            event,
+            WindowEvent::RedrawRequested | WindowEvent::Resized(_) | WindowEvent::CloseRequested
+        ) && state.egui_on_event(&event);
+        if egui_ate {
+            state.window().request_redraw();
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),

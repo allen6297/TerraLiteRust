@@ -4,5 +4,5 @@ members = ["crates/world", "crates/server", "crates/client", "crates/rosegold"]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.95"
 publish = false
