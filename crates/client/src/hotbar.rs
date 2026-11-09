@@ -1392,14 +1392,160 @@ pub fn push_model_icon(
         return false;
     }
     let tint = palette::color(id, 0);
+    // Slight isometric skew so custom models read as 3D in a slot.
     for box_ in shape.boxes() {
-        let x0 = x + f32::from(box_.min[0]) / 16.0 * size;
-        let x1 = x + f32::from(box_.max[0]) / 16.0 * size;
-        let y0 = y + f32::from(box_.min[1]) / 16.0 * size;
-        let y1 = y + f32::from(box_.max[1]) / 16.0 * size;
+        let z = (f32::from(box_.min[2]) + f32::from(box_.max[2])) * 0.5 / 16.0;
+        let skew = (z - 0.5) * size * 0.22;
+        let x0 = x + f32::from(box_.min[0]) / 16.0 * size + skew;
+        let x1 = x + f32::from(box_.max[0]) / 16.0 * size + skew;
+        let y0 = y + f32::from(box_.min[1]) / 16.0 * size + skew * 0.5;
+        let y1 = y + f32::from(box_.max[1]) / 16.0 * size + skew * 0.5;
         quads.push(pixel_quad(width, height, x0, y0, x1, y1, tint));
     }
     true
+}
+
+fn shade_rgb(color: [f32; 3], factor: f32) -> [f32; 3] {
+    [
+        (color[0] * factor).clamp(0.0, 1.0),
+        (color[1] * factor).clamp(0.0, 1.0),
+        (color[2] * factor).clamp(0.0, 1.0),
+    ]
+}
+
+fn push_icon_strip(
+    quads: &mut Vec<Quad>,
+    width: f32,
+    height: f32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    color: [f32; 3],
+    id: &str,
+) {
+    if x1 - x0 < 0.5 || y1 - y0 < 0.5 {
+        return;
+    }
+    quads.push(pixel_quad(width, height, x0, y0, x1, y1, color).face(id, 1.0, 1.0));
+}
+
+/// Isometric cube for a pack/script block. Top diamond + shaded side halves.
+fn push_isometric_block(
+    quads: &mut Vec<Quad>,
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+    size: f32,
+    id: &str,
+) {
+    let base = palette::color(id, 0);
+    let top = shade_rgb(base, 1.16);
+    let left = shade_rgb(base, 0.70);
+    let right = shade_rgb(base, 0.88);
+    let cx = x + size * 0.5;
+    let hw = size * 0.42;
+    let hh = size * 0.21;
+    let depth = size * 0.44;
+    // South tip of the top diamond; sides hang below it.
+    let mid_y = y + size * 0.36;
+
+    // Side faces first so the top diamond paints over the seam.
+    let side_rows = depth.ceil().max(1.0) as i32;
+    for row in 0..side_rows {
+        let t = (row as f32 + 0.5) / side_rows as f32;
+        let yy = mid_y - t * depth;
+        // Inset the outer edges slightly as we go down for a soft foreshorten.
+        let inset = hw * 0.08 * t;
+        push_icon_strip(
+            quads,
+            width,
+            height,
+            cx - hw + inset,
+            yy,
+            cx,
+            yy + 1.0,
+            left,
+            id,
+        );
+        push_icon_strip(
+            quads,
+            width,
+            height,
+            cx,
+            yy,
+            cx + hw - inset,
+            yy + 1.0,
+            right,
+            id,
+        );
+    }
+
+    // Top diamond.
+    let top_rows = (hh * 2.0).ceil().max(1.0) as i32;
+    for row in 0..top_rows {
+        let t = (row as f32 + 0.5) / top_rows as f32;
+        let yy = mid_y + t * hh * 2.0;
+        let along = 1.0 - (2.0 * t - 1.0).abs();
+        let half = hw * along;
+        push_icon_strip(
+            quads,
+            width,
+            height,
+            cx - half,
+            yy,
+            cx + half,
+            yy + 1.0,
+            top,
+            id,
+        );
+    }
+}
+
+fn push_flat_icon(
+    quads: &mut Vec<Quad>,
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+    size: f32,
+    id: &str,
+) {
+    quads.push(
+        pixel_quad(width, height, x, y, x + size, y + size, palette::color(id, 0)).face(id, 1.0, 1.0),
+    );
+}
+
+/// Slot icon: Blockbench model, else isometric block, else flat item face.
+/// Always draws something for a non-empty id.
+pub fn push_slot_icon(
+    quads: &mut Vec<Quad>,
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+    size: f32,
+    id: &str,
+) {
+    if id.is_empty() || id == "air" || id == "empty" {
+        return;
+    }
+    if push_model_icon(quads, width, height, x, y, size, id) {
+        return;
+    }
+    let pack = Pack::builtin();
+    if pack.contains_block(id) {
+        push_isometric_block(quads, width, height, x, y, size, id);
+        return;
+    }
+    if let Some(placed) = pack.placed_block(id) {
+        if pack.contains_block(&placed) {
+            push_isometric_block(quads, width, height, x, y, size, &placed);
+            return;
+        }
+    }
+    push_flat_icon(quads, width, height, x, y, size, id);
 }
 
 /// Background, then each slot's border and fill. The selected border is yellow and thicker.
@@ -1466,31 +1612,20 @@ pub fn bar_lifted(width: f32, height: f32, hotbar: &Hotbar, lift: f32) -> Vec<Qu
             )
             .tag(600 + index as u16),
         );
-        let fill = match hotbar.slot(index) {
-            Some(id) => palette::color(id, 0),
-            None => EMPTY,
-        };
         let icon_x = x + FILL_INSET_PX;
         let icon_y = bottom + FILL_INSET_PX;
         let icon_size = SLOT_PX - FILL_INSET_PX * 2.0;
-        if hotbar.slot(index).is_some_and(|id| {
-            push_model_icon(&mut quads, width, height, icon_x, icon_y, icon_size, id)
-        }) {
-            // The Blockbench boxes are the icon.
-        } else {
-            let icon = pixel_quad(
+        match hotbar.slot(index) {
+            Some(id) => push_slot_icon(&mut quads, width, height, icon_x, icon_y, icon_size, id),
+            None => quads.push(pixel_quad(
                 width,
                 height,
                 icon_x,
                 icon_y,
                 icon_x + icon_size,
                 icon_y + icon_size,
-                fill,
-            );
-            quads.push(match hotbar.slot(index) {
-                Some(id) => icon.face(id, 1.0, 1.0),
-                None => icon,
-            });
+                EMPTY,
+            )),
         }
         draw_count(&mut quads, width, height, x, bottom, hotbar.count(index));
         draw_wear(
@@ -1712,10 +1847,11 @@ mod tests {
         let quads = bar_quads(800.0, 600.0, &bar);
         let highlights: Vec<_> = quads.iter().filter(|quad| quad.color == SELECTED).collect();
         assert_eq!(highlights.len(), 1);
+        let cobble = crate::texture::block_face("cobblestone");
         let fill = quads
             .iter()
-            .find(|quad| quad.color == palette::color("cobblestone", 0))
-            .expect("cobblestone fill");
+            .find(|quad| quad.tex == cobble && cobble > 0.0)
+            .expect("cobblestone isometric fill");
         let highlight = highlights[0];
         assert!(highlight.min[0] < fill.min[0] && highlight.min[1] < fill.min[1]);
         assert!(highlight.max[0] > fill.max[0] && highlight.max[1] > fill.max[1]);
@@ -1755,15 +1891,15 @@ mod tests {
             .count();
         assert_eq!(ink.len(), 21, "64 is two white digits");
         assert_eq!(shadow, 21);
-        let fill = quads
+        let outline = quads
             .iter()
-            .find(|quad| quad.color == palette::color("cobblestone", 0))
-            .expect("cobblestone fill");
+            .find(|quad| quad.color == SELECTED)
+            .expect("selected outline");
         assert!(ink.iter().all(|quad| {
-            quad.min[0] >= fill.min[0]
-                && quad.max[0] <= fill.max[0]
-                && quad.min[1] >= fill.min[1]
-                && quad.max[1] <= fill.max[1]
+            quad.min[0] >= outline.min[0]
+                && quad.max[0] <= outline.max[0]
+                && quad.min[1] >= outline.min[1]
+                && quad.max[1] <= outline.max[1]
         }));
         let min_x = ink.iter().map(|quad| quad.min[0]).fold(f32::MAX, f32::min);
         let max_x = ink.iter().map(|quad| quad.max[0]).fold(f32::MIN, f32::max);
@@ -1862,13 +1998,16 @@ mod tests {
         assert!(bar.shrink(stack, "bucket"));
         assert_eq!(bar.count(stack), 1);
         let quads = bar_quads(800.0, 600.0, &bar);
-        assert!(quads.iter().any(|quad| {
-            quad.color == palette::color("dirt", 0) && quad.tex > 0.0 && quad.span == [1.0, 1.0]
-        }));
+        let dirt = crate::texture::block_face("dirt");
+        assert!(
+            dirt > 0.0 && quads.iter().any(|quad| quad.tex == dirt),
+            "dirt draws as an isometric atlas icon"
+        );
         assert!(
             quads
                 .iter()
-                .any(|quad| quad.tex > 0.0 && quad.span[0] > 1.0)
+                .any(|quad| quad.tex > 0.0 && quad.span[0] > 1.0),
+            "the bar chrome still tiles its atlas face"
         );
     }
 

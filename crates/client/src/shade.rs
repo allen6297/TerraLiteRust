@@ -54,9 +54,9 @@ pub fn apply_frame(color: [f32; 3], tint: [f32; 3], brightness: f32) -> [f32; 3]
 
 pub fn load_frame_hook() -> Result<FrameHook, String> {
     let root = rebuild_world::resource_pack_root();
-    if !root.join("pack.meta").is_file() {
+    if !root.join("pack.json").is_file() {
         return Err(format!(
-            "resource pack missing pack.meta ({})",
+            "resource pack missing pack.json ({})",
             root.display()
         ));
     }

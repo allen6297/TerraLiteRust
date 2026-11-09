@@ -7912,9 +7912,12 @@ impl State {
             }
         }
 
+        let screen_w = self.size.width as f32;
+        let screen_h = self.size.height as f32;
+        let (gui_w, gui_h) = gui::gui_space(screen_w, screen_h);
         let mut quads = gui::feel_quads(
-            self.size.width as f32,
-            self.size.height as f32,
+            screen_w,
+            screen_h,
             &self.hotbar,
             &self.bag,
             &self.gui,
@@ -7929,11 +7932,7 @@ impl State {
             self.dead,
         );
         if self.crouch > 0.02 && !self.menu.is_open() && !self.dead {
-            quads.extend(gui::crouch_quads(
-                self.size.width as f32,
-                self.size.height as f32,
-                self.crouch,
-            ));
+            quads.extend(gui::crouch_quads(gui_w, gui_h, self.crouch));
         }
         if !self.menu.is_open() && !self.dead && !self.screen_open() {
             let looked = self.inspect_id();
@@ -7941,8 +7940,8 @@ impl State {
             self.shape_pick.clamp_to(held);
             let held_override = held.and_then(|id| self.shape_pick.held_label(id));
             quads.extend(gui::look_quads(
-                self.size.width as f32,
-                self.size.height as f32,
+                gui_w,
+                gui_h,
                 looked.as_deref(),
                 held,
                 held_override.as_deref(),
@@ -7957,12 +7956,7 @@ impl State {
                             .iter()
                             .position(|shape| *shape == self.shape_pick.shape)
                             .unwrap_or(0);
-                        quads.extend(gui::shape_picker_quads(
-                            self.size.width as f32,
-                            self.size.height as f32,
-                            &labels,
-                            selected,
-                        ));
+                        quads.extend(gui::shape_picker_quads(gui_w, gui_h, &labels, selected));
                     }
                 }
             }
@@ -7979,19 +7973,11 @@ impl State {
             } else {
                 crate::camera::compass_mark(self.camera.eye.x, self.camera.eye.z, yaw)
             };
-            quads.extend(gui::compass_quads(
-                self.size.width as f32,
-                self.size.height as f32,
-                mark,
-            ));
+            quads.extend(gui::compass_quads(gui_w, gui_h, mark));
         }
         if self.holding_clock() && !self.menu.is_open() {
             let mark = crate::daylight::clock_mark(self.clock.time_of_day());
-            quads.extend(gui::clock_quads(
-                self.size.width as f32,
-                self.size.height as f32,
-                mark,
-            ));
+            quads.extend(gui::clock_quads(gui_w, gui_h, mark));
         }
         if self.map_open && !self.holding_map() {
             self.map_open = false;
@@ -8027,33 +8013,22 @@ impl State {
                 crate::camera::STAIRS_XZ[1].floor() as i32,
             );
             quads.extend(crate::map::sheet_quads(
-                self.size.width as f32,
-                self.size.height as f32,
-                &colors,
-                yaw,
-                camp,
-                mine,
-                stairs,
+                gui_w, gui_h, &colors, yaw, camp, mine, stairs,
             ));
         } else if self.holding_map() && !self.menu.is_open() {
             let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
             let colors = crate::map::sample_at(&self.world, eye, self.hotbar.map_zoom());
             let (yaw, _) = self.camera.yaw_pitch();
-            quads.extend(crate::map::quads(
-                self.size.width as f32,
-                self.size.height as f32,
-                &colors,
-                yaw,
-            ));
+            quads.extend(crate::map::quads(gui_w, gui_h, &colors, yaw));
         }
         if self.gui.is_open() && !self.menu.is_open() && !self.dead {
             let hit = self.pointer_hit();
             if let Some(tip) = gui::hover_tip(&self.gui, &self.hotbar, &self.bag, hit) {
                 quads.extend(gui::tooltip_quads(
-                    self.size.width as f32,
-                    self.size.height as f32,
-                    self.cursor_x,
-                    self.cursor_y,
+                    gui_w,
+                    gui_h,
+                    self.cursor_x / gui::GUI_SCALE,
+                    self.cursor_y / gui::GUI_SCALE,
                     &tip.name,
                     &tip.line,
                 ));
@@ -8061,10 +8036,10 @@ impl State {
         }
         if self.menu.is_open() || self.gui.is_open() || self.dead {
             quads.extend(gui::cursor_quads(
-                self.size.width as f32,
-                self.size.height as f32,
-                self.cursor_x,
-                self.cursor_y,
+                gui_w,
+                gui_h,
+                self.cursor_x / gui::GUI_SCALE,
+                self.cursor_y / gui::GUI_SCALE,
             ));
         }
         let max_quads = (UI_VERTEX_CAP as usize / 4).min(UI_INDEX_CAP as usize / 6);

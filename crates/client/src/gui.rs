@@ -37,6 +37,15 @@ use crate::hotbar::{self, Hotbar, Quad};
 use crate::palette;
 use crate::recipes::{self, Book};
 
+/// Overall HUD / menu / inventory scale. Layout uses a virtual resolution of
+/// `size / GUI_SCALE`, so every plate draws 1.5× larger on screen.
+pub const GUI_SCALE: f32 = 1.5;
+
+/// Virtual size used by HUD and menu layout.
+pub fn gui_space(width: f32, height: f32) -> (f32, f32) {
+    ((width / GUI_SCALE).max(1.0), (height / GUI_SCALE).max(1.0))
+}
+
 const CELL: f32 = 3.0;
 /// Capitals in the title are drawn at this multiple of [`CELL`].
 const BRAND_SCALE: f32 = 2.0;
@@ -533,17 +542,14 @@ impl Screen {
             }
             if !menu {
                 let chip = row_y + (row_h - SWATCH) * 0.5;
-                quads.push(
-                    pixel_quad(
-                        width,
-                        height,
-                        inner_left,
-                        chip,
-                        inner_left + SWATCH,
-                        chip + SWATCH,
-                        palette::color(&rows[index], 0),
-                    )
-                    .face(&rows[index], 1.0, 1.0),
+                hotbar::push_slot_icon(
+                    &mut quads,
+                    width,
+                    height,
+                    inner_left,
+                    chip,
+                    SWATCH,
+                    &rows[index],
                 );
             }
             let text_h = block_height(label, 1.0);
@@ -4129,6 +4135,7 @@ pub fn feel_quads(
     drink: bool,
     dead: bool,
 ) -> Vec<Quad> {
+    let (width, height) = gui_space(width, height);
     if menu.is_open() {
         let mut quads = menu.quads(width, height);
         quads.extend(gui.chat_quads(width, height));
@@ -5349,17 +5356,15 @@ fn creative_quads(
         let Some(id) = ids.get(id_index) else {
             continue;
         };
-        quads.push(
-            pixel_quad(
-                width,
-                height,
-                x,
-                y,
-                x + CREATIVE_CELL,
-                y + CREATIVE_CELL,
-                palette::color(id, 0),
-            )
-            .face(id, 1.0, 1.0),
+        let inset = 2.0;
+        hotbar::push_slot_icon(
+            &mut quads,
+            width,
+            height,
+            x + inset,
+            y + inset,
+            CREATIVE_CELL - inset * 2.0,
+            id,
         );
     }
     if ids.is_empty() {
@@ -5405,24 +5410,28 @@ fn creative_quads(
             .face(&screen.button, 1.0, 1.0)
             .tag(200 + slot as u16),
         );
-        let id = bag.slot(slot).unwrap_or("empty");
-        let fill = if bag.slot(slot).is_some() {
-            palette::color(id, 0)
+        if let Some(id) = bag.slot(slot) {
+            let inset = 2.0;
+            hotbar::push_slot_icon(
+                &mut quads,
+                width,
+                height,
+                x + inset,
+                bag_y + inset,
+                CREATIVE_CELL - inset * 2.0,
+                id,
+            );
         } else {
-            ROW
-        };
-        quads.push(
-            pixel_quad(
+            quads.push(pixel_quad(
                 width,
                 height,
                 x,
                 bag_y,
                 x + CREATIVE_CELL,
                 bag_y + CREATIVE_CELL,
-                fill,
-            )
-            .face(id, 1.0, 1.0),
-        );
+                ROW,
+            ));
+        }
     }
     if !detail_shown.is_empty() {
         draw_text(
@@ -5550,17 +5559,14 @@ fn chest_quads(width: f32, height: f32, chest: &hotbar::Bag, selected: usize) ->
             continue;
         };
         let inset = 4.0;
-        quads.push(
-            pixel_quad(
-                width,
-                height,
-                x + inset,
-                y + inset,
-                x + cell - inset,
-                y + cell - inset,
-                palette::color(id, 0),
-            )
-            .face(id, 1.0, 1.0),
+        hotbar::push_slot_icon(
+            &mut quads,
+            width,
+            height,
+            x + inset,
+            y + inset,
+            cell - inset * 2.0,
+            id,
         );
     }
     if !detail.is_empty() {
@@ -6087,7 +6093,7 @@ fn paint_slot(
         return;
     };
     let inset = 4.0;
-    if hotbar::push_model_icon(
+    hotbar::push_slot_icon(
         quads,
         width,
         height,
@@ -6095,20 +6101,6 @@ fn paint_slot(
         y + inset,
         cell - inset * 2.0,
         id,
-    ) {
-        return;
-    }
-    quads.push(
-        pixel_quad(
-            width,
-            height,
-            x + inset,
-            y + inset,
-            x + cell - inset,
-            y + cell - inset,
-            palette::color(id, 0),
-        )
-        .face(id, 1.0, 1.0),
     );
 }
 
@@ -6382,9 +6374,9 @@ pub fn load_screen() -> Result<Screen, String> {
 
 fn load_at(path: &std::path::Path) -> Result<Screen, String> {
     let root = rebuild_world::resource_pack_root();
-    if !root.join("pack.meta").is_file() {
+    if !root.join("pack.json").is_file() {
         return Err(format!(
-            "resource pack missing pack.meta ({})",
+            "resource pack missing pack.json ({})",
             root.display()
         ));
     }
@@ -6726,7 +6718,7 @@ mod tests {
         assert!(path.ends_with(std::path::Path::new("assets/terralite/gui/index.json")));
         assert!(
             rebuild_world::resource_pack_root()
-                .join("pack.meta")
+                .join("pack.json")
                 .is_file()
         );
         let screen = shipped();
@@ -6909,10 +6901,11 @@ mod tests {
             10,
             [None; 3],
         );
-        let cobble = palette::color("cobblestone", 0);
+        let cobble = crate::texture::block_face("cobblestone");
         let stone = palette::color("stone", 0);
-        assert!(closed.iter().any(|quad| quad.color == cobble));
-        assert!(open.iter().any(|quad| quad.color == cobble));
+        assert!(cobble > 0.0);
+        assert!(closed.iter().any(|quad| quad.tex == cobble));
+        assert!(open.iter().any(|quad| quad.tex == cobble));
         assert!(
             closed
                 .iter()
@@ -6935,11 +6928,14 @@ mod tests {
             "the selected recipe line is drawn"
         );
         assert!(open.len() < 32768, "the ui buffer can hold the screen");
+        let stone_tex = crate::texture::block_face("stone");
+        assert!(stone_tex > 0.0);
         let swatch = open
             .iter()
-            .find(|quad| quad.color == stone && quad.max[0] - quad.min[0] > 0.01)
+            .find(|quad| quad.tex == stone_tex && quad.max[0] - quad.min[0] > 0.005)
             .expect("stone swatch");
         assert!(swatch.min[1] < panel.max[1] && swatch.max[1] > panel.min[1]);
+        let _ = stone;
     }
 
     #[test]
@@ -7995,20 +7991,17 @@ mod tests {
         assert!(gui.bag_open());
         assert_eq!(gui.screen_id(), "inventory");
         let drawn = gui.paint(1280.0, 720.0, &bag);
-        assert!(
-            drawn
-                .iter()
-                .any(|quad| quad.color == palette::color("dirt", 0))
-        );
+        let dirt = crate::texture::block_face("dirt");
+        assert!(dirt > 0.0 && drawn.iter().any(|quad| quad.tex == dirt));
         assert!(drawn.iter().any(|quad| quad.color == INK));
         assert!(gui.on_press(KeyCode::Enter));
         assert!(gui.bag_open());
         assert_eq!(gui.bag_selected(), 0);
         let pick = gui.creative_pick().expect("creative cursor");
+        let pick_tex = crate::texture::block_face(&pick);
         assert!(
-            drawn
-                .iter()
-                .any(|quad| { quad.color == palette::color(&pick, 0) && quad.tex > 0.0 })
+            pick_tex > 0.0 && drawn.iter().any(|quad| quad.tex == pick_tex),
+            "creative grid shows a textured pick"
         );
         assert!(
             drawn
@@ -8032,14 +8025,17 @@ mod tests {
         assert!(gui.on_press(KeyCode::Backspace));
         assert!(gui.on_press(KeyCode::Backspace));
         assert!(gui.on_press(KeyCode::Backspace));
-        assert_eq!(gui.creative_pick().as_deref(), Some("stone"));
+        let all_first = creative_view(0, "").first().cloned().expect("catalog");
+        assert_eq!(gui.creative_pick().as_deref(), Some(all_first.as_str()));
         assert!(gui.on_press(KeyCode::Tab));
-        assert_eq!(gui.creative_pick().as_deref(), Some("stone"));
+        let build_first = creative_view(1, "").first().cloned().expect("build tab");
+        assert_eq!(gui.creative_pick().as_deref(), Some(build_first.as_str()));
         assert!(gui.on_press(KeyCode::Tab));
-        assert_eq!(gui.creative_pick().as_deref(), Some("grass"));
+        let nature_first = creative_view(2, "").first().cloned().expect("nature tab");
+        assert_eq!(gui.creative_pick().as_deref(), Some(nature_first.as_str()));
         assert!(gui.on_press(KeyCode::BracketLeft));
         assert!(gui.on_press(KeyCode::BracketLeft));
-        assert_eq!(gui.creative_pick().as_deref(), Some("stone"));
+        assert_eq!(gui.creative_pick().as_deref(), Some(all_first.as_str()));
         let sought = gui.paint(1280.0, 720.0, &bag);
         assert!(
             sought
@@ -8099,11 +8095,8 @@ mod tests {
         }]));
         assert!(gui.chest_open());
         let drawn = gui.paint(1280.0, 720.0, &hotbar::Bag::new());
-        assert!(
-            drawn
-                .iter()
-                .any(|quad| { quad.color == palette::color("dirt", 0) && quad.tex > 0.0 })
-        );
+        let dirt = crate::texture::block_face("dirt");
+        assert!(dirt > 0.0 && drawn.iter().any(|quad| quad.tex == dirt));
         assert!(
             drawn
                 .iter()

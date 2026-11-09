@@ -23,9 +23,9 @@ fn on_init() {
         2.0,
         12
     );
-    var ember = Items.defineItem("ember", "ember", brick, 16);
-    Register.recipe(brick, ember);
-    Mod.log("registered " + brick + " and " + ember);
+    var ember = Items.defineItem("ember", "ember", brick.id, 16);
+    Register.recipe(brick.id, ember.id);
+    Mod.log("registered " + brick.id + " and " + ember.id);
 }
 
 fn main(): Int {
