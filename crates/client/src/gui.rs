@@ -4726,7 +4726,8 @@ pub fn crouch_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     let plate_w = text_w + 16.0;
     let plate_h = 18.0;
     let left = (width - plate_w) * 0.5;
-    let bottom = 78.0;
+    // Sit just above the hotbar lip; status plates are bottom-left, so this stays clear.
+    let bottom = hotbar::bar_chrome_top() + 8.0;
     let mut quads = vec![
         pixel_quad(
             width,
@@ -4793,6 +4794,7 @@ pub fn look_quads(
     ];
     if let Some(label) = id.and_then(look_label) {
         let plate_w = measure(&label, 1.0) + 12.0;
+        // Bottom-right tip: clear of the centered hotbar and the left status stack.
         let margin = 12.0;
         let center_x = width - margin - plate_w * 0.5;
         push_name_plate(&mut quads, width, height, &label, center_x, margin);
@@ -4801,7 +4803,9 @@ pub fn look_quads(
         .map(str::to_string)
         .or_else(|| held.and_then(look_label));
     if let Some(label) = held_label {
-        push_name_plate(&mut quads, width, height, &label, cx, 98.0);
+        // Above the hotbar lip; stays centered so it clears the left status plates.
+        let held_bottom = hotbar::bar_chrome_top() + 36.0;
+        push_name_plate(&mut quads, width, height, &label, cx, held_bottom);
     }
     quads
 }
@@ -4953,23 +4957,45 @@ pub fn hurt_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     ]
 }
 
+/// Left inset for the HUD status cluster (hearts / hunger / armor).
+const HUD_STATUS_LEFT: f32 = 16.0;
+/// Gap between the hotbar chrome and the stacked status plates.
+const HUD_STATUS_GAP: f32 = 10.0;
+/// Vertical pitch from one status row to the next.
+const HUD_STATUS_ROW: f32 = 24.0;
+const HUD_STATUS_PIP: f32 = 10.0;
+const HUD_STATUS_STEP: f32 = 14.0;
+
+/// Bottom of the lower status row (hunger), clear above the hotbar.
+fn status_hunger_bottom() -> f32 {
+    hotbar::bar_chrome_top() + HUD_STATUS_GAP
+}
+
+fn status_health_bottom() -> f32 {
+    status_hunger_bottom() + HUD_STATUS_ROW
+}
+
+fn status_armor_bottom() -> f32 {
+    status_health_bottom() + HUD_STATUS_ROW
+}
+
 fn armor_quads(width: f32, height: f32, worn: [Option<&str>; 3]) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
     let empty = [0.16, 0.12, 0.10];
-    let bottom = 112.0;
+    let bottom = status_armor_bottom();
     let mut quads = Vec::new();
     for (index, piece) in worn.iter().enumerate() {
-        let x = 24.0 + index as f32 * 14.0;
+        let x = HUD_STATUS_LEFT + 8.0 + index as f32 * HUD_STATUS_STEP;
         let color = piece.map(|id| palette::color(id, 0)).unwrap_or(empty);
         quads.push(pixel_quad(
             width,
             height,
             x,
             bottom,
-            x + 10.0,
-            bottom + 10.0,
+            x + HUD_STATUS_PIP,
+            bottom + HUD_STATUS_PIP,
             color,
         ));
     }
@@ -5070,19 +5096,21 @@ fn health_quads(width: f32, height: f32, hearts: i32) -> Vec<Quad> {
     let mut quads = Vec::new();
     let full = [0.75, 0.16, 0.14];
     let empty = [0.22, 0.08, 0.08];
-    let bottom = 96.0;
-    let span = crate::body::HEARTS as f32 * 14.0;
+    // Bottom-left stack: health sits above hunger, both clear of the hotbar.
+    let bottom = status_health_bottom();
+    let span = crate::body::HEARTS as f32 * HUD_STATUS_STEP;
+    let left = HUD_STATUS_LEFT;
     quads.push(pixel_quad(
         width,
         height,
-        16.0,
+        left,
         bottom - 6.0,
-        20.0 + span,
+        left + 4.0 + span,
         bottom + 16.0,
         TRAY,
     ));
     for index in 0..crate::body::HEARTS {
-        let x = 24.0 + index as f32 * 14.0;
+        let x = left + 8.0 + index as f32 * HUD_STATUS_STEP;
         let filled = index < hearts;
         let color = if filled { full } else { empty };
         quads.push(pixel_quad(
@@ -5090,8 +5118,8 @@ fn health_quads(width: f32, height: f32, hearts: i32) -> Vec<Quad> {
             height,
             x,
             bottom,
-            x + 10.0,
-            bottom + 10.0,
+            x + HUD_STATUS_PIP,
+            bottom + HUD_STATUS_PIP,
             color,
         ));
         if filled {
@@ -5116,27 +5144,29 @@ fn hunger_quads(width: f32, height: f32, food: i32) -> Vec<Quad> {
     let mut quads = Vec::new();
     let full = [0.86, 0.62, 0.16];
     let empty = [0.28, 0.18, 0.08];
-    let bottom = 96.0;
-    let span = crate::body::HUNGER as f32 * 14.0;
+    // Bottom-left with health (GUI plan L10); was previously bottom-right.
+    let bottom = status_hunger_bottom();
+    let span = crate::body::HUNGER as f32 * HUD_STATUS_STEP;
+    let left = HUD_STATUS_LEFT;
     quads.push(pixel_quad(
         width,
         height,
-        width - 16.0 - span,
+        left,
         bottom - 6.0,
-        width - 16.0,
+        left + 4.0 + span,
         bottom + 16.0,
         TRAY,
     ));
     for index in 0..crate::body::HUNGER {
-        let x = width - 24.0 - (crate::body::HUNGER - index) as f32 * 14.0;
+        let x = left + 8.0 + index as f32 * HUD_STATUS_STEP;
         let color = if index < food { full } else { empty };
         quads.push(pixel_quad(
             width,
             height,
             x,
             bottom,
-            x + 10.0,
-            bottom + 10.0,
+            x + HUD_STATUS_PIP,
+            bottom + HUD_STATUS_PIP,
             color,
         ));
     }
@@ -7513,7 +7543,8 @@ mod tests {
     }
 
     #[test]
-    fn hunger_sits_on_the_right_and_empties() {
+    fn hunger_and_health_sit_bottom_left_and_empties() {
+        let heart = [0.75, 0.16, 0.14];
         let full = [0.86, 0.62, 0.16];
         let empty = [0.28, 0.18, 0.08];
         let bag = hotbar::Bag::new();
@@ -7540,18 +7571,31 @@ mod tests {
             [None; 3],
         );
         assert_eq!(fed.iter().filter(|quad| quad.color == full).count(), 10);
+        assert_eq!(fed.iter().filter(|quad| quad.color == heart).count(), 10);
         assert_eq!(
             starved.iter().filter(|quad| quad.color == empty).count(),
             10
         );
         assert!(
             fed.iter()
-                .filter(|quad| quad.color == full)
-                .all(|quad| quad.min[0] > 0.0)
+                .filter(|quad| quad.color == full || quad.color == heart)
+                .all(|quad| {
+                    let mid = (quad.min[0] + quad.max[0]) * 0.5;
+                    mid < -0.2
+                }),
+            "hunger and health sit on the bottom-left"
         );
         assert!(
             fed.iter().filter(|quad| quad.color == TRAY).count() >= 2,
             "hearts and hunger each sit on a plate"
+        );
+        let trays: Vec<_> = fed.iter().filter(|quad| quad.color == TRAY).collect();
+        assert!(
+            trays.iter().all(|quad| {
+                let mid = (quad.min[0] + quad.max[0]) * 0.5;
+                mid < -0.2
+            }),
+            "both status trays stay left"
         );
         let cap = palette::color("leather_cap", 0);
         let dressed = ui_quads(
@@ -7566,6 +7610,90 @@ mod tests {
             [Some("leather_cap"), None, None],
         );
         assert!(dressed.iter().any(|quad| quad.color == cap));
+    }
+
+    #[test]
+    fn hud_layout_keeps_crosshair_hotbar_and_plates_apart() {
+        let (gw, gh) = gui_space(1280.0, 720.0);
+        let bar = Hotbar::new();
+        let bag = hotbar::Bag::new();
+        let hud = ui_quads(
+            1280.0,
+            720.0,
+            &bar,
+            &bag,
+            &Gui::from_screen(shipped()),
+            &Menu::closed(),
+            10,
+            10,
+            [None; 3],
+        );
+        let look = look_quads(gw, gh, Some("oak_log"), Some("cobblestone"), None);
+        // First four quads are the center cross; later INK/EDGE are tip glyphs.
+        assert!(look.len() >= 4);
+        let cross = &look[..4];
+        assert!(cross.iter().all(|quad| quad.color == INK || quad.color == EDGE));
+        let cross_mid_x: f32 = cross
+            .iter()
+            .map(|quad| (quad.min[0] + quad.max[0]) * 0.5)
+            .sum::<f32>()
+            / cross.len() as f32;
+        let cross_mid_y: f32 = cross
+            .iter()
+            .map(|quad| (quad.min[1] + quad.max[1]) * 0.5)
+            .sum::<f32>()
+            / cross.len() as f32;
+        assert!(cross_mid_x.abs() < 0.05, "crosshair is centered on x");
+        assert!(cross_mid_y.abs() < 0.05, "crosshair is centered on y");
+
+        let bar_quads = hotbar::bar_quads(gw, gh, &bar);
+        let bar_mid = {
+            let first = bar_quads.first().expect("hotbar chrome");
+            (first.min[0] + first.max[0]) * 0.5
+        };
+        assert!(bar_mid.abs() < 0.05, "hotbar is bottom-center");
+        let bar_span = bar_quads[0].max[0] - bar_quads[0].min[0];
+        assert!(
+            bar_span > 0.8 && bar_span < 1.4,
+            "×10 hotbar spans the bottom center"
+        );
+        let bar_left = bar_quads[0].min[0];
+        let bar_right = bar_quads[0].max[0];
+
+        let trays: Vec<_> = hud.iter().filter(|quad| quad.color == TRAY).collect();
+        assert!(trays.len() >= 2);
+        for tray in &trays {
+            let mid = (tray.min[0] + tray.max[0]) * 0.5;
+            assert!(mid < -0.2, "status tray stays left, mid={mid}");
+            // Above the hotbar chrome in NDC (bar top ≈ bar_chrome_top / height).
+            let bar_top_ndc = hotbar::bar_chrome_top() / gh * 2.0 - 1.0;
+            assert!(
+                tray.min[1] > bar_top_ndc - 0.02,
+                "status tray clears the hotbar"
+            );
+            assert!(
+                tray.max[0] < bar_left + 0.02,
+                "status tray does not overlap the hotbar horizontally"
+            );
+        }
+
+        let tip = look
+            .iter()
+            .find(|quad| quad.color == WELL)
+            .expect("look tip");
+        let tip_mid = (tip.min[0] + tip.max[0]) * 0.5;
+        assert!(tip_mid > 0.25, "look tip stays bottom-right");
+        assert!(tip.min[1] < -0.5, "look tip sits near the bottom");
+        assert!(
+            tip.min[0] > bar_right - 0.02,
+            "look tip clears the hotbar on the right"
+        );
+        for tray in &trays {
+            assert!(
+                tip.min[0] > tray.max[0] + 0.05,
+                "look tip does not overlap status trays"
+            );
+        }
     }
 
     #[test]

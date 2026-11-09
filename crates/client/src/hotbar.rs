@@ -178,6 +178,11 @@ const SELECT_BORDER_PX: f32 = 6.0;
 const PAD_PX: f32 = 6.0;
 const FILL_INSET_PX: f32 = 4.0;
 
+/// GUI-space Y of the top lip of the hotbar chrome. HUD plates clear above this.
+pub fn bar_chrome_top() -> f32 {
+    MARGIN_PX + SLOT_PX + PAD_PX
+}
+
 const BAR: [f32; 3] = [0.08, 0.08, 0.10];
 const EMPTY: [f32; 3] = [0.12, 0.12, 0.14];
 const BORDER: [f32; 3] = [0.35, 0.35, 0.38];
