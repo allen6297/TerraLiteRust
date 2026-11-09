@@ -422,30 +422,34 @@ fn draw_creative(
             ui.with_layout(Layout::top_down(Align::Center), |ui| {
                 ui.add_space(top_pad);
                 ui.set_max_width(content_w);
-                egui::ScrollArea::vertical()
-                    .id_salt("creative_chrome")
-                    .max_height((avail_h - top_pad).max(chrome_h.min(avail_h * CREATIVE_CHROME_FRAC_MAX)))
-                    .show(ui, |ui| {
-                        ui.set_width(content_w);
-                        ui.set_max_width(content_w);
-                        if side_by_side {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                                draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
-                                let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
-                            });
-                        } else {
-                            draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
-                            ui.add_space(10.0);
-                            let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
-                        }
+                ui.set_width(content_w);
+                // No outer ScrollArea: nesting one around the item grid made egui
+                // hand the inner scroll a tiny available height (~2 rows) even when
+                // max_height asked for 8–22. The grid scrolls on its own; stacked
+                // EMI can clip on very short windows rather than starve the grid.
+                if side_by_side {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
+                        draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
+                        let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
                     });
+                } else {
+                    draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
+                    ui.add_space(10.0);
+                    let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
+                }
             });
         });
 }
 
 /// How tall the creative item grid can grow for this window.
 fn creative_grid_height(avail_h: f32, side_by_side: bool) -> f32 {
+    let rows = creative_row_budget(avail_h, side_by_side);
+    rows * SLOT + (rows - 1.0) * SLOT_GAP
+}
+
+/// Visible item rows for this window (clamped to the 8–22 band).
+fn creative_row_budget(avail_h: f32, side_by_side: bool) -> f32 {
     // Title / tabs / search / hotbar / close / panel chrome. Stacked EMI eats more.
     let overhead = if side_by_side {
         CREATIVE_PANEL_OVERHEAD
@@ -461,10 +465,17 @@ fn creative_grid_height(avail_h: f32, side_by_side: bool) -> f32 {
         .min(avail_h * CREATIVE_CHROME_FRAC_MAX - overhead)
         .max(SLOT * CREATIVE_ROWS_MIN);
     let pitch = SLOT + SLOT_GAP;
-    let rows = (usable / pitch)
+    (usable / pitch)
         .floor()
-        .clamp(CREATIVE_ROWS_MIN, CREATIVE_ROWS_MAX);
-    rows * SLOT + (rows - 1.0) * SLOT_GAP
+        .clamp(CREATIVE_ROWS_MIN, CREATIVE_ROWS_MAX)
+}
+
+/// Rows that must stay visible inside the pinned creative ScrollArea.
+fn creative_visible_rows(grid_h: f32) -> usize {
+    let pitch = SLOT + SLOT_GAP;
+    ((grid_h + SLOT_GAP) / pitch)
+        .floor()
+        .clamp(CREATIVE_ROWS_MIN, CREATIVE_ROWS_MAX) as usize
 }
 
 fn creative_chrome_height(grid_h: f32, side_by_side: bool) -> f32 {
@@ -539,32 +550,50 @@ fn draw_creative_panel(
         let ids = gui.creative_ids();
         if ids.is_empty() {
             ui.label(RichText::new("nothing matches").color(MUTED).size(14.0));
-        } else {
-            egui::ScrollArea::vertical()
-                .id_salt("creative_grid_scroll")
-                .max_height(grid_h)
-                .show(ui, |ui| {
-                    egui::Grid::new("creative_grid")
-                        .spacing([SLOT_GAP, SLOT_GAP])
-                        .min_col_width(SLOT)
-                        .show(ui, |ui| {
-                            for (i, id) in ids.iter().enumerate() {
-                                let selected = gui.catalog_index() == i;
-                                let tip = gui::tip_for(id, None);
-                                let tex = icon_texture(ui.ctx(), icons, id);
-                                let resp = slot_button(ui, tex, selected, None);
-                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                if resp.clicked() {
-                                    gui.set_catalog_index(i);
-                                    let _ = hotbar.give_stack(id);
-                                }
-                                if (i + 1) % CREATIVE_COLS == 0 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
-                });
+            ui.add_space(4.0);
         }
+        // max_height alone is not enough: egui ScrollArea auto-shrinks to
+        // content, and a nested outer scroll starved available height to ~2
+        // rows. Reserve exact space, pin the viewport, and pad empty cells.
+        let rows = creative_visible_rows(grid_h);
+        let cells = ids.len().max(rows * CREATIVE_COLS);
+        let grid_w_avail = ui.available_width();
+        ui.allocate_ui_with_layout(
+            Vec2::new(grid_w_avail, grid_h),
+            Layout::top_down(Align::Min),
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("creative_grid_scroll")
+                    .max_height(grid_h)
+                    .min_scrolled_height(grid_h)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Grid::new("creative_grid")
+                            .spacing([SLOT_GAP, SLOT_GAP])
+                            .min_col_width(SLOT)
+                            .show(ui, |ui| {
+                                for i in 0..cells {
+                                    if let Some(id) = ids.get(i) {
+                                        let selected = gui.catalog_index() == i;
+                                        let tip = gui::tip_for(id, None);
+                                        let tex = icon_texture(ui.ctx(), icons, id);
+                                        let resp = slot_button(ui, tex, selected, None);
+                                        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                        if resp.clicked() {
+                                            gui.set_catalog_index(i);
+                                            let _ = hotbar.give_stack(id);
+                                        }
+                                    } else {
+                                        let _ = slot_button(ui, None, false, None);
+                                    }
+                                    if (i + 1) % CREATIVE_COLS == 0 {
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                    });
+            },
+        );
         ui.add_space(10.0);
         ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
         ui.add_space(4.0);
@@ -1815,6 +1844,25 @@ mod tests {
             (CREATIVE_CHROME_FRAC_MIN - 0.02..=CREATIVE_CHROME_FRAC_MAX + 0.03).contains(&frac),
             "expected ~70–85% chrome height, got {frac:.3} ({chrome} / 1080)"
         );
+        // Viewport row count must stay in the visible band even when the
+        // catalog is shorter than the grid (empty slots pad the rest).
+        let short_rows = creative_visible_rows(short);
+        let tall_rows = creative_visible_rows(tall);
+        assert!(
+            short_rows >= CREATIVE_ROWS_MIN as usize,
+            "short window must keep ≥8 visible rows, got {short_rows}"
+        );
+        assert!(
+            tall_rows >= 12,
+            "tall window must keep ≥12 visible rows, got {tall_rows}"
+        );
+        assert_eq!(short_rows, creative_row_budget(720.0, true) as usize);
+        assert_eq!(tall_rows, creative_row_budget(1080.0, true) as usize);
+        let padded_cells = 20usize.max(short_rows * CREATIVE_COLS);
+        assert!(
+            padded_cells >= short_rows * CREATIVE_COLS,
+            "small catalogs must pad out to the visible row budget"
+        );
     }
 
     #[test]
@@ -2030,6 +2078,185 @@ mod tests {
             let path = dir.join(format!("egui-slot-{id}.png"));
             write_rgba_png(&path, img.width() as u32, img.height() as u32, &img);
         }
+    }
+
+    /// Prove the pinned ScrollArea keeps the budgeted height even when the
+    /// catalog is only ~2 content rows (the pre-fix auto-shrink failure).
+    #[test]
+    fn creative_scroll_area_pins_budgeted_height() {
+        let ctx = Context::default();
+        let grid_h = creative_grid_height(720.0, true);
+        let rows = creative_visible_rows(grid_h);
+        assert!(rows >= 8, "budget must request ≥8 rows, got {rows}");
+        // Simulate a short catalog (exactly 2 rows of items).
+        let catalog_cells = CREATIVE_COLS * 2;
+        let cells = catalog_cells.max(rows * CREATIVE_COLS);
+        assert_eq!(cells, rows * CREATIVE_COLS);
+
+        let mut measured = 0.0_f32;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                Vec2::new(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut full = ctx.run_ui(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let out = egui::ScrollArea::vertical()
+                    .id_salt("creative_grid_scroll_test")
+                    .max_height(grid_h)
+                    .min_scrolled_height(grid_h)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Grid::new("creative_grid_test")
+                            .spacing([SLOT_GAP, SLOT_GAP])
+                            .min_col_width(SLOT)
+                            .show(ui, |ui| {
+                                for i in 0..cells {
+                                    let _ = slot_button(ui, None, false, None);
+                                    if (i + 1) % CREATIVE_COLS == 0 {
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                    });
+                measured = out.inner_rect.height();
+            });
+        });
+        full.textures_delta.clear();
+        // ScrollAreaOutput.inner_rect is the begin() viewport (pre-shrink).
+        // Measure the cursor advance to catch the final allocated height.
+        let mut allocated = 0.0_f32;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                Vec2::new(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut full = ctx.run_ui(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let y0 = ui.cursor().top();
+                let _ = egui::ScrollArea::vertical()
+                    .id_salt("creative_grid_scroll_alloc")
+                    .max_height(grid_h)
+                    .min_scrolled_height(grid_h)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        egui::Grid::new("creative_grid_alloc")
+                            .spacing([SLOT_GAP, SLOT_GAP])
+                            .min_col_width(SLOT)
+                            .show(ui, |ui| {
+                                for i in 0..cells {
+                                    let _ = slot_button(ui, None, false, None);
+                                    if (i + 1) % CREATIVE_COLS == 0 {
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                    });
+                allocated = ui.cursor().top() - y0;
+            });
+        });
+        full.textures_delta.clear();
+        assert!(
+            (measured - grid_h).abs() < 1.0,
+            "pinned scroll viewport should be grid_h={grid_h}, got {measured}"
+        );
+        assert!(
+            allocated + 0.5 >= grid_h,
+            "final allocated height must keep the grid budget ({allocated} < {grid_h})"
+        );
+
+        // Nested outer+inner scroll was the live bug: outer content_max_size
+        // starved the inner viewport down to ~2 rows despite max_height.
+        let mut nested_alloc = 0.0_f32;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                Vec2::new(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut full = ctx.run_ui(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("creative_chrome_nested")
+                    .max_height(600.0)
+                    .show(ui, |ui| {
+                        ui.add_space(40.0); // title stand-in
+                        ui.add_space(34.0); // tabs
+                        ui.add_space(28.0); // search
+                        let y0 = ui.cursor().top();
+                        let _ = egui::ScrollArea::vertical()
+                            .id_salt("creative_grid_nested")
+                            .max_height(grid_h)
+                            .show(ui, |ui| {
+                                egui::Grid::new("creative_grid_nested")
+                                    .spacing([SLOT_GAP, SLOT_GAP])
+                                    .min_col_width(SLOT)
+                                    .show(ui, |ui| {
+                                        for i in 0..(CREATIVE_COLS * 20) {
+                                            let _ = slot_button(ui, None, false, None);
+                                            if (i + 1) % CREATIVE_COLS == 0 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    });
+                            });
+                        nested_alloc = ui.cursor().top() - y0;
+                    });
+            });
+        });
+        full.textures_delta.clear();
+        eprintln!(
+            "pinned_alloc={allocated} nested_inner_alloc={nested_alloc} grid_h={grid_h} rows={rows}"
+        );
+
+        // Always dump a schematic proving the padded row count.
+        let dir = std::path::Path::new(
+            r"C:\Users\monki\AppData\Local\Cursor\AgentStores\cursor_agent_stores\bc-918df1d9-b731-4436-a592-ce370bd63ade\files\media",
+        );
+        let _ = std::fs::create_dir_all(dir);
+        let cell = 12u32;
+        let gap = 2u32;
+        let w = CREATIVE_COLS as u32 * (cell + gap) + gap;
+        let h = rows as u32 * (cell + gap) + gap;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&[18, 20, 28, 255]);
+        }
+        for r in 0..rows {
+            for c in 0..CREATIVE_COLS {
+                let filled = r * CREATIVE_COLS + c < catalog_cells;
+                let x0 = gap + c as u32 * (cell + gap);
+                let y0 = gap + r as u32 * (cell + gap);
+                for y in y0..y0 + cell {
+                    for x in x0..x0 + cell {
+                        let i = ((y * w + x) * 4) as usize;
+                        if filled {
+                            rgba[i..i + 4].copy_from_slice(&[184, 133, 31, 255]);
+                        } else {
+                            rgba[i..i + 4].copy_from_slice(&[58, 60, 70, 255]);
+                        }
+                    }
+                }
+            }
+        }
+        let path = dir.join("creative-grid-layout-dump.png");
+        let file = std::fs::File::create(&path).expect("create layout png");
+        let mut encoder = png::Encoder::new(file, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("png header");
+        writer.write_image_data(&rgba).expect("png data");
+        eprintln!(
+            "dumped {} ({}x{} cells, pinned_h={measured}, allocated={allocated})",
+            path.display(),
+            CREATIVE_COLS,
+            rows
+        );
     }
 
     fn write_rgba_png(path: &std::path::Path, w: u32, h: u32, img: &egui::ColorImage) {
