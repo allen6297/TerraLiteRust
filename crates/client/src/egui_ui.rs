@@ -35,9 +35,14 @@ pub const SCALE: f32 = 1.5;
 /// Square inventory / creative cell in egui points (before [`SCALE`]).
 const SLOT: f32 = 36.0;
 const SLOT_GAP: f32 = 5.0;
-const ICON_PX: usize = 48;
+/// Soft-rendered slot raster size. Higher than the on-screen cell so LINEAR
+/// upscale stays smooth instead of chunky nearest pixels.
+const ICON_PX: usize = 64;
 /// Creative catalog grid width (GUI plan: 10-wide).
 const CREATIVE_COLS: usize = 10;
+/// Visible creative rows when the window is short (still taller than the old 5).
+const CREATIVE_ROWS_MIN: f32 = 8.0;
+const CREATIVE_ROWS_MAX: f32 = 12.0;
 /// Player inventory body grid (GUI plan: 4x10).
 const INV_COLS: usize = 10;
 const INV_ROWS: usize = 4;
@@ -389,24 +394,38 @@ fn draw_creative(
         .frame(Frame::new().fill(backdrop()))
         .show(ui, |ui| {
             let max_w = chrome_max_width(ui);
+            let avail_h = ui.available_height();
             let panel_w = clamped_panel_width(max_w, CREATIVE_COLS, true);
             let emi_w = EMI_SIDE_W.max(180.0);
             let side_by_side = panel_w + 12.0 + emi_w <= max_w + 0.5;
-            ui.vertical_centered(|ui| {
-                ui.set_max_width(max_w);
+            let content_w = if side_by_side {
+                panel_w + 12.0 + emi_w
+            } else {
+                panel_w.max(emi_w.min(max_w))
+            }
+            .min(max_w);
+            let grid_h = creative_grid_height(avail_h, side_by_side);
+            // Center the chrome block (not top-left). Estimate height so EMI
+            // either sits beside or stacks below while staying on-screen.
+            let chrome_h = creative_chrome_height(grid_h, side_by_side);
+            let top_pad = ((avail_h - chrome_h) * 0.5).clamp(8.0, avail_h * 0.18);
+            ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                ui.add_space(top_pad);
+                ui.set_max_width(content_w);
                 egui::ScrollArea::vertical()
                     .id_salt("creative_chrome")
-                    .max_height(ui.available_height() * 0.94)
+                    .max_height((avail_h - top_pad).max(grid_h + 120.0))
                     .show(ui, |ui| {
-                        ui.set_max_width(max_w);
+                        ui.set_width(content_w);
+                        ui.set_max_width(content_w);
                         if side_by_side {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                                draw_creative_panel(ui, gui, hotbar, icons, panel_w);
+                                draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
                                 let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
                             });
                         } else {
-                            draw_creative_panel(ui, gui, hotbar, icons, panel_w);
+                            draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
                             ui.add_space(10.0);
                             let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
                         }
@@ -415,12 +434,34 @@ fn draw_creative(
         });
 }
 
+/// How tall the creative item grid can grow for this window.
+fn creative_grid_height(avail_h: f32, side_by_side: bool) -> f32 {
+    // Title / tabs / search / hotbar / close / panel chrome. Stacked EMI eats more.
+    let overhead = if side_by_side { 268.0 } else { 268.0 + 210.0 };
+    let usable = (avail_h * 0.90 - overhead).max(SLOT * CREATIVE_ROWS_MIN);
+    let pitch = SLOT + SLOT_GAP;
+    let rows = (usable / pitch)
+        .floor()
+        .clamp(CREATIVE_ROWS_MIN, CREATIVE_ROWS_MAX);
+    rows * SLOT + (rows - 1.0) * SLOT_GAP
+}
+
+fn creative_chrome_height(grid_h: f32, side_by_side: bool) -> f32 {
+    let main = 268.0 + grid_h;
+    if side_by_side {
+        main
+    } else {
+        main + 210.0
+    }
+}
+
 fn draw_creative_panel(
     ui: &mut Ui,
     gui: &mut Gui,
     hotbar: &mut Hotbar,
     icons: &mut HashMap<String, TextureHandle>,
     panel_w: f32,
+    grid_h: f32,
 ) {
     let tabs = ["all", "build", "nature", "ore", "light", "more"];
     let grid_w = grid_pitch(CREATIVE_COLS);
@@ -480,7 +521,7 @@ fn draw_creative_panel(
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("creative_grid_scroll")
-                .max_height(SLOT * 5.0 + SLOT_GAP * 4.0)
+                .max_height(grid_h)
                 .show(ui, |ui| {
                     egui::Grid::new("creative_grid")
                         .spacing([SLOT_GAP, SLOT_GAP])
@@ -1372,7 +1413,8 @@ fn icon_texture(
         return Some(handle.id());
     }
     let image = render_slot_icon(id);
-    let handle = ctx.load_texture(id, image, TextureOptions::NEAREST);
+    // LINEAR so the 64px soft raster doesn't show hard nearest pixels in a slot.
+    let handle = ctx.load_texture(id, image, TextureOptions::LINEAR);
     let tex = handle.id();
     icons.insert(id.to_string(), handle);
     Some(tex)
@@ -1396,33 +1438,44 @@ fn render_slot_icon(id: &str) -> egui::ColorImage {
 fn flat_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
     let size = ICON_PX;
     let mut rgba = vec![0u8; size * size * 4];
+    let pad = 2.0;
+    let inner = (size as f32 - pad * 2.0).max(1.0);
     for y in 0..size {
         for x in 0..size {
-            let color = sample_or_base(
-                tile,
-                x as f32 / size as f32,
-                y as f32 / size as f32,
-                base,
-                1.0,
-            );
+            let fx = x as f32 + 0.5;
+            let fy = y as f32 + 0.5;
+            let u = ((fx - pad) / inner).clamp(0.0, 1.0);
+            let v = ((fy - pad) / inner).clamp(0.0, 1.0);
+            // Soft inset so flat tools don't read as a hard pixel stamp.
+            let edge = (fx - pad)
+                .min(fy - pad)
+                .min((pad + inner) - fx)
+                .min((pad + inner) - fy);
+            let cover = (edge / 1.25).clamp(0.0, 1.0);
+            if cover <= 0.0 {
+                continue;
+            }
+            let mut color = sample_or_base(tile, u, v, base, 1.0);
+            color[3] = ((color[3] as f32) * cover) as u8;
             put(&mut rgba, size, x, y, color);
         }
     }
     egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba)
 }
 
-/// Classic inventory cube: top diamond + shaded left/right sides, atlas UVs.
+/// Soft inventory cube: gentler face steps, bilinear atlas sample, edge AA.
 fn isometric_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
     let size = ICON_PX;
     let mut rgba = vec![0u8; size * size * 4];
     let cx = (size as f32 - 1.0) * 0.5;
-    let mid_y = size as f32 * 0.38;
-    let hw = size as f32 * 0.42;
-    let hh = size as f32 * 0.21;
-    let depth = size as f32 * 0.42;
+    // Slightly rounder silhouette than a hard diamond stack.
+    let mid_y = size as f32 * 0.36;
+    let hw = size as f32 * 0.40;
+    let hh = size as f32 * 0.22;
+    let depth = size as f32 * 0.40;
 
-    // Left face (darker).
-    fill_parallelogram(
+    // Left / right / top — shade contrast is soft so faces don't step hard.
+    fill_soft_face(
         &mut rgba,
         size,
         [cx - hw, mid_y],
@@ -1431,11 +1484,11 @@ fn isometric_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
         [cx - hw, mid_y + depth],
         tile,
         base,
-        0.72,
+        0.78,
+        0.88,
         false,
     );
-    // Right face.
-    fill_parallelogram(
+    fill_soft_face(
         &mut rgba,
         size,
         [cx + hw, mid_y],
@@ -1444,11 +1497,11 @@ fn isometric_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
         [cx + hw, mid_y + depth],
         tile,
         base,
-        0.90,
+        0.92,
+        1.00,
         false,
     );
-    // Top face (bright) — painted last so it covers the seam.
-    fill_parallelogram(
+    fill_soft_face(
         &mut rgba,
         size,
         [cx, mid_y - hh],
@@ -1457,14 +1510,15 @@ fn isometric_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
         [cx - hw, mid_y],
         tile,
         base,
-        1.12,
+        1.02,
+        1.10,
         true,
     );
 
     egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba)
 }
 
-fn fill_parallelogram(
+fn fill_soft_face(
     rgba: &mut [u8],
     size: usize,
     a: [f32; 2],
@@ -1473,63 +1527,92 @@ fn fill_parallelogram(
     d: [f32; 2],
     tile: Option<&Image>,
     base: [f32; 3],
-    shade: f32,
+    shade0: f32,
+    shade1: f32,
     overwrite: bool,
 ) {
-    let min_x = a[0].min(b[0]).min(c[0]).min(d[0]).floor().max(0.0) as usize;
-    let max_x = a[0]
-        .max(b[0])
-        .max(c[0])
-        .max(d[0])
+    let pad = 1.25;
+    let min_x = (a[0].min(b[0]).min(c[0]).min(d[0]) - pad)
+        .floor()
+        .max(0.0) as usize;
+    let max_x = (a[0].max(b[0]).max(c[0]).max(d[0]) + pad)
         .ceil()
         .min(size as f32 - 1.0) as usize;
-    let min_y = a[1].min(b[1]).min(c[1]).min(d[1]).floor().max(0.0) as usize;
-    let max_y = a[1]
-        .max(b[1])
-        .max(c[1])
-        .max(d[1])
+    let min_y = (a[1].min(b[1]).min(c[1]).min(d[1]) - pad)
+        .floor()
+        .max(0.0) as usize;
+    let max_y = (a[1].max(b[1]).max(c[1]).max(d[1]) + pad)
         .ceil()
         .min(size as f32 - 1.0) as usize;
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             let p = [x as f32 + 0.5, y as f32 + 0.5];
-            if let Some((u, v)) = bilinear_uv(p, a, b, c, d) {
-                let color = sample_or_base(
-                    tile,
-                    u.clamp(0.0, 1.0),
-                    v.clamp(0.0, 1.0),
-                    base,
-                    shade,
-                );
-                let i = (y * size + x) * 4;
-                if overwrite || rgba[i + 3] == 0 {
+            let Some((u, v, cover)) = soft_face_uv(p, a, b, c, d) else {
+                continue;
+            };
+            if cover <= 0.0 {
+                continue;
+            }
+            // Soft vertical gradient across the face (not a flat hard tint).
+            let shade = shade0 + (shade1 - shade0) * v.clamp(0.0, 1.0);
+            let mut color = sample_or_base(tile, u.clamp(0.0, 1.0), v.clamp(0.0, 1.0), base, shade);
+            color[3] = ((color[3] as f32) * cover).clamp(0.0, 255.0) as u8;
+            let i = (y * size + x) * 4;
+            if overwrite || rgba[i + 3] < color[3] {
+                if rgba[i + 3] == 0 || overwrite {
                     put(rgba, size, x, y, color);
+                } else {
+                    // Blend into an existing side so seams don't stair-step.
+                    let t = color[3] as f32 / 255.0;
+                    rgba[i] = ((rgba[i] as f32) * (1.0 - t) + color[0] as f32 * t) as u8;
+                    rgba[i + 1] = ((rgba[i + 1] as f32) * (1.0 - t) + color[1] as f32 * t) as u8;
+                    rgba[i + 2] = ((rgba[i + 2] as f32) * (1.0 - t) + color[2] as f32 * t) as u8;
+                    rgba[i + 3] = rgba[i + 3].max(color[3]);
                 }
             }
         }
     }
 }
 
-/// Map point inside quad ABCD to UV. A=(0,0), B=(1,0), C=(1,1), D=(0,1).
-fn bilinear_uv(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Option<(f32, f32)> {
-    // Triangle A-B-C with UV (0,0)-(1,0)-(1,1)
-    if let Some((w0, w1, w2)) = bary(p, a, b, c) {
-        let u = w1 + w2;
-        let v = w2;
-        let _ = w0;
-        return Some((u, v));
+/// UV + coverage for a soft-edged parallelogram (edge AA via bary distance).
+fn soft_face_uv(
+    p: [f32; 2],
+    a: [f32; 2],
+    b: [f32; 2],
+    c: [f32; 2],
+    d: [f32; 2],
+) -> Option<(f32, f32, f32)> {
+    if let Some((u, v, cover)) = soft_tri_uv(p, a, b, c, true) {
+        return Some((u, v, cover));
     }
-    // Triangle A-C-D with UV (0,0)-(1,1)-(0,1)
-    if let Some((w0, w1, w2)) = bary(p, a, c, d) {
-        let u = w1;
-        let v = w1 + w2;
-        let _ = w0;
-        return Some((u, v));
-    }
-    None
+    soft_tri_uv(p, a, c, d, false)
 }
 
-fn bary(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> Option<(f32, f32, f32)> {
+fn soft_tri_uv(
+    p: [f32; 2],
+    a: [f32; 2],
+    b: [f32; 2],
+    c: [f32; 2],
+    abc: bool,
+) -> Option<(f32, f32, f32)> {
+    let Some((w0, w1, w2)) = bary_raw(p, a, b, c) else {
+        return None;
+    };
+    let edge = w0.min(w1).min(w2);
+    // Outside by more than ~1.2 px → skip; inside fades coverage for AA.
+    if edge < -0.08 {
+        return None;
+    }
+    let cover = ((edge + 0.08) / 0.16).clamp(0.0, 1.0);
+    let (u, v) = if abc {
+        (w1 + w2, w2)
+    } else {
+        (w1, w1 + w2)
+    };
+    Some((u, v, cover))
+}
+
+fn bary_raw(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> Option<(f32, f32, f32)> {
     let v0 = [b[0] - a[0], b[1] - a[1]];
     let v1 = [c[0] - a[0], c[1] - a[1]];
     let v2 = [p[0] - a[0], p[1] - a[1]];
@@ -1540,9 +1623,6 @@ fn bary(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> Option<(f32, f32,
     let w1 = (v2[0] * v1[1] - v1[0] * v2[1]) / den;
     let w2 = (v0[0] * v2[1] - v2[0] * v0[1]) / den;
     let w0 = 1.0 - w1 - w2;
-    if w0 < -0.02 || w1 < -0.02 || w2 < -0.02 {
-        return None;
-    }
     Some((w0, w1, w2))
 }
 
@@ -1554,29 +1634,65 @@ fn sample_or_base(
     shade: f32,
 ) -> [u8; 4] {
     let (r, g, b, a) = if let Some(tile) = tile {
-        let tx = ((u * TILE_F).floor() as usize).min(15);
-        let ty = ((v * TILE_F).floor() as usize).min(15);
-        let i = (ty * 16 + tx) * 4;
-        (
-            tile.rgba[i],
-            tile.rgba[i + 1],
-            tile.rgba[i + 2],
-            tile.rgba[i + 3],
-        )
+        sample_tile_bilinear(tile, u, v)
     } else {
         (
-            (base[0] * 255.0) as u8,
-            (base[1] * 255.0) as u8,
-            (base[2] * 255.0) as u8,
-            255,
+            (base[0] * 255.0) as f32,
+            (base[1] * 255.0) as f32,
+            (base[2] * 255.0) as f32,
+            255.0,
         )
     };
     [
-        ((r as f32 * shade).clamp(0.0, 255.0)) as u8,
-        ((g as f32 * shade).clamp(0.0, 255.0)) as u8,
-        ((b as f32 * shade).clamp(0.0, 255.0)) as u8,
-        a,
+        (r * shade).clamp(0.0, 255.0) as u8,
+        (g * shade).clamp(0.0, 255.0) as u8,
+        (b * shade).clamp(0.0, 255.0) as u8,
+        a.clamp(0.0, 255.0) as u8,
     ]
+}
+
+/// Bilinear sample inside a 16×16 pack face (avoids nearest texel stair steps).
+fn sample_tile_bilinear(tile: &Image, u: f32, v: f32) -> (f32, f32, f32, f32) {
+    let x = (u.clamp(0.0, 1.0) * (TILE_F - 1.0)).clamp(0.0, TILE_F - 1.0);
+    let y = (v.clamp(0.0, 1.0) * (TILE_F - 1.0)).clamp(0.0, TILE_F - 1.0);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(15);
+    let y1 = (y0 + 1).min(15);
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+    let texel = |tx: usize, ty: usize| {
+        let i = (ty * 16 + tx) * 4;
+        [
+            tile.rgba[i] as f32,
+            tile.rgba[i + 1] as f32,
+            tile.rgba[i + 2] as f32,
+            tile.rgba[i + 3] as f32,
+        ]
+    };
+    let c00 = texel(x0, y0);
+    let c10 = texel(x1, y0);
+    let c01 = texel(x0, y1);
+    let c11 = texel(x1, y1);
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let top = [
+        lerp(c00[0], c10[0], fx),
+        lerp(c00[1], c10[1], fx),
+        lerp(c00[2], c10[2], fx),
+        lerp(c00[3], c10[3], fx),
+    ];
+    let bot = [
+        lerp(c01[0], c11[0], fx),
+        lerp(c01[1], c11[1], fx),
+        lerp(c01[2], c11[2], fx),
+        lerp(c01[3], c11[3], fx),
+    ];
+    (
+        lerp(top[0], bot[0], fy),
+        lerp(top[1], bot[1], fy),
+        lerp(top[2], bot[2], fy),
+        lerp(top[3], bot[3], fy),
+    )
 }
 
 const TILE_F: f32 = 16.0;
@@ -1652,6 +1768,32 @@ mod tests {
         assert_eq!(CREATIVE_COLS, 10);
         assert_eq!(hotbar::SLOTS, 10);
         assert_eq!(Gui::catalog_tab_count(), 6);
+    }
+
+    #[test]
+    fn creative_grid_grows_taller_than_five_rows() {
+        let short = creative_grid_height(720.0, true);
+        let tall = creative_grid_height(1080.0, true);
+        let five = SLOT * 5.0 + SLOT_GAP * 4.0;
+        assert!(
+            short > five,
+            "creative should show more than five rows even on a short window ({short} vs {five})"
+        );
+        assert!(tall >= short);
+        let min_h = SLOT * CREATIVE_ROWS_MIN + SLOT_GAP * (CREATIVE_ROWS_MIN - 1.0);
+        assert!(short + 0.5 >= min_h);
+    }
+
+    #[test]
+    fn soft_slot_icon_uses_bilinear_not_only_nearest() {
+        let img = render_slot_icon("cobblestone");
+        assert_eq!(img.width(), ICON_PX);
+        // Soft edge AA leaves some translucent fringe; opaque core still fills.
+        let soft = img.pixels.iter().filter(|c| c.a() > 20 && c.a() < 240).count();
+        assert!(
+            soft > 20,
+            "expected soft AA fringe on the inventory cube, got {soft}"
+        );
     }
 
     #[test]

@@ -111,6 +111,24 @@ fn soft_project(vertices: &[Vertex], width: usize, height: usize) -> Vec<u8> {
         let (bx, by, bz) = project(tri[1].position);
         let (cxp, cyp, cz) = project(tri[2].position);
         let color = tri[0].color;
+        // Soft wrap from the triangle's world normal (not a hard flat face tint).
+        let e1 = [
+            tri[1].position[0] - tri[0].position[0],
+            tri[1].position[1] - tri[0].position[1],
+            tri[1].position[2] - tri[0].position[2],
+        ];
+        let e2 = [
+            tri[2].position[0] - tri[0].position[0],
+            tri[2].position[1] - tri[0].position[1],
+            tri[2].position[2] - tri[0].position[2],
+        ];
+        let nx = e1[1] * e2[2] - e1[2] * e2[1];
+        let ny = e1[2] * e2[0] - e1[0] * e2[2];
+        let nz = e1[0] * e2[1] - e1[1] * e2[0];
+        let nlen = (nx * nx + ny * ny + nz * nz).sqrt().max(1.0e-5);
+        let key = (nx / nlen) * 0.25 + (ny / nlen) * 0.75 + (nz / nlen) * 0.35;
+        let wrap = (key * 0.5 + 0.5).clamp(0.0, 1.0);
+        let face_shade = 0.70 + 0.30 * wrap * wrap;
         let min_x = ax.min(bx).min(cxp).floor().max(0.0) as usize;
         let max_x = ax
             .max(bx)
@@ -134,22 +152,23 @@ fn soft_project(vertices: &[Vertex], width: usize, height: usize) -> Vec<u8> {
                 let w0 = ((bx - px) * (cyp - py) - (cxp - px) * (by - py)) / area;
                 let w1 = ((cxp - px) * (ay - py) - (ax - px) * (cyp - py)) / area;
                 let w2 = 1.0 - w0 - w1;
-                if w0 < -0.01 || w1 < -0.01 || w2 < -0.01 {
+                let edge = w0.min(w1).min(w2);
+                if edge < -0.02 {
                     continue;
                 }
+                let cover = ((edge + 0.02) / 0.06).clamp(0.0, 1.0);
                 let z = az * w0 + bz * w1 + cz * w2;
                 let i = y * width + x;
                 if z >= depth[i] {
                     continue;
                 }
                 depth[i] = z;
-                // Face lighting from the projected normal tilt.
-                let shade = (0.72 + 0.28 * w0).clamp(0.55, 1.0);
+                let shade = face_shade;
                 let o = i * 4;
                 rgba[o] = (color[0] * shade * 255.0).clamp(0.0, 255.0) as u8;
                 rgba[o + 1] = (color[1] * shade * 255.0).clamp(0.0, 255.0) as u8;
                 rgba[o + 2] = (color[2] * shade * 255.0).clamp(0.0, 255.0) as u8;
-                rgba[o + 3] = 255;
+                rgba[o + 3] = (255.0 * cover) as u8;
             }
         }
     }
