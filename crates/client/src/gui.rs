@@ -3448,6 +3448,11 @@ pub fn hover_tip(gui: &Gui, hotbar: &Hotbar, bag: &hotbar::Bag, hit: u16) -> Opt
     None
 }
 
+/// Readable name plus a short use line for egui tooltips and legacy hover tips.
+pub fn tip_for(id: &str, count: Option<u16>) -> ItemTip {
+    item_tip(id, count)
+}
+
 fn item_tip(id: &str, count: Option<u16>) -> ItemTip {
     let name = title_case(&crate::recipes::display_name(id));
     let pack = rebuild_world::Pack::builtin();

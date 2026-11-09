@@ -79,6 +79,39 @@ pub fn block_face(id: &str) -> f32 {
     0.0
 }
 
+/// Resolve the pack texture path used for a hotbar / creative face.
+pub fn face_path(id: &str) -> Option<String> {
+    if id.is_empty() || id == "air" || id == "empty" {
+        return None;
+    }
+    let pack = Pack::builtin();
+    if let Some(path) = pack.texture_of(Block::new(id, 0)) {
+        return Some(path.to_string());
+    }
+    if let Some(icon) = pack.tool_icon(id) {
+        if let Some(path) = pack.texture_of(Block::new(icon, 0)) {
+            return Some(path.to_string());
+        }
+    }
+    if let Some(placed) = pack.placed_block(id) {
+        if let Some(path) = pack.texture_of(Block::new(&placed, 0)) {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+/// Decode the 16×16 face for `id`, or `None` when the PNG is missing.
+pub fn face_tile(id: &str) -> Option<Image> {
+    let path = face_path(id)?;
+    let bytes = asset_png(&path)?;
+    let image = decode_png(&bytes)?;
+    if image.width != TILE || image.height != TILE {
+        return None;
+    }
+    Some(image)
+}
+
 fn atlas() -> &'static Atlas {
     static ATLAS: OnceLock<Atlas> = OnceLock::new();
     ATLAS.get_or_init(build_atlas)
