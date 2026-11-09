@@ -341,6 +341,11 @@ impl Hotbar {
         }
     }
 
+    /// True when the slot holds an Efficiency (keen) pick.
+    pub fn is_keen(&self, index: usize) -> bool {
+        self.item(index).is_some_and(|item| item.keen)
+    }
+
     fn item(&self, index: usize) -> Option<Item> {
         self.slots.get(index).copied().flatten()
     }

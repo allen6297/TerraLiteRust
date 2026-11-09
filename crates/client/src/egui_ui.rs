@@ -12,8 +12,9 @@
 use std::collections::HashMap;
 
 use egui::{
-    Align2, Color32, Context, CornerRadius, FontId, Frame, FullOutput, Margin, RichText, Sense,
-    Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, Vec2, ViewportId,
+    Align, Align2, Color32, Context, CornerRadius, FontId, Frame, FullOutput, Layout, Margin,
+    RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, Vec2,
+    ViewportId,
 };
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use egui_winit::State as WinitState;
@@ -822,20 +823,14 @@ fn equip_slot(
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
-                &gui::ItemTip {
-                    name: "Accessory".into(),
-                    line: "empty — not wired yet".into(),
-                },
+                &gui::ItemTip::plain("Accessory", "empty — not wired yet"),
             );
         });
     } else if engine_slot.is_none() {
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
-                &gui::ItemTip {
-                    name: "Equipment".into(),
-                    line: "empty — not wired yet".into(),
-                },
+                &gui::ItemTip::plain("Equipment", "empty — not wired yet"),
             );
         });
     }
@@ -948,7 +943,7 @@ fn draw_hotbar_row(
                 if count > 1 { Some(count) } else { None },
             );
             if !id.is_empty() {
-                let tip = gui::tip_for(id, Some(count));
+                let tip = gui::tip_for_keen(id, Some(count), hotbar.is_keen(slot));
                 resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
             }
             if resp.clicked() {
@@ -1069,10 +1064,7 @@ fn craft_out_slot(
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
-                &gui::ItemTip {
-                    name: "OUT".to_string(),
-                    line: "match a recipe in the 2x2".to_string(),
-                },
+                &gui::ItemTip::plain("OUT", "match a recipe in the 2x2"),
             );
         });
     }
@@ -1146,11 +1138,60 @@ fn show_tip(ui: &mut Ui, tip: &gui::ItemTip) {
         .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_max_width(220.0);
-            ui.label(RichText::new(&tip.name).size(14.0).color(INK).strong());
-            if !tip.line.is_empty() {
-                ui.label(RichText::new(&tip.line).size(12.0).color(DETAIL));
+            ui.set_max_width(240.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&tip.name).size(14.0).color(INK).strong());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    rarity_chip(ui, tip.rarity);
+                });
+            });
+            if !tip.description.is_empty() {
+                ui.add_space(2.0);
+                ui.label(RichText::new(&tip.description).size(12.0).color(DETAIL));
             }
+            if !tip.stats.is_empty() {
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(2.0);
+                ui.label(RichText::new("STATS").size(11.0).color(MUTED));
+                for line in &tip.stats {
+                    ui.label(RichText::new(line).size(12.0).color(INK));
+                }
+            }
+            if !tip.enchants.is_empty() {
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(2.0);
+                ui.label(RichText::new("ENCHANTS").size(11.0).color(MUTED));
+                for (name, desc) in &tip.enchants {
+                    ui.label(RichText::new(name).size(12.0).color(DETAIL));
+                    Frame::new()
+                        .fill(SLOT_WELL)
+                        .stroke(Stroke::new(1.0, SLOT_EDGE))
+                        .corner_radius(CornerRadius::same(3))
+                        .inner_margin(Margin::symmetric(6, 4))
+                        .show(ui, |ui| {
+                            ui.set_max_width(220.0);
+                            ui.label(RichText::new(desc).size(11.0).color(MUTED));
+                        });
+                }
+            }
+        });
+}
+
+fn rarity_chip(ui: &mut Ui, rarity: gui::Rarity) {
+    let [r, g, b] = rarity.rgb();
+    Frame::new()
+        .fill(Color32::from_rgb(r, g, b))
+        .corner_radius(CornerRadius::same(3))
+        .inner_margin(Margin::symmetric(6, 2))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(rarity.label())
+                    .size(11.0)
+                    .color(INK)
+                    .strong(),
+            );
         });
 }
 
@@ -1458,6 +1499,36 @@ mod tests {
         let tip = gui::tip_for("cobblestone", Some(1));
         assert!(tip.name.to_ascii_lowercase().contains("cobble"));
         assert!(!tip.line.is_empty());
+        assert_eq!(tip.rarity, gui::Rarity::Common);
+        assert_eq!(tip.description, tip.line);
+        assert!(tip.stats.is_empty());
+        assert!(tip.enchants.is_empty());
+    }
+
+    #[test]
+    fn rich_tip_defaults_common_rarity() {
+        let tip = gui::tip_for("apple", None);
+        assert_eq!(tip.rarity, gui::Rarity::Common);
+        assert_eq!(tip.rarity.label(), "Common");
+        assert!(!tip.description.is_empty());
+    }
+
+    #[test]
+    fn rich_tip_armor_lists_soak() {
+        let tip = gui::tip_for("leather_cap", Some(1));
+        assert!(tip.stats.iter().any(|s| s.contains("Soak")));
+        assert!(tip.stats.iter().any(|s| s.contains("Head")));
+    }
+
+    #[test]
+    fn rich_tip_tool_lists_uses_and_keen_enchant() {
+        let plain = gui::tip_for("iron_pickaxe", Some(32));
+        assert!(plain.stats.iter().any(|s| s.contains("Uses")));
+        assert!(plain.enchants.is_empty());
+        let keen = gui::tip_for_keen("iron_pickaxe", Some(20), true);
+        assert_eq!(keen.enchants.len(), 1);
+        assert_eq!(keen.enchants[0].0, "Efficiency");
+        assert!(!keen.enchants[0].1.is_empty());
     }
 
     #[test]

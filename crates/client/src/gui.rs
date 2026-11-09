@@ -3627,9 +3627,67 @@ impl Gui {
 }
 
 /// Name and one short line for the slot under the pointer.
+/// Item rarity for the tooltip chip. Missing pack data defaults to [`Common`](Self::Common).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Uncommon+ reserved until pack rarity lands.
+pub enum Rarity {
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl Rarity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Common => "Common",
+            Self::Uncommon => "Uncommon",
+            Self::Rare => "Rare",
+            Self::Epic => "Epic",
+            Self::Legendary => "Legendary",
+        }
+    }
+
+    /// RGB fill behind the rarity chip (GUI plan: colored background).
+    pub fn rgb(self) -> [u8; 3] {
+        match self {
+            Self::Common => [77, 79, 92],
+            Self::Uncommon => [55, 120, 70],
+            Self::Rare => [55, 95, 160],
+            Self::Epic => [120, 60, 150],
+            Self::Legendary => [184, 133, 31],
+        }
+    }
+}
+
+/// Rich hover tip for inventory / creative / EMI (GUI plan L9).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemTip {
     pub name: String,
+    /// Short legacy line (same text as [`Self::description`] for old callers).
     pub line: String,
+    pub rarity: Rarity,
+    pub description: String,
+    /// Tool / armour lines; empty for plain stacks.
+    pub stats: Vec<String>,
+    /// Enchant name + short description pairs.
+    pub enchants: Vec<(String, String)>,
+}
+
+impl ItemTip {
+    /// Name + one line, Common rarity, no stats or enchants (empty slot stubs).
+    pub fn plain(name: impl Into<String>, line: impl Into<String>) -> Self {
+        let line = line.into();
+        Self {
+            name: name.into(),
+            rarity: Rarity::Common,
+            description: line.clone(),
+            line,
+            stats: Vec::new(),
+            enchants: Vec::new(),
+        }
+    }
 }
 
 /// The item under `hit`, when that rectangle is a hotbar slot, a creative cell,
@@ -3640,35 +3698,40 @@ pub fn hover_tip(gui: &Gui, hotbar: &Hotbar, bag: &hotbar::Bag, hit: u16) -> Opt
     }
     if (600..610).contains(&hit) {
         let index = (hit - 600) as usize;
-        return hotbar
-            .slot(index)
-            .map(|id| item_tip(id, Some(hotbar.count(index))));
+        return hotbar.slot(index).map(|id| {
+            item_tip(id, Some(hotbar.count(index)), hotbar.is_keen(index))
+        });
     }
     if gui.bag_open && (200..209).contains(&hit) {
         let index = (hit - 200) as usize;
         return bag
             .slot(index)
-            .map(|id| item_tip(id, Some(bag.count(index))));
+            .map(|id| item_tip(id, Some(bag.count(index)), false));
     }
     if gui.bag_open && hit >= 1000 {
         let index = (hit - 1000) as usize;
         return creative_view(gui.catalog_tab, &gui.catalog_query)
             .get(index)
-            .map(|id| item_tip(id, None));
+            .map(|id| item_tip(id, None, false));
     }
     if gui.open && !gui.bag_open && (1..64).contains(&hit) {
         let index = (hit - 1) as usize;
-        return gui.rows().get(index).map(|id| item_tip(id, None));
+        return gui.rows().get(index).map(|id| item_tip(id, None, false));
     }
     None
 }
 
 /// Readable name plus a short use line for egui tooltips and legacy hover tips.
 pub fn tip_for(id: &str, count: Option<u16>) -> ItemTip {
-    item_tip(id, count)
+    item_tip(id, count, false)
 }
 
-fn item_tip(id: &str, count: Option<u16>) -> ItemTip {
+/// Same as [`tip_for`], with Efficiency when `keen` (hotbar enchanted pick).
+pub fn tip_for_keen(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
+    item_tip(id, count, keen)
+}
+
+fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     let name = title_case(&crate::recipes::display_name(id));
     let pack = rebuild_world::Pack::builtin();
     let line = if pack.food_of(id).is_some() {
@@ -3687,9 +3750,41 @@ fn item_tip(id: &str, count: Option<u16>) -> ItemTip {
             None => "crafting material".to_string(),
         }
     };
+    let description = sentence(&line);
+    let mut stats = Vec::new();
+    if let Some((slot, soak)) = pack.armor_of(id) {
+        let piece = match slot {
+            0 => "Head",
+            1 => "Chest",
+            2 => "Feet",
+            _ => "Armor",
+        };
+        stats.push(format!("{piece} armor"));
+        stats.push(format!("Soak {soak}"));
+    }
+    let max_uses = pack.tool_uses(id);
+    if max_uses > 0 {
+        let left = count.unwrap_or(max_uses);
+        stats.push(format!("Uses {left}/{max_uses}"));
+        let factor = pack.mine_factor(id, "stone");
+        if factor > 1.0 {
+            stats.push(format!("Mine ×{factor}"));
+        }
+    }
+    let mut enchants = Vec::new();
+    if keen {
+        enchants.push((
+            "Efficiency".to_string(),
+            "Mines twice as fast".to_string(),
+        ));
+    }
     ItemTip {
         name,
-        line: sentence(&line),
+        line: description.clone(),
+        rarity: Rarity::Common,
+        description,
+        stats,
+        enchants,
     }
 }
 
@@ -7400,9 +7495,11 @@ mod tests {
         );
         assert!(!shown.line.is_empty());
 
-        let apple = item_tip("apple", None);
+        let apple = item_tip("apple", None, false);
         assert_eq!(apple.name, "Apple");
         assert_eq!(apple.line, "Fills hunger");
+        assert_eq!(apple.rarity, Rarity::Common);
+        assert_eq!(apple.description, apple.line);
 
         let near = tooltip_quads(400.0, 300.0, 20.0, 40.0, "Cobblestone", "Place on a face");
         assert!(near.iter().any(|quad| quad.color == INK));
