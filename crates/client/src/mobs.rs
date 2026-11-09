@@ -1940,7 +1940,7 @@ fn axolotl_figure() -> &'static crate::blockbench::Figure {
     static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
     FIGURE.get_or_init(|| {
         crate::blockbench::parse(include_str!(
-            "../../../resourcepacks/terralite/assets/terralite/models/axolotl.bbmodel"
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/axolotl.bbmodel"
         ))
         .expect("axolotl.bbmodel")
     })
@@ -2184,7 +2184,7 @@ fn chicken_figure() -> &'static crate::blockbench::Figure {
     static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
     FIGURE.get_or_init(|| {
         crate::blockbench::parse(include_str!(
-            "../../../resourcepacks/terralite/assets/terralite/models/chicken.bbmodel"
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/chicken.bbmodel"
         ))
         .expect("chicken.bbmodel")
     })

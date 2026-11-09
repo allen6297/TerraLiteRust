@@ -1,7 +1,9 @@
 //! Local player Blockbench body.
 //!
-//! Cubes live in `models/player.bbmodel`. Sixteen units are one block, the model
-//! faces +Z, and the feet sit on Y = 0. `idle`, `walk`, and `dig` are the clips.
+//! Cubes live in `models/entity/player.bbmodel` with `textures/entity/player.png`.
+//! Sixteen units are one block, the model faces +Z, and the feet sit on Y = 0.
+//! `idle`, `walk`, and `dig` are the clips. Parts may be `head`/`body`/`arm_l`…
+//! or Blockbench names `Head`/`Body`/`Larm`/`Rarm`/`Lleg`/`Rleg`.
 
 use crate::blockbench::{self, Figure};
 use crate::body::EYE_HEIGHT;
@@ -62,7 +64,7 @@ fn figure() -> &'static Figure {
     static FIGURE: OnceLock<Figure> = OnceLock::new();
     FIGURE.get_or_init(|| {
         blockbench::parse(include_str!(
-            "../../../resourcepacks/terralite/assets/terralite/models/player.bbmodel"
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/player.bbmodel"
         ))
         .expect("player.bbmodel")
     })
@@ -83,33 +85,29 @@ mod tests {
         let figure = figure();
         let rest = blockbench::mesh(figure, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
         let mid = blockbench::mesh(figure, "idle", 1.0, 0.0, [0.0, 0.0, 0.0], &[]);
-        let arm_span_x = |vertices: &[Vertex]| {
-            let arms: Vec<_> = vertices
+        // Idle swings each arm on X; track the left arm tip's mean Z.
+        let left_tip_z = |vertices: &[Vertex]| {
+            let tips: Vec<_> = vertices
                 .iter()
                 .filter(|vertex| {
-                    vertex.color[0] > 0.8
-                        && vertex.color[1] > 0.65
-                        && vertex.color[1] < 0.8
-                        && vertex.position[1] < 1.45
+                    vertex.position[1] > 0.85
+                        && vertex.position[1] < 1.55
+                        && vertex.position[0] > 0.35
                 })
+                .map(|vertex| vertex.position[2])
                 .collect();
-            let mut min_x = f32::MAX;
-            let mut max_x = f32::MIN;
-            for vertex in &arms {
-                min_x = min_x.min(vertex.position[0]);
-                max_x = max_x.max(vertex.position[0]);
-            }
-            max_x - min_x
+            assert!(!tips.is_empty(), "left arm tips");
+            tips.iter().sum::<f32>() / tips.len() as f32
         };
         assert!(
-            (arm_span_x(&mid) - arm_span_x(&rest)).abs() > 0.005,
+            (left_tip_z(&mid) - left_tip_z(&rest)).abs() > 0.02,
             "idle breathes the arms"
         );
         let span_z = |time: f32| {
             let posed = blockbench::mesh(figure, "walk", time, 0.0, [0.0, 0.0, 0.0], &[]);
             let legs: Vec<_> = posed
                 .into_iter()
-                .filter(|vertex| vertex.color[2] > 0.4 && vertex.color[0] < 0.25)
+                .filter(|vertex| vertex.position[1] < 0.75 && vertex.position[0].abs() < 0.35)
                 .collect();
             let mut min_z = f32::MAX;
             let mut max_z = f32::MIN;
@@ -120,7 +118,7 @@ mod tests {
             max_z - min_z
         };
         assert!(
-            span_z(0.0) > span_z(0.2) + 0.08,
+            span_z(0.0) > span_z(0.2) + 0.04,
             "walk swings the feet apart"
         );
     }
@@ -130,21 +128,27 @@ mod tests {
         let figure = figure();
         let rest = blockbench::mesh(figure, "dig", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
         let raised = blockbench::mesh(figure, "dig", 0.2, 0.0, [0.0, 0.0, 0.0], &[]);
-        // The hand is the low skin verts on -X; a dig swing lifts that tip.
+        // Character right is -X; keep above the feet so legs are not the tip.
         let hand = |vertices: &[Vertex]| {
             vertices
                 .iter()
                 .filter(|vertex| {
-                    vertex.color[0] > 0.8
-                        && vertex.color[1] > 0.65
-                        && vertex.position[0] < 0.45
+                    vertex.position[0] < -0.35
+                        && vertex.position[1] > 0.4
+                        && vertex.position[1] < 1.6
                 })
                 .map(|vertex| vertex.position[1])
                 .fold(f32::MAX, f32::min)
         };
+        let rest_y = hand(&rest);
+        let raised_y = hand(&raised);
         assert!(
-            hand(&raised) > hand(&rest) + 0.15,
-            "dig lifts the right hand"
+            raised_y.is_finite() && rest_y.is_finite(),
+            "dig finds the right hand"
+        );
+        assert!(
+            raised_y > rest_y + 0.15,
+            "dig lifts the right hand (rest {rest_y} raised {raised_y})"
         );
     }
 
@@ -155,14 +159,12 @@ mod tests {
         let body = pose.vertices([8.0, 1.0 + EYE_HEIGHT, 8.0], false);
         let head_z = body
             .iter()
-            .filter(|vertex| {
-                vertex.color[0] > 0.8 && vertex.color[1] > 0.65 && vertex.position[1] > 2.2
-            })
+            .filter(|vertex| vertex.position[1] > 2.3)
             .map(|vertex| vertex.position[2])
             .fold(f32::MIN, f32::max);
         let leg_z = body
             .iter()
-            .filter(|vertex| vertex.color[2] > 0.4 && vertex.color[0] < 0.25)
+            .filter(|vertex| vertex.position[1] < 1.7)
             .map(|vertex| vertex.position[2])
             .fold(f32::MIN, f32::max);
         assert!(head_z > leg_z, "the face points +Z with the look");
