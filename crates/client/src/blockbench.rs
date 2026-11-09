@@ -673,7 +673,17 @@ fn push_bone(
     if let Some(skin) = skin {
         if !bone.faces.is_empty() {
             for face in &bone.faces {
-                push_skinned_face(out, face, bone.origin, rot, yaw, feet, pivot, skin);
+                push_skinned_face(
+                    out,
+                    face,
+                    bone.origin,
+                    rot,
+                    yaw,
+                    feet,
+                    pivot,
+                    skin,
+                    bone.color,
+                );
             }
             return;
         }
@@ -731,7 +741,8 @@ fn push_bone(
 }
 
 /// Paint each skin texel as its own little quad so the 64×64 sheet shows up
-/// without a second atlas bind.
+/// without a second atlas bind. Transparent sheet texels fall back to `fill`
+/// so a sparse / broken skin still reads as a solid body (inventory preview).
 fn push_skinned_face(
     out: &mut Vec<Vertex>,
     face: &MeshFace,
@@ -741,6 +752,7 @@ fn push_skinned_face(
     feet: [f32; 3],
     pivot: [f32; 2],
     skin: &Skin,
+    fill: [f32; 3],
 ) {
     let mut min_u = f32::MAX;
     let mut max_u = f32::MIN;
@@ -787,13 +799,10 @@ fn push_skinned_face(
     };
     for u in u0..u1 {
         for v in v0..v1 {
-            let Some(color) = skin_texel(skin, u, v) else {
-                continue;
+            let rgb = match skin_texel(skin, u, v) {
+                Some(color) if color[3] >= 0.1 => [color[0], color[1], color[2]],
+                _ => fill,
             };
-            if color[3] < 0.1 {
-                continue;
-            };
-            let rgb = [color[0], color[1], color[2]];
             let c0 = place(at(u as f32, v as f32), origin, rot, yaw, feet, pivot);
             let c1 = place(at(u as f32 + 1.0, v as f32), origin, rot, yaw, feet, pivot);
             let c2 = place(at(u as f32 + 1.0, v as f32 + 1.0), origin, rot, yaw, feet, pivot);

@@ -2453,7 +2453,8 @@ impl Gui {
             return Vec::new();
         }
         let mut quads = Vec::new();
-        let bottom = 128.0;
+        // Sit above the bottom-left status stack (hunger / health / armor).
+        let bottom = status_armor_bottom() + HUD_STATUS_ROW;
         let row = 22.0;
         let panel_h = lines.len() as f32 * row + 12.0;
         let top = bottom + panel_h;
@@ -4607,7 +4608,11 @@ pub fn feel_quads(
     if !gui.bag_open() && !gui.player_inv_open() {
         quads.extend(gui.paint(width, height, bag));
     }
-    quads.extend(gui.chat_quads(width, height));
+    // Chat shares the bottom-left with health/hunger. Hide it under egui menus so
+    // a leftover line does not read as a HUD placeholder above the status stack.
+    if !gui.bag_open() && !gui.player_inv_open() {
+        quads.extend(gui.chat_quads(width, height));
+    }
     quads.extend(health_quads(width, height, hearts));
     quads.extend(hunger_quads(width, height, food));
     quads.extend(armor_quads(width, height, armor));
@@ -4983,11 +4988,25 @@ fn armor_quads(width: f32, height: f32, worn: [Option<&str>; 3]) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
+    // Skip the empty plate so a blank armor row does not look like HUD chrome text.
+    if worn.iter().all(|piece| piece.is_none()) {
+        return Vec::new();
+    }
     let empty = [0.16, 0.12, 0.10];
     let bottom = status_armor_bottom();
-    let mut quads = Vec::new();
+    let span = 3.0 * HUD_STATUS_STEP;
+    let left = HUD_STATUS_LEFT;
+    let mut quads = vec![pixel_quad(
+        width,
+        height,
+        left,
+        bottom - 6.0,
+        left + 4.0 + span,
+        bottom + 16.0,
+        TRAY,
+    )];
     for (index, piece) in worn.iter().enumerate() {
-        let x = HUD_STATUS_LEFT + 8.0 + index as f32 * HUD_STATUS_STEP;
+        let x = left + 8.0 + index as f32 * HUD_STATUS_STEP;
         let color = piece.map(|id| palette::color(id, 0)).unwrap_or(empty);
         quads.push(pixel_quad(
             width,
@@ -7540,6 +7559,55 @@ mod tests {
         let far = tooltip_quads(400.0, 300.0, 380.0, 40.0, "Cobblestone", "Place on a face");
         let far_right = far.iter().map(|quad| quad.max[0]).fold(f32::MIN, f32::max);
         assert!(far_right < 380.0 / 400.0 * 2.0 - 1.0);
+    }
+
+    #[test]
+    fn chat_stays_off_the_status_stack_and_under_inventory() {
+        let mut gui = Gui::from_screen(shipped());
+        gui.push_chat("line");
+        let chat = gui.chat_quads(1280.0, 720.0);
+        assert!(!chat.is_empty());
+        let chat_bottom = chat
+            .iter()
+            .map(|quad| quad.min[1])
+            .fold(f32::MAX, f32::min);
+        let armor_top = {
+            let tray = armor_quads(1280.0, 720.0, [Some("leather_cap"), None, None]);
+            tray.iter()
+                .map(|quad| quad.max[1])
+                .fold(f32::MIN, f32::max)
+        };
+        assert!(
+            chat_bottom >= armor_top - 0.02,
+            "chat sits above the armor/status stack"
+        );
+        assert!(gui.on_press(KeyCode::KeyE));
+        assert!(gui.player_inv_open());
+        let bag = hotbar::Bag::new();
+        let hud = feel_quads(
+            1280.0,
+            720.0,
+            &Hotbar::new(),
+            &bag,
+            &gui,
+            &Menu::closed(),
+            10,
+            10,
+            [None; 3],
+            0.0,
+            0.0,
+            0.0,
+            false,
+            false,
+        );
+        // Inventory open: no chat plate (would read as a "Line" HUD placeholder).
+        assert!(
+            !hud.iter().any(|quad| quad.color == PANEL && {
+                let mid = (quad.min[0] + quad.max[0]) * 0.5;
+                mid < -0.4
+            }),
+            "chat panel stays hidden while the inventory covers the HUD"
+        );
     }
 
     #[test]

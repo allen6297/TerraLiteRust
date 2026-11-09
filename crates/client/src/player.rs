@@ -271,4 +271,27 @@ mod tests {
             "expected a player silhouette, got {opaque} opaque pixels"
         );
     }
+
+    #[test]
+    fn inventory_preview_uses_skin_not_cyan_grid() {
+        let rgba = preview_rgba(96, 144);
+        let opaque: Vec<_> = rgba.chunks_exact(4).filter(|px| px[3] > 200).collect();
+        assert!(opaque.len() > 96 * 144 / 12);
+        let mut sum = [0u64; 3];
+        for px in &opaque {
+            sum[0] += px[0] as u64;
+            sum[1] += px[1] as u64;
+            sum[2] += px[2] as u64;
+        }
+        let n = opaque.len().max(1) as f64;
+        let mean = [sum[0] as f64 / n, sum[1] as f64 / n, sum[2] as f64 / n];
+        assert!(
+            mean[0] > 40.0,
+            "skin should keep some warm red channel, mean={mean:?}"
+        );
+        assert!(
+            !(mean[2] > mean[0] + 60.0 && mean[1] > mean[0] + 40.0),
+            "skin should not read as cyan/green grid, mean={mean:?}"
+        );
+    }
 }

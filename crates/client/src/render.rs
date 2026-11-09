@@ -209,6 +209,12 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(mix(lit_rgb, u.fog_color.xyz, fog), 1.0);
 }
 
+// Selection wire: keep the authored color (white) without sun/grass tint.
+@fragment
+fn fs_unlit(input: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(input.color, 1.0);
+}
+
 struct ShadowHit {
     coverage: f32,
     edge: f32,
@@ -1266,7 +1272,8 @@ impl State {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                // Unlit: lit fs_main tints the white wire green/grass near foliage.
+                entry_point: Some("fs_unlit"),
                 compilation_options: Default::default(),
                 targets: &[Some(view_format.into())],
             }),

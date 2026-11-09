@@ -364,10 +364,11 @@ fn draw_creative(
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                    let panel_w = SLOT * CREATIVE_COLS as f32
-                        + SLOT_GAP * (CREATIVE_COLS as f32 - 1.0)
-                        + 28.0;
-                    show_panel(ui, panel_w.max(420.0), |ui| {
+                    let grid_w = SLOT * CREATIVE_COLS as f32
+                        + SLOT_GAP * (CREATIVE_COLS as f32 - 1.0);
+                    let panel_w = grid_w + 40.0;
+                    show_panel(ui, panel_w.max(grid_w + 40.0), |ui| {
+                        ui.set_min_width(grid_w);
                         title_label(ui, "CREATIVE");
                         ui.add_space(8.0);
                         // Category tabs with flanking arrows (GUI plan L7).
@@ -482,9 +483,12 @@ fn draw_player_inventory(
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                    let panel_w =
-                        SLOT * INV_COLS as f32 + SLOT_GAP * (INV_COLS as f32 - 1.0) + 28.0;
-                    show_panel(ui, panel_w.max(420.0), |ui| {
+                    // Body 10-wide + hotbar ×10 share one pitch; pad for frame margins.
+                    let grid_w =
+                        SLOT * INV_COLS as f32 + SLOT_GAP * (INV_COLS as f32 - 1.0);
+                    let panel_w = grid_w + 40.0;
+                    show_panel(ui, panel_w.max(grid_w + 40.0), |ui| {
+                        ui.set_min_width(grid_w);
                         title_label(ui, "INVENTORY");
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -925,32 +929,39 @@ fn draw_hotbar_row(
     hotbar: &mut Hotbar,
     icons: &mut HashMap<String, TextureHandle>,
 ) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-        for slot in 0..hotbar::SLOTS {
-            let id = hotbar.slot(slot).unwrap_or("");
-            let count = hotbar.count(slot);
-            let selected = hotbar.selected() == slot;
-            let tex = if id.is_empty() {
-                None
-            } else {
-                icon_texture(ui.ctx(), icons, id)
-            };
-            let resp = slot_button(
-                ui,
-                tex,
-                selected,
-                if count > 1 { Some(count) } else { None },
-            );
-            if !id.is_empty() {
-                let tip = gui::tip_for_keen(id, Some(count), hotbar.is_keen(slot));
-                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+    // Same ×10 horizontal pitch as the body grid / HUD bar — never clip to a
+    // short row when the panel is tight beside EMI.
+    let row_w = SLOT * hotbar::SLOTS as f32 + SLOT_GAP * (hotbar::SLOTS as f32 - 1.0);
+    ui.set_min_width(row_w);
+    egui::Grid::new("inv_hotbar_row")
+        .spacing([SLOT_GAP, SLOT_GAP])
+        .min_col_width(SLOT)
+        .show(ui, |ui| {
+            for slot in 0..hotbar::SLOTS {
+                let id = hotbar.slot(slot).unwrap_or("");
+                let count = hotbar.count(slot);
+                let selected = hotbar.selected() == slot;
+                let tex = if id.is_empty() {
+                    None
+                } else {
+                    icon_texture(ui.ctx(), icons, id)
+                };
+                let resp = slot_button(
+                    ui,
+                    tex,
+                    selected,
+                    if count > 1 { Some(count) } else { None },
+                );
+                if !id.is_empty() {
+                    let tip = gui::tip_for_keen(id, Some(count), hotbar.is_keen(slot));
+                    resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                }
+                if resp.clicked() {
+                    let _ = hotbar.select_digit((slot + 1) as u8);
+                }
             }
-            if resp.clicked() {
-                let _ = hotbar.select_digit((slot + 1) as u8);
-            }
-        }
-    });
+            ui.end_row();
+        });
 }
 
 /// 2×2 INPUT + OUT wired to [`Gui::inv_craft_*`], plus a lower "2?" tray stub.
@@ -1659,11 +1670,37 @@ mod tests {
     fn player_preview_texture_pixels_are_opaque() {
         let rgba = player::preview_rgba(PREVIEW_W, PREVIEW_H);
         assert_eq!(rgba.len(), PREVIEW_W * PREVIEW_H * 4);
-        let opaque = rgba.chunks_exact(4).filter(|px| px[3] > 200).count();
+        let opaque: Vec<_> = rgba.chunks_exact(4).filter(|px| px[3] > 200).collect();
         assert!(
-            opaque > PREVIEW_W * PREVIEW_H / 12,
+            opaque.len() > PREVIEW_W * PREVIEW_H / 12,
             "entity preview should show the body silhouette"
         );
+        let mut sum = [0u64; 3];
+        for px in &opaque {
+            sum[0] += px[0] as u64;
+            sum[1] += px[1] as u64;
+            sum[2] += px[2] as u64;
+        }
+        let n = opaque.len() as f64;
+        let mean = [
+            sum[0] as f64 / n,
+            sum[1] as f64 / n,
+            sum[2] as f64 / n,
+        ];
+        // Broken skin was a sparse cyan/green grid; a real body is warmer / muted.
+        assert!(
+            !(mean[2] > 180.0 && mean[1] > 140.0 && mean[0] < 120.0),
+            "preview should not be a cyan missing-skin grid, mean={mean:?}"
+        );
+    }
+
+    #[test]
+    fn inventory_hotbar_row_is_ten_wide() {
+        assert_eq!(hotbar::SLOTS, 10);
+        assert_eq!(INV_COLS, 10);
+        let row_w = SLOT * hotbar::SLOTS as f32 + SLOT_GAP * (hotbar::SLOTS as f32 - 1.0);
+        let grid_w = SLOT * INV_COLS as f32 + SLOT_GAP * (INV_COLS as f32 - 1.0);
+        assert_eq!(row_w, grid_w, "hotbar ×10 must match the 10-wide body pitch");
     }
 
     #[test]
