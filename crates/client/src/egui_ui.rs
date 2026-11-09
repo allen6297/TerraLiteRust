@@ -44,6 +44,10 @@ const CREATIVE_COLS: usize = 10;
 const CREATIVE_ROWS_MIN: f32 = 8.0;
 /// Soft ceiling so ultra-tall monitors do not grow forever.
 const CREATIVE_ROWS_MAX: f32 = 22.0;
+/// Hard floor for the creative item ScrollArea / parent reserve (8 rows).
+/// Fixed points — never derive this from content height or available leftovers.
+const CREATIVE_GRID_MIN_H: f32 =
+    SLOT * CREATIVE_ROWS_MIN + SLOT_GAP * (CREATIVE_ROWS_MIN - 1.0);
 /// Target / clamp band for creative chrome vs window height.
 const CREATIVE_CHROME_FRAC: f32 = 0.78;
 const CREATIVE_CHROME_FRAC_MIN: f32 = 0.70;
@@ -65,6 +69,8 @@ const PREVIEW_KEY: &str = "__player_preview__";
 /// EMI sidebar item grid width (GUI plan L8).
 const EMI_COLS: usize = 4;
 const EMI_SIDE_W: f32 = SLOT * EMI_COLS as f32 + SLOT_GAP * (EMI_COLS as f32 - 1.0) + 24.0;
+/// EMI title / search / craft-uses chrome below the item list.
+const EMI_PANEL_OVERHEAD: f32 = 220.0;
 
 /// Left-column UI row → engine armor slot (`None` = stub).
 /// Order is top→bottom: head, chest, legs(stub), feet, offhand(stub).
@@ -431,12 +437,13 @@ fn draw_creative(
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
                         draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
-                        let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
+                        // Match the creative grid band so EMI doesn't stay a short stub.
+                        let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons, grid_h);
                     });
                 } else {
                     draw_creative_panel(ui, gui, hotbar, icons, panel_w, grid_h);
                     ui.add_space(10.0);
-                    let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
+                    let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons, grid_h);
                 }
             });
         });
@@ -445,7 +452,9 @@ fn draw_creative(
 /// How tall the creative item grid can grow for this window.
 fn creative_grid_height(avail_h: f32, side_by_side: bool) -> f32 {
     let rows = creative_row_budget(avail_h, side_by_side);
-    rows * SLOT + (rows - 1.0) * SLOT_GAP
+    let h = rows * SLOT + (rows - 1.0) * SLOT_GAP;
+    // Never collapse below the fixed 8-row floor, even if budget math glitches.
+    h.max(CREATIVE_GRID_MIN_H)
 }
 
 /// Visible item rows for this window (clamped to the 8–22 band).
@@ -497,9 +506,14 @@ fn draw_creative_panel(
 ) {
     let tabs = ["all", "build", "nature", "ore", "light", "more"];
     let grid_w = grid_pitch(CREATIVE_COLS);
+    // Pin the grid band in points so parent Frames / horizontal rows cannot
+    // collapse the viewport to content height (~2 rows). Always ≥8 rows.
+    let grid_h = grid_h.max(CREATIVE_GRID_MIN_H);
     show_panel(ui, panel_w, |ui| {
         // Don't force wider than the clamped panel on tiny windows.
         ui.set_min_width(grid_w.min(panel_w));
+        // Parent panel must reserve chrome + grid floor up front.
+        ui.set_min_height(CREATIVE_PANEL_OVERHEAD + grid_h);
         title_label(ui, "CREATIVE");
         ui.add_space(8.0);
         // Category tabs with flanking arrows (GUI plan L7).
@@ -552,16 +566,17 @@ fn draw_creative_panel(
             ui.label(RichText::new("nothing matches").color(MUTED).size(14.0));
             ui.add_space(4.0);
         }
-        // max_height alone is not enough: egui ScrollArea auto-shrinks to
-        // content, and a nested outer scroll starved available height to ~2
-        // rows. Reserve exact space, pin the viewport, and pad empty cells.
+        // Fixed min_height on the band + ScrollArea. Never size to content.
         let rows = creative_visible_rows(grid_h);
         let cells = ids.len().max(rows * CREATIVE_COLS);
-        let grid_w_avail = ui.available_width();
+        let grid_w_avail = ui.available_width().max(grid_w.min(panel_w));
         ui.allocate_ui_with_layout(
             Vec2::new(grid_w_avail, grid_h),
             Layout::top_down(Align::Min),
             |ui| {
+                ui.set_min_height(grid_h);
+                ui.set_max_height(grid_h);
+                ui.set_min_size(Vec2::new(grid_w_avail.min(ui.available_width()), grid_h));
                 egui::ScrollArea::vertical()
                     .id_salt("creative_grid_scroll")
                     .max_height(grid_h)
@@ -631,6 +646,7 @@ fn draw_player_inventory(
             let panel_w = clamped_panel_width(max_w, INV_COLS, true);
             let emi_w = EMI_SIDE_W.max(180.0);
             let side_by_side = panel_w + 12.0 + emi_w <= max_w + 0.5;
+            let emi_list_h = creative_grid_height(ui.available_height(), side_by_side);
             ui.vertical_centered(|ui| {
                 ui.set_max_width(max_w);
                 egui::ScrollArea::vertical()
@@ -646,7 +662,7 @@ fn draw_player_inventory(
                                 ) {
                                     touched = true;
                                 }
-                                if draw_emi_sidebar(ui, gui, hotbar, bag, icons) {
+                                if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
                                     touched = true;
                                 }
                             });
@@ -657,7 +673,7 @@ fn draw_player_inventory(
                                 touched = true;
                             }
                             ui.add_space(10.0);
-                            if draw_emi_sidebar(ui, gui, hotbar, bag, icons) {
+                            if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
                                 touched = true;
                             }
                         }
@@ -741,48 +757,71 @@ fn draw_player_inventory_panel(
 }
 
 /// EMI item browser: searchable list + CRAFTING / USES for the selection.
+///
+/// `list_h` is the pinned item-grid band in points (same floor as creative: ≥8 rows).
 fn draw_emi_sidebar(
     ui: &mut Ui,
     gui: &mut Gui,
     hotbar: &mut Hotbar,
     bag: &mut hotbar::Bag,
     icons: &mut HashMap<String, TextureHandle>,
+    list_h: f32,
 ) -> bool {
     let mut touched = false;
     let mut craft_click = false;
     let emi_w = EMI_SIDE_W.max(180.0).min(ui.available_width().max(160.0));
+    let list_h = list_h.max(CREATIVE_GRID_MIN_H);
+    let list_rows = creative_visible_rows(list_h);
     show_panel(ui, emi_w, |ui| {
+        // Reserve title + list floor so the sidebar matches creative height.
+        ui.set_min_height(EMI_PANEL_OVERHEAD + list_h);
         ui.label(RichText::new("EMI").size(16.0).color(INK).strong());
         ui.add_space(6.0);
         let rows = gui.emi_rows();
         let selected = gui.emi_selected().map(str::to_string);
-        if rows.is_empty() {
-            ui.label(RichText::new("nothing matches").color(MUTED).size(13.0));
-        } else {
-            egui::ScrollArea::vertical()
-                .id_salt("emi_list")
-                .max_height(SLOT * 6.0 + SLOT_GAP * 5.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("emi_grid")
-                        .spacing([SLOT_GAP, SLOT_GAP])
-                        .min_col_width(SLOT)
-                        .show(ui, |ui| {
-                            for (i, id) in rows.iter().enumerate() {
-                                let is_sel = selected.as_deref() == Some(id.as_str());
-                                let tip = gui::tip_for(id, None);
-                                let tex = icon_texture(ui.ctx(), icons, id);
-                                let resp = slot_button(ui, tex, is_sel, None);
-                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                if resp.clicked() {
-                                    gui.select_emi(id);
+        // Pad empty cells so a short filter still fills the pinned viewport.
+        let cells = rows.len().max(list_rows * EMI_COLS);
+        let grid_w_avail = ui.available_width();
+        ui.allocate_ui_with_layout(
+            Vec2::new(grid_w_avail, list_h),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_min_height(list_h);
+                ui.set_max_height(list_h);
+                egui::ScrollArea::vertical()
+                    .id_salt("emi_list")
+                    .max_height(list_h)
+                    .min_scrolled_height(list_h)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if rows.is_empty() {
+                            ui.label(RichText::new("nothing matches").color(MUTED).size(13.0));
+                        }
+                        egui::Grid::new("emi_grid")
+                            .spacing([SLOT_GAP, SLOT_GAP])
+                            .min_col_width(SLOT)
+                            .show(ui, |ui| {
+                                for i in 0..cells {
+                                    if let Some(id) = rows.get(i) {
+                                        let is_sel = selected.as_deref() == Some(id.as_str());
+                                        let tip = gui::tip_for(id, None);
+                                        let tex = icon_texture(ui.ctx(), icons, id);
+                                        let resp = slot_button(ui, tex, is_sel, None);
+                                        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                        if resp.clicked() {
+                                            gui.select_emi(id);
+                                        }
+                                    } else {
+                                        let _ = slot_button(ui, None, false, None);
+                                    }
+                                    if (i + 1) % EMI_COLS == 0 {
+                                        ui.end_row();
+                                    }
                                 }
-                                if (i + 1) % EMI_COLS == 0 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
-                });
-        }
+                            });
+                    });
+            },
+        );
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("SEARCH").color(MUTED).size(12.0));
@@ -1880,6 +1919,10 @@ mod tests {
     #[test]
     fn emi_sidebar_is_four_wide() {
         assert_eq!(EMI_COLS, 4);
+        // EMI list must use the same ≥8-row floor as the creative grid.
+        let list_h = creative_grid_height(720.0, true);
+        assert!(list_h + 0.5 >= CREATIVE_GRID_MIN_H);
+        assert!(creative_visible_rows(list_h) >= 8);
         assert!(EMI_SIDE_W > SLOT * 3.0);
     }
 
@@ -2085,49 +2128,23 @@ mod tests {
     #[test]
     fn creative_scroll_area_pins_budgeted_height() {
         let ctx = Context::default();
+        ctx.set_pixels_per_point(SCALE);
         let grid_h = creative_grid_height(720.0, true);
         let rows = creative_visible_rows(grid_h);
         assert!(rows >= 8, "budget must request ≥8 rows, got {rows}");
+        assert!(
+            grid_h + 0.5 >= CREATIVE_GRID_MIN_H,
+            "grid_h must honor fixed 8-row floor ({grid_h} < {CREATIVE_GRID_MIN_H})"
+        );
         // Simulate a short catalog (exactly 2 rows of items).
         let catalog_cells = CREATIVE_COLS * 2;
         let cells = catalog_cells.max(rows * CREATIVE_COLS);
         assert_eq!(cells, rows * CREATIVE_COLS);
 
-        let mut measured = 0.0_f32;
-        let raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::pos2(0.0, 0.0),
-                Vec2::new(1280.0, 720.0),
-            )),
-            ..Default::default()
-        };
-        let mut full = ctx.run_ui(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let out = egui::ScrollArea::vertical()
-                    .id_salt("creative_grid_scroll_test")
-                    .max_height(grid_h)
-                    .min_scrolled_height(grid_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Grid::new("creative_grid_test")
-                            .spacing([SLOT_GAP, SLOT_GAP])
-                            .min_col_width(SLOT)
-                            .show(ui, |ui| {
-                                for i in 0..cells {
-                                    let _ = slot_button(ui, None, false, None);
-                                    if (i + 1) % CREATIVE_COLS == 0 {
-                                        ui.end_row();
-                                    }
-                                }
-                            });
-                    });
-                measured = out.inner_rect.height();
-            });
-        });
-        full.textures_delta.clear();
-        // ScrollAreaOutput.inner_rect is the begin() viewport (pre-shrink).
-        // Measure the cursor advance to catch the final allocated height.
+        // Mirror the live path: CentralPanel → horizontal → framed panel →
+        // set_min_height + allocate_ui_with_layout + pinned ScrollArea.
         let mut allocated = 0.0_f32;
+        let mut panel_h = 0.0_f32;
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
@@ -2137,81 +2154,67 @@ mod tests {
         };
         let mut full = ctx.run_ui(raw, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let y0 = ui.cursor().top();
-                let _ = egui::ScrollArea::vertical()
-                    .id_salt("creative_grid_scroll_alloc")
-                    .max_height(grid_h)
-                    .min_scrolled_height(grid_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Grid::new("creative_grid_alloc")
-                            .spacing([SLOT_GAP, SLOT_GAP])
-                            .min_col_width(SLOT)
-                            .show(ui, |ui| {
-                                for i in 0..cells {
-                                    let _ = slot_button(ui, None, false, None);
-                                    if (i + 1) % CREATIVE_COLS == 0 {
-                                        ui.end_row();
-                                    }
-                                }
-                            });
-                    });
-                allocated = ui.cursor().top() - y0;
-            });
-        });
-        full.textures_delta.clear();
-        assert!(
-            (measured - grid_h).abs() < 1.0,
-            "pinned scroll viewport should be grid_h={grid_h}, got {measured}"
-        );
-        assert!(
-            allocated + 0.5 >= grid_h,
-            "final allocated height must keep the grid budget ({allocated} < {grid_h})"
-        );
-
-        // Nested outer+inner scroll was the live bug: outer content_max_size
-        // starved the inner viewport down to ~2 rows despite max_height.
-        let mut nested_alloc = 0.0_f32;
-        let raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::pos2(0.0, 0.0),
-                Vec2::new(1280.0, 720.0),
-            )),
-            ..Default::default()
-        };
-        let mut full = ctx.run_ui(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("creative_chrome_nested")
-                    .max_height(600.0)
-                    .show(ui, |ui| {
-                        ui.add_space(40.0); // title stand-in
+                ui.horizontal(|ui| {
+                    let panel_w = clamped_panel_width(chrome_max_width(ui), CREATIVE_COLS, true);
+                    show_panel(ui, panel_w, |ui| {
+                        ui.set_min_width(grid_pitch(CREATIVE_COLS).min(panel_w));
+                        ui.set_min_height(CREATIVE_PANEL_OVERHEAD + grid_h);
+                        ui.add_space(40.0); // title
                         ui.add_space(34.0); // tabs
                         ui.add_space(28.0); // search
+                        let grid_w_avail = ui.available_width();
                         let y0 = ui.cursor().top();
-                        let _ = egui::ScrollArea::vertical()
-                            .id_salt("creative_grid_nested")
-                            .max_height(grid_h)
-                            .show(ui, |ui| {
-                                egui::Grid::new("creative_grid_nested")
-                                    .spacing([SLOT_GAP, SLOT_GAP])
-                                    .min_col_width(SLOT)
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(grid_w_avail, grid_h),
+                            Layout::top_down(Align::Min),
+                            |ui| {
+                                ui.set_min_height(grid_h);
+                                ui.set_max_height(grid_h);
+                                let _ = egui::ScrollArea::vertical()
+                                    .id_salt("creative_grid_scroll_alloc")
+                                    .max_height(grid_h)
+                                    .min_scrolled_height(grid_h)
+                                    .auto_shrink([false, false])
                                     .show(ui, |ui| {
-                                        for i in 0..(CREATIVE_COLS * 20) {
-                                            let _ = slot_button(ui, None, false, None);
-                                            if (i + 1) % CREATIVE_COLS == 0 {
-                                                ui.end_row();
-                                            }
-                                        }
+                                        egui::Grid::new("creative_grid_alloc")
+                                            .spacing([SLOT_GAP, SLOT_GAP])
+                                            .min_col_width(SLOT)
+                                            .show(ui, |ui| {
+                                                for i in 0..cells {
+                                                    let _ = slot_button(ui, None, false, None);
+                                                    if (i + 1) % CREATIVE_COLS == 0 {
+                                                        ui.end_row();
+                                                    }
+                                                }
+                                            });
                                     });
-                            });
-                        nested_alloc = ui.cursor().top() - y0;
+                            },
+                        );
+                        allocated = ui.cursor().top() - y0;
+                        ui.add_space(10.0);
+                        ui.add_space(40.0); // hotbar stand-in
+                        ui.add_space(28.0); // close stand-in
                     });
+                    // Horizontal layout grows min_rect.height with the tallest child.
+                    panel_h = ui.min_rect().height();
+                });
             });
         });
         full.textures_delta.clear();
+        assert!(
+            allocated + 0.5 >= grid_h,
+            "live-path allocated height must keep the grid budget ({allocated} < {grid_h})"
+        );
+        assert!(
+            allocated + 0.5 >= CREATIVE_GRID_MIN_H,
+            "live-path must keep ≥8-row floor ({allocated} < {CREATIVE_GRID_MIN_H})"
+        );
+        assert!(
+            panel_h + 0.5 >= CREATIVE_GRID_MIN_H,
+            "framed panel must grow with the pinned grid (panel_h={panel_h})"
+        );
         eprintln!(
-            "pinned_alloc={allocated} nested_inner_alloc={nested_alloc} grid_h={grid_h} rows={rows}"
+            "live_path allocated={allocated} panel_h={panel_h} grid_h={grid_h} rows={rows} min_h={CREATIVE_GRID_MIN_H}"
         );
 
         // Always dump a schematic proving the padded row count.
@@ -2252,7 +2255,7 @@ mod tests {
         let mut writer = encoder.write_header().expect("png header");
         writer.write_image_data(&rgba).expect("png data");
         eprintln!(
-            "dumped {} ({}x{} cells, pinned_h={measured}, allocated={allocated})",
+            "dumped {} ({}x{} cells, allocated={allocated})",
             path.display(),
             CREATIVE_COLS,
             rows
