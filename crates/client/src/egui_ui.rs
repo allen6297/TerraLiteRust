@@ -271,6 +271,9 @@ fn panel_frame() -> Frame {
 
 fn show_panel(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
     // Outer lip (light strip) then dark well — matches legacy HUD panels.
+    // Always stack contents vertically: callers nest this beside EMI inside a
+    // horizontal row, and egui Frames inherit that layout unless overridden
+    // (which turned creative into a full-width banner strip).
     Frame::new()
         .fill(LIP)
         .corner_radius(CornerRadius::same(9))
@@ -282,10 +285,35 @@ fn show_panel(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
         })
         .show(ui, |ui| {
             panel_frame().show(ui, |ui| {
-                ui.set_width(width);
-                add_contents(ui);
+                ui.vertical(|ui| {
+                    ui.set_width(width);
+                    ui.set_max_width(width);
+                    add_contents(ui);
+                });
             });
         });
+}
+
+/// Inventory / creative chrome stays inside the window (~90% wide).
+fn chrome_max_width(ui: &Ui) -> f32 {
+    (ui.available_width() * 0.9).max(280.0)
+}
+
+fn grid_pitch(cols: usize) -> f32 {
+    let gaps = cols.saturating_sub(1) as f32;
+    SLOT * cols as f32 + SLOT_GAP * gaps
+}
+
+/// Desired main-panel width for a N-wide slot grid, clamped to remaining chrome.
+fn clamped_panel_width(max_chrome: f32, cols: usize, with_emi: bool) -> f32 {
+    let grid_w = grid_pitch(cols);
+    let desired = grid_w + 40.0;
+    let emi = if with_emi {
+        EMI_SIDE_W.max(180.0) + 12.0
+    } else {
+        0.0
+    };
+    desired.min((max_chrome - emi).max(grid_w.min(max_chrome)))
 }
 
 fn title_label(ui: &mut Ui, text: &str) {
@@ -357,105 +385,133 @@ fn draw_creative(
     bag: &mut hotbar::Bag,
     icons: &mut HashMap<String, TextureHandle>,
 ) {
-    let tabs = ["all", "build", "nature", "ore", "light", "more"];
     egui::CentralPanel::default()
         .frame(Frame::new().fill(backdrop()))
         .show(ui, |ui| {
+            let max_w = chrome_max_width(ui);
+            let panel_w = clamped_panel_width(max_w, CREATIVE_COLS, true);
+            let emi_w = EMI_SIDE_W.max(180.0);
+            let side_by_side = panel_w + 12.0 + emi_w <= max_w + 0.5;
             ui.vertical_centered(|ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                    let grid_w = SLOT * CREATIVE_COLS as f32
-                        + SLOT_GAP * (CREATIVE_COLS as f32 - 1.0);
-                    let panel_w = grid_w + 40.0;
-                    show_panel(ui, panel_w.max(grid_w + 40.0), |ui| {
-                        ui.set_min_width(grid_w);
-                        title_label(ui, "CREATIVE");
-                        ui.add_space(8.0);
-                        // Category tabs with flanking arrows (GUI plan L7).
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::splat(4.0);
-                            if category_arrow(ui, "<").clicked() {
-                                gui.cycle_catalog_tab(false);
-                            }
-                            for (index, name) in tabs.iter().enumerate() {
-                                let selected = gui.catalog_tab() == index;
-                                let fill = if selected { SELECT } else { BUTTON };
-                                let tab = egui::Button::new(
-                                    RichText::new(*name).size(13.0).color(if selected {
-                                        Color32::from_rgb(20, 18, 12)
-                                    } else {
-                                        INK
-                                    }),
-                                )
-                                .fill(fill)
-                                .stroke(Stroke::new(
-                                    1.0,
-                                    if selected { SELECT } else { SLOT_EDGE },
-                                ))
-                                .corner_radius(CornerRadius::same(3))
-                                .min_size(Vec2::new(52.0, 26.0));
-                                if ui.add(tab).clicked() {
-                                    gui.set_catalog_tab(index);
-                                }
-                            }
-                            if category_arrow(ui, ">").clicked() {
-                                gui.cycle_catalog_tab(true);
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("search").color(MUTED).size(13.0));
-                            let mut q = gui.catalog_query().to_string();
-                            let edit = egui::TextEdit::singleline(&mut q)
-                                .desired_width(240.0)
-                                .hint_text("oak log")
-                                .text_color(INK);
-                            if ui.add(edit).changed() {
-                                gui.set_catalog_query(&q);
-                            }
-                        });
-                        ui.add_space(8.0);
-                        let ids = gui.creative_ids();
-                        if ids.is_empty() {
-                            ui.label(RichText::new("nothing matches").color(MUTED).size(14.0));
+                ui.set_max_width(max_w);
+                egui::ScrollArea::vertical()
+                    .id_salt("creative_chrome")
+                    .max_height(ui.available_height() * 0.94)
+                    .show(ui, |ui| {
+                        ui.set_max_width(max_w);
+                        if side_by_side {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
+                                draw_creative_panel(ui, gui, hotbar, icons, panel_w);
+                                let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
+                            });
                         } else {
-                            egui::ScrollArea::vertical()
-                                .max_height(SLOT * 5.0 + SLOT_GAP * 4.0)
-                                .show(ui, |ui| {
-                                    egui::Grid::new("creative_grid")
-                                        .spacing([SLOT_GAP, SLOT_GAP])
-                                        .min_col_width(SLOT)
-                                        .show(ui, |ui| {
-                                            for (i, id) in ids.iter().enumerate() {
-                                                let selected = gui.catalog_index() == i;
-                                                let tip = gui::tip_for(id, None);
-                                                let tex = icon_texture(ui.ctx(), icons, id);
-                                                let resp = slot_button(ui, tex, selected, None);
-                                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                                if resp.clicked() {
-                                                    gui.set_catalog_index(i);
-                                                    let _ = hotbar.give_stack(id);
-                                                }
-                                                if (i + 1) % CREATIVE_COLS == 0 {
-                                                    ui.end_row();
-                                                }
-                                            }
-                                        });
-                                });
-                        }
-                        ui.add_space(10.0);
-                        ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
-                        ui.add_space(4.0);
-                        draw_hotbar_row(ui, hotbar, icons);
-                        ui.add_space(8.0);
-                        if close_button(ui, "Close (I)").clicked() {
-                            gui.close_bag();
+                            draw_creative_panel(ui, gui, hotbar, icons, panel_w);
+                            ui.add_space(10.0);
+                            let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
                         }
                     });
-                    let _ = draw_emi_sidebar(ui, gui, hotbar, bag, icons);
-                });
             });
         });
+}
+
+fn draw_creative_panel(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+    panel_w: f32,
+) {
+    let tabs = ["all", "build", "nature", "ore", "light", "more"];
+    let grid_w = grid_pitch(CREATIVE_COLS);
+    show_panel(ui, panel_w, |ui| {
+        // Don't force wider than the clamped panel on tiny windows.
+        ui.set_min_width(grid_w.min(panel_w));
+        title_label(ui, "CREATIVE");
+        ui.add_space(8.0);
+        // Category tabs with flanking arrows (GUI plan L7).
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(4.0);
+            if category_arrow(ui, "<").clicked() {
+                gui.cycle_catalog_tab(false);
+            }
+            for (index, name) in tabs.iter().enumerate() {
+                let selected = gui.catalog_tab() == index;
+                let fill = if selected { SELECT } else { BUTTON };
+                let tab = egui::Button::new(RichText::new(*name).size(13.0).color(
+                    if selected {
+                        Color32::from_rgb(20, 18, 12)
+                    } else {
+                        INK
+                    },
+                ))
+                .fill(fill)
+                .stroke(Stroke::new(
+                    1.0,
+                    if selected { SELECT } else { SLOT_EDGE },
+                ))
+                .corner_radius(CornerRadius::same(3))
+                .min_size(Vec2::new(52.0, 26.0));
+                if ui.add(tab).clicked() {
+                    gui.set_catalog_tab(index);
+                }
+            }
+            if category_arrow(ui, ">").clicked() {
+                gui.cycle_catalog_tab(true);
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("search").color(MUTED).size(13.0));
+            let mut q = gui.catalog_query().to_string();
+            let edit_w = (panel_w - 72.0).clamp(120.0, 240.0);
+            let edit = egui::TextEdit::singleline(&mut q)
+                .desired_width(edit_w)
+                .hint_text("oak log")
+                .text_color(INK);
+            if ui.add(edit).changed() {
+                gui.set_catalog_query(&q);
+            }
+        });
+        ui.add_space(8.0);
+        let ids = gui.creative_ids();
+        if ids.is_empty() {
+            ui.label(RichText::new("nothing matches").color(MUTED).size(14.0));
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("creative_grid_scroll")
+                .max_height(SLOT * 5.0 + SLOT_GAP * 4.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("creative_grid")
+                        .spacing([SLOT_GAP, SLOT_GAP])
+                        .min_col_width(SLOT)
+                        .show(ui, |ui| {
+                            for (i, id) in ids.iter().enumerate() {
+                                let selected = gui.catalog_index() == i;
+                                let tip = gui::tip_for(id, None);
+                                let tex = icon_texture(ui.ctx(), icons, id);
+                                let resp = slot_button(ui, tex, selected, None);
+                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                if resp.clicked() {
+                                    gui.set_catalog_index(i);
+                                    let _ = hotbar.give_stack(id);
+                                }
+                                if (i + 1) % CREATIVE_COLS == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
+        ui.add_space(4.0);
+        draw_hotbar_row(ui, hotbar, icons);
+        ui.add_space(8.0);
+        if close_button(ui, "Close (I)").clicked() {
+            gui.close_bag();
+        }
+    });
 }
 
 fn category_arrow(ui: &mut Ui, label: &str) -> egui::Response {
@@ -480,78 +536,116 @@ fn draw_player_inventory(
     egui::CentralPanel::default()
         .frame(Frame::new().fill(backdrop()))
         .show(ui, |ui| {
+            let max_w = chrome_max_width(ui);
+            let panel_w = clamped_panel_width(max_w, INV_COLS, true);
+            let emi_w = EMI_SIDE_W.max(180.0);
+            let side_by_side = panel_w + 12.0 + emi_w <= max_w + 0.5;
             ui.vertical_centered(|ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                    // Body 10-wide + hotbar ×10 share one pitch; pad for frame margins.
-                    let grid_w =
-                        SLOT * INV_COLS as f32 + SLOT_GAP * (INV_COLS as f32 - 1.0);
-                    let panel_w = grid_w + 40.0;
-                    show_panel(ui, panel_w.max(grid_w + 40.0), |ui| {
-                        ui.set_min_width(grid_w);
-                        title_label(ui, "INVENTORY");
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            for (tab, label) in [
-                                (PlayerInvTab::Player, "PLAYER"),
-                                (PlayerInvTab::Craft, "Craft"),
-                            ] {
-                                let selected = gui.inv_tab() == tab;
-                                let fill = if selected { SELECT } else { BUTTON };
-                                let btn = egui::Button::new(RichText::new(label).size(14.0).color(
-                                    if selected {
-                                        Color32::from_rgb(20, 18, 12)
-                                    } else {
-                                        INK
-                                    },
-                                ))
-                                .fill(fill)
-                                .stroke(Stroke::new(
-                                    1.0,
-                                    if selected { SELECT } else { SLOT_EDGE },
-                                ))
-                                .corner_radius(CornerRadius::same(3))
-                                .min_size(Vec2::new(88.0, 28.0));
-                                if ui.add(btn).clicked() {
-                                    gui.set_inv_tab(tab);
-                                }
-                            }
-                        });
-                        ui.add_space(10.0);
-                        match gui.inv_tab() {
-                            PlayerInvTab::Player => {
-                                if draw_player_detail(ui, hotbar, bag, armor, icons) {
+                ui.set_max_width(max_w);
+                egui::ScrollArea::vertical()
+                    .id_salt("player_inv_chrome")
+                    .max_height(ui.available_height() * 0.94)
+                    .show(ui, |ui| {
+                        ui.set_max_width(max_w);
+                        if side_by_side {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
+                                if draw_player_inventory_panel(
+                                    ui, gui, hotbar, bag, armor, icons, panel_w,
+                                ) {
                                     touched = true;
                                 }
-                                ui.add_space(12.0);
-                                draw_inv_body_grid(ui, hotbar, bag, icons);
-                            }
-                            PlayerInvTab::Craft => {
-                                if draw_craft_detail(ui, gui, hotbar, bag, icons) {
+                                if draw_emi_sidebar(ui, gui, hotbar, bag, icons) {
                                     touched = true;
                                 }
-                                ui.add_space(12.0);
-                                draw_inv_body_grid(ui, hotbar, bag, icons);
-                            }
-                        }
-                        ui.add_space(12.0);
-                        ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
-                        ui.add_space(4.0);
-                        draw_hotbar_row(ui, hotbar, icons);
-                        ui.add_space(8.0);
-                        if close_button(ui, "Close (E)").clicked() {
-                            if refund_inv_craft(gui, hotbar, bag) {
+                            });
+                        } else {
+                            if draw_player_inventory_panel(
+                                ui, gui, hotbar, bag, armor, icons, panel_w,
+                            ) {
                                 touched = true;
                             }
-                            gui.close_items();
+                            ui.add_space(10.0);
+                            if draw_emi_sidebar(ui, gui, hotbar, bag, icons) {
+                                touched = true;
+                            }
                         }
                     });
-                    if draw_emi_sidebar(ui, gui, hotbar, bag, icons) {
-                        touched = true;
-                    }
-                });
             });
         });
+    touched
+}
+
+fn draw_player_inventory_panel(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    armor: &mut Armor,
+    icons: &mut HashMap<String, TextureHandle>,
+    panel_w: f32,
+) -> bool {
+    let mut touched = false;
+    let grid_w = grid_pitch(INV_COLS);
+    show_panel(ui, panel_w, |ui| {
+        ui.set_min_width(grid_w.min(panel_w));
+        title_label(ui, "INVENTORY");
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            for (tab, label) in [
+                (PlayerInvTab::Player, "PLAYER"),
+                (PlayerInvTab::Craft, "Craft"),
+            ] {
+                let selected = gui.inv_tab() == tab;
+                let fill = if selected { SELECT } else { BUTTON };
+                let btn = egui::Button::new(RichText::new(label).size(14.0).color(
+                    if selected {
+                        Color32::from_rgb(20, 18, 12)
+                    } else {
+                        INK
+                    },
+                ))
+                .fill(fill)
+                .stroke(Stroke::new(
+                    1.0,
+                    if selected { SELECT } else { SLOT_EDGE },
+                ))
+                .corner_radius(CornerRadius::same(3))
+                .min_size(Vec2::new(88.0, 28.0));
+                if ui.add(btn).clicked() {
+                    gui.set_inv_tab(tab);
+                }
+            }
+        });
+        ui.add_space(10.0);
+        match gui.inv_tab() {
+            PlayerInvTab::Player => {
+                if draw_player_detail(ui, hotbar, bag, armor, icons) {
+                    touched = true;
+                }
+                ui.add_space(12.0);
+                draw_inv_body_grid(ui, hotbar, bag, icons);
+            }
+            PlayerInvTab::Craft => {
+                if draw_craft_detail(ui, gui, hotbar, bag, icons) {
+                    touched = true;
+                }
+                ui.add_space(12.0);
+                draw_inv_body_grid(ui, hotbar, bag, icons);
+            }
+        }
+        ui.add_space(12.0);
+        ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
+        ui.add_space(4.0);
+        draw_hotbar_row(ui, hotbar, icons);
+        ui.add_space(8.0);
+        if close_button(ui, "Close (E)").clicked() {
+            if refund_inv_craft(gui, hotbar, bag) {
+                touched = true;
+            }
+            gui.close_items();
+        }
+    });
     touched
 }
 
@@ -565,7 +659,8 @@ fn draw_emi_sidebar(
 ) -> bool {
     let mut touched = false;
     let mut craft_click = false;
-    show_panel(ui, EMI_SIDE_W.max(180.0), |ui| {
+    let emi_w = EMI_SIDE_W.max(180.0).min(ui.available_width().max(160.0));
+    show_panel(ui, emi_w, |ui| {
         ui.label(RichText::new("EMI").size(16.0).color(INK).strong());
         ui.add_space(6.0);
         let rows = gui.emi_rows();
@@ -929,10 +1024,12 @@ fn draw_hotbar_row(
     hotbar: &mut Hotbar,
     icons: &mut HashMap<String, TextureHandle>,
 ) {
-    // Same ×10 horizontal pitch as the body grid / HUD bar — never clip to a
-    // short row when the panel is tight beside EMI.
-    let row_w = SLOT * hotbar::SLOTS as f32 + SLOT_GAP * (hotbar::SLOTS as f32 - 1.0);
-    ui.set_min_width(row_w);
+    // Same ×10 horizontal pitch as the body grid / HUD bar. Prefer full width
+    // when the panel has room; never force the chrome past the window edge.
+    let row_w = grid_pitch(hotbar::SLOTS);
+    if ui.available_width() + 0.5 >= row_w {
+        ui.set_min_width(row_w);
+    }
     egui::Grid::new("inv_hotbar_row")
         .spacing([SLOT_GAP, SLOT_GAP])
         .min_col_width(SLOT)
@@ -1698,9 +1795,42 @@ mod tests {
     fn inventory_hotbar_row_is_ten_wide() {
         assert_eq!(hotbar::SLOTS, 10);
         assert_eq!(INV_COLS, 10);
-        let row_w = SLOT * hotbar::SLOTS as f32 + SLOT_GAP * (hotbar::SLOTS as f32 - 1.0);
-        let grid_w = SLOT * INV_COLS as f32 + SLOT_GAP * (INV_COLS as f32 - 1.0);
+        let row_w = grid_pitch(hotbar::SLOTS);
+        let grid_w = grid_pitch(INV_COLS);
         assert_eq!(row_w, grid_w, "hotbar ×10 must match the 10-wide body pitch");
+    }
+
+    #[test]
+    fn inventory_chrome_fits_inside_ninety_percent() {
+        // Wide window: panel + EMI sit side-by-side under 90% chrome.
+        let max_w = 1280.0 * 0.9;
+        let panel = clamped_panel_width(max_w, CREATIVE_COLS, true);
+        let emi = EMI_SIDE_W.max(180.0);
+        assert!(
+            panel + 12.0 + emi <= max_w + 0.5,
+            "creative chrome overflowed: panel={panel} emi={emi} max={max_w}"
+        );
+        let inv_panel = clamped_panel_width(max_w, INV_COLS, true);
+        assert!(
+            inv_panel + 12.0 + emi <= max_w + 0.5,
+            "player inv chrome overflowed: panel={inv_panel} emi={emi} max={max_w}"
+        );
+        // Narrow window: clamp keeps the main panel inside chrome (EMI stacks).
+        let tight = 520.0;
+        let tight_panel = clamped_panel_width(tight, CREATIVE_COLS, true);
+        assert!(
+            tight_panel <= tight + 0.5,
+            "clamped panel must stay inside chrome max, got {tight_panel} > {tight}"
+        );
+        assert!(grid_pitch(CREATIVE_COLS) + 40.0 > tight_panel || tight_panel <= tight);
+    }
+
+    #[test]
+    fn panel_width_helpers_match_ten_wide_grid() {
+        let pitch = grid_pitch(10);
+        assert!((pitch - (SLOT * 10.0 + SLOT_GAP * 9.0)).abs() < f32::EPSILON);
+        let roomy = clamped_panel_width(2000.0, 10, true);
+        assert!((roomy - (pitch + 40.0)).abs() < 0.1);
     }
 
     #[test]
