@@ -1,7 +1,7 @@
 //! egui menus on top of the existing wgpu world pass.
 //!
-//! Pause / settings / main / worlds / creative / items list draw here at
-//! [`SCALE`] (~1.5×). RoseGold GUIAPI screens and block stations stay on the
+//! Pause / settings / main / worlds / creative / player inventory draw here at
+//! [`SCALE`] (~1.5x). RoseGold GUIAPI screens and block stations stay on the
 //! legacy quad path (`gui::Gui::paint`) during the transition.
 //!
 //! Visual language matches the legacy HUD: dark well, light top lip, warm
@@ -19,7 +19,7 @@ use rebuild_world::Pack;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::gui::{self, Gui, Menu, MenuAction};
+use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab};
 use crate::hotbar::{self, Hotbar};
 use crate::palette;
 use crate::texture::{self, Image};
@@ -32,6 +32,10 @@ const SLOT: f32 = 36.0;
 const SLOT_GAP: f32 = 5.0;
 const ICON_PX: usize = 48;
 const CREATIVE_COLS: usize = 9;
+/// Player inventory body grid (GUI plan: 4x10).
+const INV_COLS: usize = 10;
+const INV_ROWS: usize = 4;
+const INV_BODY: usize = INV_COLS * INV_ROWS;
 
 // Terralite dark-well palette (matches gui.rs WELL / LIP / PANEL).
 const WELL: Color32 = Color32::from_rgb(5, 6, 10);
@@ -101,7 +105,7 @@ impl EguiHost {
 
     /// True when egui should own pointer/keyboard instead of the world.
     pub fn wants_input(menu: &Menu, gui: &Gui) -> bool {
-        menu.is_open() || gui.bag_open() || gui.items_list_open()
+        menu.is_open() || gui.bag_open() || gui.player_inv_open()
     }
 
     /// Build menus for this frame. Returns tessellated output ready to paint.
@@ -122,8 +126,8 @@ impl EguiHost {
                 pending = draw_menu(ui, menu);
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
-            } else if gui.items_list_open() {
-                draw_items(ui, gui, hotbar, bag, icons);
+            } else if gui.player_inv_open() {
+                draw_player_inventory(ui, gui, hotbar, bag, icons);
             }
         });
         self.pending = pending;
@@ -431,7 +435,7 @@ fn draw_creative(
         });
 }
 
-fn draw_items(
+fn draw_player_inventory(
     ui: &mut Ui,
     gui: &mut Gui,
     hotbar: &mut Hotbar,
@@ -442,91 +446,175 @@ fn draw_items(
         .frame(Frame::new().fill(backdrop()))
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
-                show_panel(ui, 460.0, |ui| {
-                    title_label(ui, "ITEMS");
-                    ui.add_space(10.0);
-                    let rows = gui.item_rows();
-                    let selected = gui.selected_row();
-                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        for (index, id) in rows.iter().enumerate() {
-                            let tip = gui::tip_for(id, None);
-                            let detail = gui.item_detail(id);
-                            let chosen = index == selected;
-                            let fill = if chosen { SELECT_SOFT } else { ROW };
-                            let stroke = if chosen {
-                                Stroke::new(1.5, SELECT)
-                            } else {
-                                Stroke::new(1.0, SLOT_EDGE)
-                            };
-                            let tex = icon_texture(ui.ctx(), icons, id);
-                            let height = 40.0;
-                            let width = ui.available_width();
-                            let (rect, resp) =
-                                ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-                            if ui.is_rect_visible(rect) {
-                                ui.painter().rect(
-                                    rect,
-                                    CornerRadius::same(4),
-                                    fill,
-                                    stroke,
-                                    StrokeKind::Inside,
-                                );
-                                let icon_rect = egui::Rect::from_min_size(
-                                    egui::pos2(rect.left() + 6.0, rect.center().y - 14.0),
-                                    Vec2::splat(28.0),
-                                );
-                                ui.painter().rect_filled(
-                                    icon_rect,
-                                    CornerRadius::same(2),
-                                    SLOT_WELL,
-                                );
-                                if let Some(tex) = tex {
-                                    ui.painter().image(
-                                        tex,
-                                        icon_rect.shrink(2.0),
-                                        egui::Rect::from_min_max(
-                                            egui::pos2(0.0, 0.0),
-                                            egui::pos2(1.0, 1.0),
-                                        ),
-                                        Color32::WHITE,
-                                    );
-                                }
-                                let name_pos = egui::pos2(rect.left() + 42.0, rect.top() + 6.0);
-                                ui.painter().text(
-                                    name_pos,
-                                    Align2::LEFT_TOP,
-                                    &tip.name,
-                                    FontId::proportional(14.0),
-                                    INK,
-                                );
-                                let line = if detail.is_empty() {
-                                    tip.line.as_str()
+                let panel_w =
+                    SLOT * INV_COLS as f32 + SLOT_GAP * (INV_COLS as f32 - 1.0) + 28.0;
+                show_panel(ui, panel_w.max(420.0), |ui| {
+                    title_label(ui, "INVENTORY");
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        for (tab, label) in [
+                            (PlayerInvTab::Player, "PLAYER"),
+                            (PlayerInvTab::Craft, "Craft"),
+                        ] {
+                            let selected = gui.inv_tab() == tab;
+                            let fill = if selected { SELECT } else { BUTTON };
+                            let btn = egui::Button::new(RichText::new(label).size(14.0).color(
+                                if selected {
+                                    Color32::from_rgb(20, 18, 12)
                                 } else {
-                                    detail.as_str()
-                                };
-                                if !line.is_empty() {
-                                    ui.painter().text(
-                                        egui::pos2(rect.left() + 42.0, rect.top() + 22.0),
-                                        Align2::LEFT_TOP,
-                                        line,
-                                        FontId::proportional(12.0),
-                                        MUTED,
-                                    );
-                                }
+                                    INK
+                                },
+                            ))
+                            .fill(fill)
+                            .stroke(Stroke::new(
+                                1.0,
+                                if selected { SELECT } else { SLOT_EDGE },
+                            ))
+                            .corner_radius(CornerRadius::same(3))
+                            .min_size(Vec2::new(88.0, 28.0));
+                            if ui.add(btn).clicked() {
+                                gui.set_inv_tab(tab);
                             }
-                            resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                            if resp.clicked() {
-                                gui.select_item_row(index);
-                                let _ = gui.craft_selected_into(hotbar, bag);
-                            }
-                            ui.add_space(4.0);
                         }
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(10.0);
+                    match gui.inv_tab() {
+                        PlayerInvTab::Player => {
+                            draw_inv_body_grid(ui, hotbar, bag, icons);
+                        }
+                        PlayerInvTab::Craft => {
+                            draw_craft_stub(ui);
+                        }
+                    }
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
+                    ui.add_space(4.0);
+                    draw_hotbar_row(ui, hotbar, icons);
+                    ui.add_space(8.0);
                     if close_button(ui, "Close (E)").clicked() {
                         gui.close_items();
                     }
                 });
+            });
+        });
+}
+
+fn draw_inv_body_grid(
+    ui: &mut Ui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+) {
+    egui::Grid::new("player_inv_grid")
+        .spacing([SLOT_GAP, SLOT_GAP])
+        .min_col_width(SLOT)
+        .show(ui, |ui| {
+            for index in 0..INV_BODY {
+                // Wire bag is still 9 slots (shared with chests); extra wells are chrome.
+                let (id, count) = if index < hotbar::PACK {
+                    (
+                        bag.slot(index).unwrap_or("").to_string(),
+                        bag.count(index),
+                    )
+                } else {
+                    (String::new(), 0)
+                };
+                let tex = if id.is_empty() {
+                    None
+                } else {
+                    icon_texture(ui.ctx(), icons, &id)
+                };
+                let resp = slot_button(
+                    ui,
+                    tex,
+                    false,
+                    if count > 1 { Some(count) } else { None },
+                );
+                if !id.is_empty() {
+                    let tip = gui::tip_for(&id, Some(count));
+                    resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                    if resp.clicked() {
+                        let _ = hotbar.give_stack(&id);
+                    }
+                }
+                if (index + 1) % INV_COLS == 0 {
+                    ui.end_row();
+                }
+            }
+        });
+}
+
+fn draw_hotbar_row(
+    ui: &mut Ui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+        for slot in 0..hotbar::SLOTS {
+            let id = hotbar.slot(slot).unwrap_or("");
+            let count = hotbar.count(slot);
+            let selected = hotbar.selected() == slot;
+            let tex = if id.is_empty() {
+                None
+            } else {
+                icon_texture(ui.ctx(), icons, id)
+            };
+            let resp = slot_button(
+                ui,
+                tex,
+                selected,
+                if count > 1 { Some(count) } else { None },
+            );
+            if !id.is_empty() {
+                let tip = gui::tip_for(id, Some(count));
+                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+            }
+            if resp.clicked() {
+                let _ = hotbar.select_digit((slot + 1) as u8);
+            }
+        }
+    });
+}
+
+fn draw_craft_stub(ui: &mut Ui) {
+    Frame::new()
+        .fill(ROW)
+        .stroke(Stroke::new(1.0, SLOT_EDGE))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(12, 14))
+        .show(ui, |ui| {
+            ui.set_min_height(SLOT * 3.0 + SLOT_GAP * 2.0);
+            ui.label(
+                RichText::new("Craft")
+                    .size(15.0)
+                    .color(INK)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("2x2 crafting lands next — this tab is a stub.")
+                    .size(13.0)
+                    .color(MUTED),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                for _ in 0..2 {
+                    let _ = slot_button(ui, None, false, None);
+                }
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("OUT").size(11.0).color(MUTED));
+                    let _ = slot_button(ui, None, false, None);
+                });
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                for _ in 0..2 {
+                    let _ = slot_button(ui, None, false, None);
+                }
             });
         });
 }
@@ -844,6 +932,14 @@ mod tests {
         let tip = gui::tip_for("cobblestone", Some(1));
         assert!(tip.name.to_ascii_lowercase().contains("cobble"));
         assert!(!tip.line.is_empty());
+    }
+
+    #[test]
+    fn player_inv_grid_is_four_by_ten() {
+        assert_eq!(INV_COLS, 10);
+        assert_eq!(INV_ROWS, 4);
+        assert_eq!(INV_BODY, 40);
+        assert_eq!(hotbar::SLOTS, 10);
     }
 
     #[test]

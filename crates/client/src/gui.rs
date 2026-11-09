@@ -4,12 +4,9 @@
 //! the world size, a southern or northern sun, and mute, worlds loads a named
 //! save, quit leaves. Up and down move the row. Enter or Space activates it.
 //! Escape during play releases the mouse, then opens pause: resume, settings,
-//! or quit to the title. E opens the
-//! Items screen. Escape or E closes it. Up and down arrows select an entry.
-//! The list comes from the data pack recipe book when that book has entries.
-//! The selected row shows how the item is made, or what it is used to make.
-//! Enter crafts that result when the hotbar holds the ingredients. The result
-//! lands in the hotbar, or in the inventory when the bar is full.
+//! or quit to the title. E opens the player inventory (PLAYER | Craft tabs,
+//! 4x10 body slots + hotbar x10). Escape or E closes it. Craft tab is a stub
+//! until the craft grid lands; EMI / recipe browser comes later.
 //! F on a placed crafting table opens a textured 3x3. The items in the grid
 //! match a book recipe, and Enter takes the result. F on a furnace opens
 //! input, fuel, and output. Cobblestone cooks into stone, and stone bricks
@@ -587,6 +584,13 @@ impl Screen {
     }
 }
 
+/// Tab strip on the player inventory screen (E).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerInvTab {
+    Player,
+    Craft,
+}
+
 pub struct Gui {
     screen: Option<Screen>,
     extras: Vec<Screen>,
@@ -598,11 +602,13 @@ pub struct Gui {
     pressed: Option<String>,
     book: Book,
     open: bool,
-    /// Which extra screen is showing. `None` is the items screen.
+    /// Which extra screen is showing. `None` is the player inventory.
     extra: Option<usize>,
     selected: usize,
     bag_open: bool,
     bag_selected: usize,
+    /// PLAYER vs Craft tab while the player inventory (E) is open.
+    inv_tab: PlayerInvTab,
     /// The creative grid has the cursor. False means the carried row does.
     catalog_on: bool,
     catalog_at: usize,
@@ -756,6 +762,7 @@ impl Gui {
                 selected: 0,
                 bag_open: false,
                 bag_selected: 0,
+                inv_tab: PlayerInvTab::Player,
                 catalog_on: false,
                 catalog_at: 0,
                 catalog_tab: 0,
@@ -863,6 +870,7 @@ impl Gui {
                     selected: 0,
                     bag_open: false,
                     bag_selected: 0,
+                    inv_tab: PlayerInvTab::Player,
                     catalog_on: false,
                     catalog_at: 0,
                     catalog_tab: 0,
@@ -980,6 +988,7 @@ impl Gui {
             selected: 0,
             bag_open: false,
             bag_selected: 0,
+            inv_tab: PlayerInvTab::Player,
             catalog_on: false,
             catalog_at: 0,
             catalog_tab: 0,
@@ -1121,9 +1130,23 @@ impl Gui {
         self.bag_open
     }
 
-    /// Items / recipes list (E), not creative and not a RoseGold/extra panel.
+    /// Alias for [`Self::player_inv_open`] (older call sites / EMI bridge).
+    #[allow(dead_code)]
     pub fn items_list_open(&self) -> bool {
+        self.player_inv_open()
+    }
+
+    /// Player inventory chrome (E): PLAYER | Craft tabs, 4x10 + hotbar.
+    pub fn player_inv_open(&self) -> bool {
         self.open && self.extra.is_none() && self.built_at.is_none() && !self.bag_open
+    }
+
+    pub fn inv_tab(&self) -> PlayerInvTab {
+        self.inv_tab
+    }
+
+    pub fn set_inv_tab(&mut self, tab: PlayerInvTab) {
+        self.inv_tab = tab;
     }
 
     pub fn bag_selected(&self) -> usize {
@@ -1170,25 +1193,32 @@ impl Gui {
     pub fn close_items(&mut self) {
         self.open = false;
         self.extra = None;
+        self.inv_tab = PlayerInvTab::Player;
     }
 
+    /// Recipe-book rows for EMI / Craft (not drawn on E until those slices).
+    #[allow(dead_code)]
     pub fn item_rows(&self) -> Vec<String> {
         self.rows()
     }
 
+    #[allow(dead_code)]
     pub fn selected_row(&self) -> usize {
         self.selected
     }
 
+    #[allow(dead_code)]
     pub fn select_item_row(&mut self, index: usize) {
         self.selected = index;
     }
 
+    #[allow(dead_code)]
     pub fn item_detail(&self, id: &str) -> String {
         self.book.detail(id)
     }
 
-    /// Craft the selected items-list recipe into the hotbar / bag.
+    /// Craft the selected recipe-book row into the hotbar / bag (EMI / Craft).
+    #[allow(dead_code)]
     pub fn craft_selected_into(
         &self,
         bar: &mut hotbar::Hotbar,
@@ -2389,6 +2419,7 @@ impl Gui {
                 self.open = true;
                 self.extra = None;
                 self.selected = 0;
+                self.inv_tab = PlayerInvTab::Player;
                 return true;
             }
             if let Some(index) = self.extras.iter().position(|screen| screen.open == code) {
@@ -4293,8 +4324,8 @@ pub fn feel_quads(
         return death_quads(width, height);
     }
     let mut quads = hotbar::bar_lifted(width, height, hotbar, punch.max(0.0) * 10.0);
-    // Creative + items list are egui; stations and RoseGold GUIAPI stay here.
-    if !gui.bag_open() && !gui.items_list_open() {
+    // Creative + player inventory are egui; stations and RoseGold GUIAPI stay here.
+    if !gui.bag_open() && !gui.player_inv_open() {
         quads.extend(gui.paint(width, height, bag));
     }
     quads.extend(gui.chat_quads(width, height));
@@ -6914,11 +6945,17 @@ mod tests {
         assert!(!gui.is_open());
         assert!(gui.on_press(KeyCode::KeyE));
         assert!(gui.is_open());
+        assert!(gui.player_inv_open());
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
+        gui.set_inv_tab(PlayerInvTab::Craft);
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Craft);
         assert!(!gui.on_press(KeyCode::Digit1));
         assert!(gui.is_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.is_open());
+        assert!(!gui.player_inv_open());
         assert!(gui.on_press(KeyCode::KeyE));
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
         assert!(gui.on_press(KeyCode::KeyE));
         assert!(!gui.is_open());
         let mut missing = Gui {
@@ -6933,6 +6970,7 @@ mod tests {
             selected: 0,
             bag_open: false,
             bag_selected: 0,
+            inv_tab: PlayerInvTab::Player,
             catalog_on: false,
             catalog_at: 0,
             catalog_tab: 0,
