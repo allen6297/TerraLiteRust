@@ -3023,6 +3023,12 @@ impl State {
                 self.bag.collect(id);
             }
         }
+        for id in self.gui.drain_inv_craft() {
+            moved = true;
+            if !self.hotbar.collect(id) {
+                self.bag.collect(id);
+            }
+        }
         if moved {
             self.hotbar_dirty = true;
             self.bag_dirty = true;
@@ -4859,12 +4865,16 @@ impl State {
                 .then(|| self.gui.screen_id().to_string());
             let chest_was = self.gui.chest_open();
             let station_was = self.gui.craft_open() || self.gui.furnace_open();
+            let inv_was = self.gui.player_inv_open();
             if self.gui.on_press(code) {
                 if chest_was && !self.gui.chest_open() {
                     self.flush_chest();
                     self.chest_at = None;
                 }
                 if station_was && !self.gui.craft_open() && !self.gui.furnace_open() {
+                    self.refund_station();
+                }
+                if inv_was && !self.gui.player_inv_open() {
                     self.refund_station();
                 }
                 self.clear_motion();

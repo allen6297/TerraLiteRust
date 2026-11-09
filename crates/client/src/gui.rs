@@ -5,8 +5,8 @@
 //! save, quit leaves. Up and down move the row. Enter or Space activates it.
 //! Escape during play releases the mouse, then opens pause: resume, settings,
 //! or quit to the title. E opens the player inventory (PLAYER | Craft tabs,
-//! 4x10 body slots + hotbar x10). Escape or E closes it. Craft tab is a stub
-//! until the craft grid lands; EMI / recipe browser comes later.
+//! 4x10 body slots + hotbar x10). Escape or E closes it. Craft tab hosts a
+//! 2x2 input + OUT wired to the recipe book; EMI / recipe browser comes later.
 //! F on a placed crafting table opens a textured 3x3. The items in the grid
 //! match a book recipe, and Enter takes the result. F on a furnace opens
 //! input, fuel, and output. Cobblestone cooks into stone, and stone bricks
@@ -632,6 +632,8 @@ pub struct Gui {
     /// `0..9` is the grid. `9` is the result.
     craft_selected: usize,
     craft: hotbar::Bag,
+    /// Player-inventory Craft tab 2×2 (slots `0..3`). Preview-only until taken.
+    inv_craft: hotbar::Bag,
     furnace_open: bool,
     /// `0` input, `1` fuel, `2` output.
     furnace_selected: usize,
@@ -779,6 +781,7 @@ impl Gui {
                 craft_open: false,
                 craft_selected: 0,
                 craft: hotbar::Bag::new(),
+                inv_craft: hotbar::Bag::new(),
                 furnace_open: false,
                 furnace_selected: 0,
                 furnace: hotbar::Bag::new(),
@@ -887,6 +890,7 @@ impl Gui {
                     craft_open: false,
                     craft_selected: 0,
                     craft: hotbar::Bag::new(),
+                    inv_craft: hotbar::Bag::new(),
                     furnace_open: false,
                     furnace_selected: 0,
                     furnace: hotbar::Bag::new(),
@@ -1005,6 +1009,7 @@ impl Gui {
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
+            inv_craft: hotbar::Bag::new(),
             furnace_open: false,
             furnace_selected: 0,
             furnace: hotbar::Bag::new(),
@@ -1486,6 +1491,78 @@ impl Gui {
 
     pub fn drain_craft(&mut self) -> Vec<&'static str> {
         self.craft.drain()
+    }
+
+    /// Player-inventory Craft tab input cells (`0..3`).
+    pub const INV_CRAFT: usize = 4;
+
+    pub fn inv_craft_slot(&self, index: usize) -> Option<&str> {
+        if index >= Self::INV_CRAFT {
+            return None;
+        }
+        self.inv_craft.slot(index)
+    }
+
+    pub fn inv_craft_count(&self, index: usize) -> u16 {
+        if index >= Self::INV_CRAFT {
+            return 0;
+        }
+        self.inv_craft.count(index)
+    }
+
+    /// Place one of `id` into a 2×2 input cell.
+    pub fn give_inv_craft(&mut self, index: usize, id: &str) -> bool {
+        if index >= Self::INV_CRAFT {
+            return false;
+        }
+        self.inv_craft.insert_at(index, id)
+    }
+
+    /// Take one from a 2×2 input cell.
+    pub fn take_inv_craft_slot(&mut self, index: usize) -> Option<&'static str> {
+        if index >= Self::INV_CRAFT {
+            return None;
+        }
+        self.inv_craft.take_one(index)
+    }
+
+    /// Book result for the 2×2 grid (top-left of a virtual 3×3).
+    pub fn inv_craft_preview(&self) -> Option<String> {
+        self.book.match_slots(&self.inv_craft_as_nine())
+    }
+
+    /// Spend one of each ingredient and return the result id.
+    pub fn pull_inv_craft(&mut self) -> Option<String> {
+        let result = self.inv_craft_preview()?;
+        let inputs = self.book.inputs(&result)?;
+        for id in &inputs {
+            let index = (0..Self::INV_CRAFT)
+                .find(|slot| self.inv_craft.slot(*slot) == Some(id.as_str()))?;
+            self.inv_craft.take_one(index)?;
+        }
+        Some(result)
+    }
+
+    pub fn drain_inv_craft(&mut self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        for index in 0..Self::INV_CRAFT {
+            while let Some(id) = self.inv_craft.take_one(index) {
+                out.push(id);
+            }
+        }
+        out
+    }
+
+    fn inv_craft_as_nine(&self) -> Vec<String> {
+        let mut slots = vec![String::new(); 9];
+        for index in 0..Self::INV_CRAFT {
+            let row = index / 2;
+            let col = index % 2;
+            if let Some(id) = self.inv_craft.slot(index) {
+                slots[row * 3 + col] = id.to_string();
+            }
+        }
+        slots
     }
 
     /// Input, fuel, and output. Other screens keep it closed.
@@ -4491,8 +4568,9 @@ pub fn look_label(id: &str) -> Option<String> {
 }
 
 /// A small cross at the center. `id` is the looked-at block, entity, or fluid.
-/// `held` is the selected hotbar item. Each name sits on the same plate.
-/// `held_override` replaces the hotbar name when a place shape is armed.
+/// `held` is the selected hotbar item. The look name sits bottom-right; the held
+/// name stays above the hotbar. `held_override` replaces the hotbar name when a
+/// place shape is armed.
 pub fn look_quads(
     width: f32,
     height: f32,
@@ -4512,8 +4590,10 @@ pub fn look_quads(
         pixel_quad(width, height, cx - 6.0, cy, cx + 6.0, cy + 1.0, INK),
     ];
     if let Some(label) = id.and_then(look_label) {
-        let plate_h = 16.0;
-        push_name_plate(&mut quads, width, height, &label, cx, cy - 8.0 - plate_h);
+        let plate_w = measure(&label, 1.0) + 12.0;
+        let margin = 12.0;
+        let center_x = width - margin - plate_w * 0.5;
+        push_name_plate(&mut quads, width, height, &label, center_x, margin);
     }
     let held_label = held_override
         .map(str::to_string)
@@ -6987,6 +7067,7 @@ mod tests {
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
+            inv_craft: hotbar::Bag::new(),
             furnace_open: false,
             furnace_selected: 0,
             furnace: hotbar::Bag::new(),
@@ -7151,8 +7232,12 @@ mod tests {
             .iter()
             .find(|quad| quad.color == WELL)
             .expect("name plate");
-        assert!(plate.max[1] < 0.0, "the name sits under the cross");
-        assert!((plate.min[0] + plate.max[0]).abs() < 0.05);
+        assert!(plate.min[1] < -0.5, "the look tip sits near the bottom");
+        let mid_x = (plate.min[0] + plate.max[0]) * 0.5;
+        assert!(
+            mid_x > 0.25,
+            "the look tip sits on the right, got mid={mid_x}"
+        );
         assert!(named.iter().any(|quad| quad.color == LIP));
         assert!(named.iter().any(|quad| quad.color == INK));
         let held = look_quads(200.0, 400.0, None, Some("cobblestone"), None);
@@ -8300,6 +8385,23 @@ mod tests {
         assert!(gui.chest_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.chest_open());
+    }
+
+    #[test]
+    fn inv_craft_two_by_two_matches_the_book() {
+        let mut gui = Gui::from_screen(shipped());
+        // A lone oak_log matches oak_stairs first in the book; torch is unique.
+        assert!(gui.give_inv_craft(0, "stick"));
+        assert!(gui.give_inv_craft(1, "coal_ore"));
+        assert_eq!(gui.inv_craft_preview().as_deref(), Some("torch"));
+        assert_eq!(gui.pull_inv_craft().as_deref(), Some("torch"));
+        assert!(gui.inv_craft_slot(0).is_none());
+        assert!(gui.inv_craft_slot(1).is_none());
+        assert!(gui.give_inv_craft(0, "stick"));
+        assert!(gui.give_inv_craft(2, "coal_ore"));
+        assert_eq!(gui.inv_craft_preview().as_deref(), Some("torch"));
+        assert_eq!(gui.drain_inv_craft(), vec!["stick", "coal_ore"]);
+        assert!(gui.inv_craft_preview().is_none());
     }
 
     #[test]

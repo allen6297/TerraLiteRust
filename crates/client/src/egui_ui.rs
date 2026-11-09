@@ -512,7 +512,11 @@ fn draw_player_inventory(
                             draw_inv_body_grid(ui, hotbar, bag, icons);
                         }
                         PlayerInvTab::Craft => {
-                            draw_craft_stub(ui);
+                            if draw_craft_detail(ui, gui, hotbar, bag, icons) {
+                                touched = true;
+                            }
+                            ui.add_space(12.0);
+                            draw_inv_body_grid(ui, hotbar, bag, icons);
                         }
                     }
                     ui.add_space(12.0);
@@ -521,6 +525,9 @@ fn draw_player_inventory(
                     draw_hotbar_row(ui, hotbar, icons);
                     ui.add_space(8.0);
                     if close_button(ui, "Close (E)").clicked() {
+                        if refund_inv_craft(gui, hotbar, bag) {
+                            touched = true;
+                        }
                         gui.close_items();
                     }
                 });
@@ -772,46 +779,181 @@ fn draw_hotbar_row(
     });
 }
 
-fn draw_craft_stub(ui: &mut Ui) {
+/// 2×2 INPUT + OUT wired to [`Gui::inv_craft_*`], plus a lower "2?" tray stub.
+fn draw_craft_detail(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let preview = gui.inv_craft_preview();
     Frame::new()
         .fill(ROW)
         .stroke(Stroke::new(1.0, SLOT_EDGE))
         .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::symmetric(12, 14))
         .show(ui, |ui| {
-            ui.set_min_height(SLOT * 3.0 + SLOT_GAP * 2.0);
-            ui.label(
-                RichText::new("Craft")
-                    .size(15.0)
-                    .color(INK)
-                    .strong(),
-            );
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("2x2 crafting lands next — this tab is a stub.")
-                    .size(13.0)
-                    .color(MUTED),
-            );
-            ui.add_space(10.0);
+            ui.label(RichText::new("Craft").size(15.0).color(INK).strong());
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                for _ in 0..2 {
-                    let _ = slot_button(ui, None, false, None);
-                }
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                        for index in 0..2 {
+                            if craft_input_slot(ui, gui, hotbar, bag, icons, index) {
+                                touched = true;
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                        for index in 2..4 {
+                            if craft_input_slot(ui, gui, hotbar, bag, icons, index) {
+                                touched = true;
+                            }
+                        }
+                    });
+                });
                 ui.add_space(16.0);
                 ui.vertical(|ui| {
                     ui.label(RichText::new("OUT").size(11.0).color(MUTED));
-                    let _ = slot_button(ui, None, false, None);
+                    ui.add_space(2.0);
+                    if craft_out_slot(ui, gui, hotbar, bag, icons, preview.as_deref()) {
+                        touched = true;
+                    }
                 });
             });
+            ui.add_space(10.0);
+            ui.label(RichText::new("2?").size(12.0).color(MUTED));
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                for _ in 0..2 {
-                    let _ = slot_button(ui, None, false, None);
-                }
-            });
+            Frame::new()
+                .fill(SLOT_WELL)
+                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                .corner_radius(CornerRadius::same(3))
+                .inner_margin(Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.set_min_width(SLOT * 2.0 + SLOT_GAP);
+                    let line = preview
+                        .as_deref()
+                        .map(|id| gui::tip_for(id, None).name)
+                        .unwrap_or_else(|| "empty".to_string());
+                    ui.label(RichText::new(line).size(12.0).color(DETAIL));
+                });
         });
+    touched
+}
+
+fn craft_input_slot(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+    index: usize,
+) -> bool {
+    let id = gui.inv_craft_slot(index).unwrap_or("").to_string();
+    let count = gui.inv_craft_count(index);
+    let tex = if id.is_empty() {
+        None
+    } else {
+        icon_texture(ui.ctx(), icons, &id)
+    };
+    let resp = slot_button(ui, tex, false, if count > 1 { Some(count) } else { None });
+    if !id.is_empty() {
+        let tip = gui::tip_for(&id, Some(count));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+    }
+    if !resp.clicked() {
+        return false;
+    }
+    click_craft_input(gui, hotbar, bag, index)
+}
+
+fn craft_out_slot(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+    preview: Option<&str>,
+) -> bool {
+    let tex = preview.and_then(|id| icon_texture(ui.ctx(), icons, id));
+    let resp = slot_button(ui, tex, preview.is_some(), None);
+    if let Some(id) = preview {
+        let tip = gui::tip_for(id, None);
+        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+    } else {
+        resp.clone().on_hover_ui(|ui| {
+            show_tip(
+                ui,
+                &gui::ItemTip {
+                    name: "OUT".to_string(),
+                    line: "match a recipe in the 2x2".to_string(),
+                },
+            );
+        });
+    }
+    if !resp.clicked() || preview.is_none() {
+        return false;
+    }
+    click_craft_out(gui, hotbar, bag)
+}
+
+fn click_craft_input(
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    index: usize,
+) -> bool {
+    if gui.inv_craft_slot(index).is_some() {
+        let Some(id) = gui.take_inv_craft_slot(index) else {
+            return false;
+        };
+        if !hotbar.collect(id) {
+            let _ = bag.collect(id);
+        }
+        return true;
+    }
+    let Some(held) = hotbar.slot(hotbar.selected()) else {
+        return false;
+    };
+    let held = held.to_string();
+    if !gui.give_inv_craft(index, &held) {
+        return false;
+    }
+    hotbar.consume_selected();
+    true
+}
+
+fn click_craft_out(gui: &mut Gui, hotbar: &mut Hotbar, bag: &mut hotbar::Bag) -> bool {
+    let Some(result) = gui.inv_craft_preview() else {
+        return false;
+    };
+    if !hotbar.room_for(&result) && !bag.room_for(&result) {
+        return false;
+    }
+    let Some(id) = gui.pull_inv_craft() else {
+        return false;
+    };
+    if !hotbar.collect(&id) {
+        let _ = bag.collect(&id);
+    }
+    true
+}
+
+fn refund_inv_craft(gui: &mut Gui, hotbar: &mut Hotbar, bag: &mut hotbar::Bag) -> bool {
+    let mut moved = false;
+    for id in gui.drain_inv_craft() {
+        moved = true;
+        if !hotbar.collect(id) {
+            let _ = bag.collect(id);
+        }
+    }
+    moved
 }
 
 fn close_button(ui: &mut Ui, label: &str) -> egui::Response {
@@ -1163,6 +1305,30 @@ mod tests {
         assert!(click_armor_slot(&mut hotbar, &mut bag, &mut armor, 0));
         assert!(armor.worn()[0].is_none());
         assert_eq!(hotbar.slot(hotbar.selected()), Some("leather_cap"));
+    }
+
+    #[test]
+    fn click_craft_input_and_out_make_a_torch() {
+        // Gui::new loads the EMI/datapack book (stick + coal_ore → torch).
+        let mut gui = Gui::new();
+        let mut hotbar = Hotbar::new();
+        let mut bag = hotbar::Bag::new();
+        // Slot 1 starts with cobble; fill empty selected slots via give_stack.
+        assert!(hotbar.select_digit(2));
+        assert!(hotbar.give_stack("stick"));
+        assert!(click_craft_input(&mut gui, &mut hotbar, &mut bag, 0));
+        assert_eq!(gui.inv_craft_slot(0), Some("stick"));
+        assert!(hotbar.select_digit(3));
+        assert!(hotbar.give_stack("coal_ore"));
+        assert!(click_craft_input(&mut gui, &mut hotbar, &mut bag, 1));
+        assert_eq!(gui.inv_craft_preview().as_deref(), Some("torch"));
+        assert!(click_craft_out(&mut gui, &mut hotbar, &mut bag));
+        assert!(gui.inv_craft_slot(0).is_none());
+        assert!(gui.inv_craft_slot(1).is_none());
+        assert!(
+            (0..hotbar::SLOTS).any(|i| hotbar.slot(i) == Some("torch")),
+            "torch should land in the hotbar"
+        );
     }
 
     #[test]
