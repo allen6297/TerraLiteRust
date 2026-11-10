@@ -1138,6 +1138,12 @@ pub struct State {
     crackle_mix: f32,
     /// World position of the campfire feeding `crackle_mix`, when nearby.
     crackle_at: Option<[f32; 3]>,
+    /// Eased lantern / torch proximity, `0` far through `1` at the light.
+    hiss_mix: f32,
+    /// World position of the lantern feeding `hiss_mix`, when nearby.
+    hiss_at: Option<[f32; 3]>,
+    /// Once: stood by a lantern and heard the soft hiss.
+    found_hiss: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2170,6 +2176,9 @@ impl State {
             bird_mix: 0.0,
             crackle_mix: 0.0,
             crackle_at: None,
+            hiss_mix: 0.0,
+            hiss_at: None,
+            found_hiss: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -12612,6 +12621,16 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Night lantern with soft hiss tip, then quit with a PNG.
+    pub fn arm_lantern_hiss_shot(&mut self, path: std::path::PathBuf) {
+        self.arm_lantern_shot(path);
+        self.found_hiss = true;
+        self.hiss_mix = 1.0;
+        self.hiss_at = Some([6.5, 2.45, 14.5]);
+        self.gui.push_chat("hiss");
+        self.play_world_soft(crate::audio::Sound::Hiss, [6.5, 2.45, 14.5], 0.34);
+    }
+
     fn pin_campfire_smoke_shot_camera(&mut self) {
         if self.campfire_smoke_shot_path.is_none() {
             return;
@@ -17039,6 +17058,13 @@ impl State {
         let (fire_mix, fire_at) = nearest_campfire(&self.world, eye);
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
+        let (lamp_mix, lamp_at) = nearest_lantern(&self.world, eye);
+        self.hiss_mix += (lamp_mix - self.hiss_mix) * (dt * 2.2).min(1.0);
+        self.hiss_at = lamp_at;
+        if lamp_mix > 0.35 && !self.found_hiss {
+            self.found_hiss = true;
+            self.gui.push_chat("hiss");
+        }
         self.smoke_wait = (self.smoke_wait - dt).max(0.0);
         self.ember_wait = (self.ember_wait - dt).max(0.0);
         self.sway_wait = (self.sway_wait - dt).max(0.0);
@@ -17202,6 +17228,11 @@ impl State {
                     self.play_world_soft(crate::audio::Sound::Crackle, source, level);
                 }
             }
+            if let Some(level) = self.audio.hiss_ready(dt, self.hiss_mix) {
+                if let Some(source) = self.hiss_at {
+                    self.play_world_soft(crate::audio::Sound::Hiss, source, level);
+                }
+            }
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
@@ -17211,6 +17242,7 @@ impl State {
             let _ = self.audio.wind_ready(dt, 0.0);
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
+            let _ = self.audio.hiss_ready(dt, 0.0);
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
@@ -19473,6 +19505,41 @@ fn nearest_water_edge(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>)
     }
 }
 
+/// Soft proximity to a lantern or torch. Mix is `0` outside ~9 blocks, rising
+/// to `1` at the light. Returns the light's center for spatial hiss.
+fn nearest_lantern(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 8;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 4)..=(cy + 3) {
+                let id = world.block_at(x, y, z).id;
+                if id != "lantern" && id != "torch" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.45, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 9.0 => {
+            let t = ((9.0 - dist) / 9.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// Soft proximity to nearby wheat. Mix is `0` outside ~8 blocks, rising to `1`
 /// when standing in the crop. Returns a wheat cell center for chaff.
 fn nearest_wheat(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -20183,6 +20250,20 @@ mod tests {
         assert!(src.is_some());
         let far = [fx as f32 + 24.0, fy as f32 + 1.4, fz as f32 + 24.0];
         let (away, none) = super::nearest_wheat(&cluster, far);
+        assert_eq!(away, 0.0);
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn lantern_hiss_mix_rises_by_the_pad_lantern() {
+        let cluster = rebuild_world::synthetic_cluster();
+        let at = [6.5, 2.2, 14.5];
+        assert_eq!(cluster.block_at(6, 1, 14).id, "lantern");
+        let (close, src) = super::nearest_lantern(&cluster, at);
+        assert!(close > 0.7, "standing by the lantern: {close}");
+        assert!(src.is_some());
+        let far = [26.0, 2.2, 30.0];
+        let (away, none) = super::nearest_lantern(&cluster, far);
         assert_eq!(away, 0.0);
         assert!(none.is_none());
     }

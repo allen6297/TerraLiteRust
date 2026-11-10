@@ -176,6 +176,8 @@ struct Args {
     shot_sway: Option<std::path::PathBuf>,
     /// Camp wheat crop rustle, then quit.
     shot_rustle: Option<std::path::PathBuf>,
+    /// Night lantern soft hiss, then quit.
+    shot_hiss: Option<std::path::PathBuf>,
     /// Dusk fireflies over water, then quit.
     shot_firefly: Option<std::path::PathBuf>,
     /// Wolf companion sit/follow, then quit.
@@ -341,6 +343,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_lantern: args.shot_lantern,
         shot_sway: args.shot_sway,
         shot_rustle: args.shot_rustle,
+        shot_hiss: args.shot_hiss,
         shot_firefly: args.shot_firefly,
         shot_wolf: args.shot_wolf,
         shot_cat: args.shot_cat,
@@ -423,6 +426,7 @@ struct App {
     shot_lantern: Option<std::path::PathBuf>,
     shot_sway: Option<std::path::PathBuf>,
     shot_rustle: Option<std::path::PathBuf>,
+    shot_hiss: Option<std::path::PathBuf>,
     shot_firefly: Option<std::path::PathBuf>,
     shot_wolf: Option<std::path::PathBuf>,
     shot_cat: Option<std::path::PathBuf>,
@@ -596,6 +600,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_rustle.take() {
                     state.arm_wheat_rustle_shot(path);
+                }
+                if let Some(path) = self.shot_hiss.take() {
+                    state.arm_lantern_hiss_shot(path);
                 }
                 if let Some(path) = self.shot_firefly.take() {
                     state.arm_firefly_shot(path);
@@ -860,6 +867,7 @@ where
         shot_lantern: None,
         shot_sway: None,
         shot_rustle: None,
+        shot_hiss: None,
         shot_firefly: None,
         shot_wolf: None,
         shot_cat: None,
@@ -1113,6 +1121,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-rustle".to_string())?;
                 parsed.shot_rustle = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-hiss" | "--shot-lantern-hiss" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-hiss".to_string())?;
+                parsed.shot_hiss = Some(std::path::PathBuf::from(value));
             }
             "--shot-firefly" | "--shot-fireflies" => {
                 let value = iter
