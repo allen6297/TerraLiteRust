@@ -804,8 +804,10 @@ mod tests {
     fn sneak_steps_are_farther_apart_and_softer() {
         let mut audio = Audio::new();
         assert!(audio.footstep(true, 0.01, true));
+        // Sneak interval is 0.72; a normal 0.42 gap must not fire again yet.
         assert!(!audio.footstep(true, 0.42, true));
-        assert!(audio.footstep(true, 0.30, true));
+        assert!(!audio.footstep(true, 0.20, true));
+        assert!(audio.footstep(true, 0.20, true));
         let loud = Hearing::even(1.0);
         let soft = loud.attenuate(0.35);
         assert!((soft.left - 0.35).abs() < 1e-4);
