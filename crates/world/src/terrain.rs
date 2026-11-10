@@ -193,6 +193,9 @@ pub const CAMP_FARM: (i32, i32) = (CAMP_FIRE.0 + 5, CAMP_FIRE.1);
 /// Scarecrow south of the farm plot (fence post + carved pumpkin).
 pub const CAMP_SCARECROW: (i32, i32) = (CAMP_FARM.0, CAMP_FARM.1 - 3);
 
+/// Fence hitch west of the east meadow horse pad (demo chunk `(1, 0)`).
+pub const HORSE_HITCH: (i32, i32) = (18, 6);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.

@@ -96,6 +96,11 @@ fn synthetic_chunk_at(x: i32, z: i32) -> Chunk {
     let mut blocks = wool_floor(neighbor_wool(x, z));
     if x == 1 && z == 0 {
         blocks.push((0, 1, 8, Block::new("cobblestone", 0)));
+        // West of the meadow horse: a fence post to hitch with a lead.
+        let (hx, hz) = crate::terrain::HORSE_HITCH;
+        let lx = (hx - x * 16) as u8;
+        let lz = (hz - z * 16) as u8;
+        blocks.push((lx, 1, lz, Block::new("fence", 0)));
     }
     if x != 0 && z != 0 {
         blocks.push((8, 1, 8, Block::new("cobblestone", 0)));
@@ -182,9 +187,9 @@ mod tests {
         // Center demo is 267 blocks, plus the east-edge cobblestone, the
         // stairs, four compound hosts, the coal ore, the iron ore, the sign,
         // the lantern, the perch, and the seven compound-demo cells (285).
-        // Eight wool floors are 256 each. The east neighbor and the four
-        // corners each add one cobblestone: 285 + 8 * 256 + 5 = 2338.
-        // The rest of the 31×31 square is empty.
+        // Eight wool floors are 256 each. The east neighbor adds cobblestone
+        // and the horse hitch fence; four corners each add one cobblestone:
+        // 285 + 8 * 256 + 6 = 2339. The rest of the 31×31 square is empty.
         let side = crate::WorldSize::Small.side();
         let radius = crate::WorldSize::Small.chunk_radius();
         assert_eq!(cluster.center(), (0, 0));
@@ -200,7 +205,7 @@ mod tests {
             )
         );
         assert_eq!(center.non_air_count(), 285);
-        assert_eq!(cluster.non_air_count(), 2338);
+        assert_eq!(cluster.non_air_count(), 2339);
         assert_eq!(center.block(15, 1, 8), Block::new("cobblestone", 0));
         assert_eq!(center.block(8, 1, 12), Block::new(OAK_STAIRS, 0));
         assert_eq!(center.block(9, 1, 13), Block::new(COAL_ORE, 0));
@@ -255,6 +260,11 @@ mod tests {
         assert_eq!(cluster.block_at(16, 0, 0), Block::new("wool", 4));
         assert_eq!(cluster.block_at(15, 1, 8), Block::new("cobblestone", 0));
         assert_eq!(cluster.block_at(16, 1, 8), Block::new("cobblestone", 0));
+        assert_eq!(
+            cluster.block_at(crate::terrain::HORSE_HITCH.0, 1, crate::terrain::HORSE_HITCH.1)
+                .id,
+            "fence"
+        );
         assert_eq!(
             cluster.get(-1, -1).unwrap().block(0, 0, 0),
             Block::new("wool", 0)

@@ -224,6 +224,8 @@ struct Args {
     shot_boost: Option<std::path::PathBuf>,
     /// Horse idle vs gallop FOV stitch, then quit.
     shot_horse: Option<std::path::PathBuf>,
+    /// Horse hitched to the meadow fence, then quit.
+    shot_hitch: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -349,6 +351,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_cart: args.shot_cart,
         shot_boost: args.shot_boost,
         shot_horse: args.shot_horse,
+        shot_hitch: args.shot_hitch,
         state: None,
         last_frame: Instant::now(),
     };
@@ -423,6 +426,7 @@ struct App {
     shot_cart: Option<std::path::PathBuf>,
     shot_boost: Option<std::path::PathBuf>,
     shot_horse: Option<std::path::PathBuf>,
+    shot_hitch: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -637,6 +641,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_horse.take() {
                     state.arm_horse_shot(path);
                 }
+                if let Some(path) = self.shot_hitch.take() {
+                    state.arm_hitch_shot(path);
+                }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
                 self.state = Some(state);
@@ -828,6 +835,7 @@ where
         shot_cart: None,
         shot_boost: None,
         shot_horse: None,
+        shot_hitch: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -1193,6 +1201,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-horse".to_string())?;
                 parsed.shot_horse = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-hitch" | "--shot-lead" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-hitch".to_string())?;
+                parsed.shot_hitch = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

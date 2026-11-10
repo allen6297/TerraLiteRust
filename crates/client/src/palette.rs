@@ -98,6 +98,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "button" => [0.48, 0.48, 0.52],
         "water_bucket" => [0.25, 0.45, 0.75],
         "saddle" => [0.55, 0.32, 0.16],
+        "lead" => [0.72, 0.58, 0.28],
         "clock" => [0.90, 0.78, 0.22],
         "map" => [0.76, 0.70, 0.48],
         "wool" => WOOL[(metadata as usize) & 15],

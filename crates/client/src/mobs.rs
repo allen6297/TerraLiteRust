@@ -37,6 +37,8 @@ const BOARD: f32 = 2.5;
 
 /// East meadow where the horse paces. Walk east from the stairs.
 pub const HORSE_PAD: (i32, i32) = (20, 6);
+/// Fence hitch west of the meadow horse. Same cell as `rebuild_world::HORSE_HITCH`.
+pub const HORSE_HITCH: (i32, i32) = (18, 6);
 
 const LEG: f32 = 2.0;
 const STEPS_PER_LEG: u32 = 8;
@@ -397,7 +399,7 @@ impl Pig {
     }
 }
 
-/// Wheat tames it; a saddle then lets you mount and gallop.
+/// Wheat tames it; a saddle then lets you mount and gallop. A lead hitches it to a fence.
 pub struct Horse {
     steps: u32,
     origin: [f32; 3],
@@ -405,6 +407,8 @@ pub struct Horse {
     tamed: bool,
     saddled: bool,
     ridden: bool,
+    /// Fence foot cell when hitched with a lead.
+    hitch: Option<[i32; 3]>,
     loose: u32,
 }
 
@@ -417,6 +421,7 @@ impl Horse {
             tamed: false,
             saddled: false,
             ridden: false,
+            hitch: None,
             loose: 0,
         }
     }
@@ -437,7 +442,18 @@ impl Horse {
         self.ridden
     }
 
+    pub fn hitched(&self) -> bool {
+        self.hitch.is_some()
+    }
+
+    pub fn hitch_at(&self) -> Option<[i32; 3]> {
+        self.hitch
+    }
+
     pub fn shove(&mut self, burst: [f32; 3]) -> bool {
+        if self.hitch.is_some() {
+            return false;
+        }
         let Some(gust) = crate::body::wind_push(burst, self.origin) else {
             return false;
         };
@@ -448,6 +464,9 @@ impl Horse {
     }
 
     pub fn bump(&mut self, from: [f32; 3]) -> bool {
+        if self.hitch.is_some() {
+            return false;
+        }
         bump_origin(&mut self.origin, &mut self.loose, from)
     }
 
@@ -469,8 +488,28 @@ impl Horse {
         true
     }
 
+    /// Tie a tamed horse to a fence foot cell. False when wild, ridden, or already hitched.
+    pub fn hitch(&mut self, fence: [i32; 3]) -> bool {
+        if !self.tamed || self.ridden || self.hitch.is_some() {
+            return false;
+        }
+        self.hitch = Some(fence);
+        self.origin = [
+            fence[0] as f32 + 1.35,
+            fence[1] as f32,
+            fence[2] as f32 + 0.5,
+        ];
+        self.yaw = 0.0;
+        true
+    }
+
+    /// Untie from the hitch. Returns the fence cell when one was set.
+    pub fn untie(&mut self) -> Option<[i32; 3]> {
+        self.hitch.take()
+    }
+
     pub fn mount(&mut self) -> bool {
-        if !self.saddled {
+        if !self.saddled || self.hitch.is_some() {
             return false;
         }
         self.ridden = true;
@@ -536,13 +575,13 @@ impl Horse {
         moved
     }
 
-    /// Pace the meadow until tamed or saddled.
+    /// Pace the meadow until tamed, saddled, or hitched.
     pub fn tick_near(&mut self, count: u32, player: [f32; 2], world: &Cluster) {
         if self.loose > 0 {
             self.loose = self.loose.saturating_sub(count);
             return;
         }
-        if self.saddled || self.ridden {
+        if self.saddled || self.ridden || self.hitch.is_some() {
             return;
         }
         let from_x = self.origin[0];
@@ -618,6 +657,28 @@ impl Horse {
                 [0.3, 0.07, 0.2],
                 [0.42, 0.26, 0.14],
             );
+        }
+        if let Some(fence) = self.hitch {
+            let neck = [x - 0.35, y + 1.05, z];
+            let post = [
+                fence[0] as f32 + 0.5,
+                fence[1] as f32 + 1.05,
+                fence[2] as f32 + 0.5,
+            ];
+            let mid = [
+                (neck[0] + post[0]) * 0.5,
+                (neck[1] + post[1]) * 0.5 - 0.08,
+                (neck[2] + post[2]) * 0.5,
+            ];
+            let dx = post[0] - neck[0];
+            let dy = post[1] - neck[1];
+            let dz = post[2] - neck[2];
+            let len = (dx * dx + dy * dy + dz * dz).sqrt().max(0.2);
+            let half = [len * 0.5, 0.03, 0.03];
+            let rope = [0.72, 0.58, 0.28];
+            push_box(&mut out, mid, half, rope);
+            push_box(&mut out, neck, [0.05, 0.05, 0.05], rope);
+            push_box(&mut out, post, [0.05, 0.05, 0.05], rope);
         }
         yaw_mesh(&mut out, self.origin, self.yaw);
         out
@@ -5741,5 +5802,15 @@ mod tests {
         horse.dismount();
         assert!(!horse.ridden());
         assert!(horse.vertices().len() > 100);
+        let before = horse.vertices().len();
+        let fence = [HORSE_HITCH.0, 1, HORSE_HITCH.1];
+        assert!(horse.hitch(fence));
+        assert!(horse.hitched());
+        assert_eq!(horse.hitch_at(), Some(fence));
+        assert!(!horse.mount());
+        assert!(!horse.hitch(fence));
+        assert!(horse.vertices().len() > before);
+        assert_eq!(horse.untie(), Some(fence));
+        assert!(!horse.hitched());
     }
 }

@@ -6136,6 +6136,11 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.lead_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.clock_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);

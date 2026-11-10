@@ -1080,6 +1080,7 @@ pub struct State {
     /// Once: walked up to the pad parrot.
     found_parrot: bool,
     found_horse: bool,
+    found_hitch: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -2102,6 +2103,7 @@ impl State {
             found_cat: false,
             found_parrot: false,
             found_horse: false,
+            found_hitch: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3906,6 +3908,10 @@ impl State {
             self.found_horse = true;
             self.gui.push_chat("a horse");
         }
+        if !self.found_hitch && near(crate::mobs::HORSE_HITCH.0, crate::mobs::HORSE_HITCH.1) {
+            self.found_hitch = true;
+            self.gui.push_chat("a hitch");
+        }
     }
 
     /// Step the demo zombie back when it wanders near the camp scarecrow.
@@ -5647,6 +5653,89 @@ impl State {
         true
     }
 
+    /// Fence foot under the meadow hitch. Places one on the wool floor when missing.
+    fn horse_hitch_cell(&mut self) -> Option<[i32; 3]> {
+        let (hx, hz) = crate::mobs::HORSE_HITCH;
+        for y in 0..80 {
+            if self.world.block_at(hx, y, hz).id == "fence" {
+                return Some([hx, y, hz]);
+            }
+        }
+        let y = 1;
+        if self.world.block_at(hx, y, hz).is_air() {
+            apply_changes(
+                &mut self.world,
+                &[CellChange {
+                    x: hx,
+                    y,
+                    z: hz,
+                    block: Block::new("fence", 0),
+                }],
+            );
+            self.chunk_bake.touch(hx, hz);
+            return Some([hx, y, hz]);
+        }
+        None
+    }
+
+    /// Lead a tamed horse to the meadow hitch, or untie one already hitched.
+    fn try_lead(&mut self) -> bool {
+        let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+        let forward = self.camera.forward();
+        let forward = [forward.x, forward.y, forward.z];
+        if !self.horse.aimed(eye, forward) {
+            return false;
+        }
+        if self.horse.hitched() {
+            let Some(fence) = self.horse.untie() else {
+                return true;
+            };
+            let _ = fence;
+            if !self.hotbar.collect("lead") {
+                self.bag.collect("lead");
+                self.bag_dirty = true;
+            }
+            self.hotbar_dirty = true;
+            self.rebuild_horse();
+            self.gui.push_chat("untied");
+            return true;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_lead(id) {
+            return false;
+        }
+        if !self.horse.tamed() {
+            self.gui.push_chat("tame first");
+            return true;
+        }
+        if self.horse.ridden() {
+            self.gui.push_chat("dismount first");
+            return true;
+        }
+        let Some(fence) = self.horse_hitch_cell() else {
+            self.gui.push_chat("no hitch");
+            return true;
+        };
+        let [hx, _, hz] = fence;
+        let [ox, _, oz] = self.horse.origin();
+        let dx = ox - (hx as f32 + 0.5);
+        let dz = oz - (hz as f32 + 0.5);
+        if dx * dx + dz * dz > 36.0 {
+            self.gui.push_chat("too far");
+            return true;
+        }
+        if self.horse.hitch(fence) {
+            self.hotbar.consume_selected();
+            self.hotbar_dirty = true;
+            self.rebuild_horse();
+            self.gui.push_chat("hitched");
+            self.play_world(crate::audio::Sound::Step, self.horse.origin());
+        }
+        true
+    }
+
     /// Put the held saddle on the horse or pig when the look ray hits it.
     fn try_saddle(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -6859,6 +6948,7 @@ impl State {
             || self.try_cat()
             || self.try_wolf()
             || self.try_horse()
+            || self.try_lead()
             || self.try_cook_heat()
             || self.try_blast_heat()
             || self.try_furnace_heat()
@@ -7871,6 +7961,57 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Tamed horse hitched to the meadow fence with a lead rope, then quit with a PNG.
+    pub fn arm_hitch_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let fence = self
+            .horse_hitch_cell()
+            .expect("meadow hitch fence");
+        self.horse = crate::mobs::Horse::new();
+        assert!(self.horse.feed());
+        assert!(self.horse.hitch(fence));
+        self.rebuild_horse();
+        let [ox, oy, oz] = self.horse.origin();
+        let focus = glam::Vec3::new(ox - 0.55, oy + 1.05, oz);
+        let eye = glam::Vec3::new(ox + 2.2, oy + 1.45 + body::EYE_HEIGHT, oz + 2.6);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.found_horse = true;
+        self.found_hitch = true;
+        self.gui.push_chat("hitched");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("wheat");
+        let _ = self.hotbar.give_stack("lead");
+        self.hotbar_dirty = true;
+        let (hx, hz) = crate::mobs::HORSE_HITCH;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(hx + dx * 8, hz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -13974,15 +14115,18 @@ impl State {
                         .near([self.camera.eye.x, self.camera.eye.y, self.camera.eye.z])
                     && !self.looking_at_use()
                 {
-                    self.horse.mount();
-                    if let Some(seat) = self.horse.seat() {
-                        self.camera.eye = glam::Vec3::from(seat);
-                        self.camera.velocity_y = 0.0;
-                        self.camera.on_ground = true;
-                        self.play_world(crate::audio::Sound::Step, seat);
+                    if self.horse.hitched() {
+                        self.gui.push_chat("untie first");
+                    } else if self.horse.mount() {
+                        if let Some(seat) = self.horse.seat() {
+                            self.camera.eye = glam::Vec3::from(seat);
+                            self.camera.velocity_y = 0.0;
+                            self.camera.on_ground = true;
+                            self.play_world(crate::audio::Sound::Step, seat);
+                        }
+                        self.clear_horse_feel();
+                        self.gui.push_chat("mounted");
                     }
-                    self.clear_horse_feel();
-                    self.gui.push_chat("mounted");
                 } else if self.pig.saddled()
                     && self
                         .pig

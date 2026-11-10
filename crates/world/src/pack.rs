@@ -376,6 +376,11 @@ struct MinecartDef {
     icon: String,
 }
 
+struct LeadDef {
+    id: String,
+    icon: String,
+}
+
 struct CompassDef {
     id: String,
     icon: String,
@@ -527,6 +532,8 @@ pub struct Pack {
     boats: Vec<BoatDef>,
     /// Minecarts from the data pack. They place a hull on rails.
     minecarts: Vec<MinecartDef>,
+    /// Leads from the data pack. One hitches a tamed horse to a fence.
+    leads: Vec<LeadDef>,
     /// Compasses from the data pack. Holding one points at the stairs.
     compasses: Vec<CompassDef>,
     /// Spyglasses from the data pack. Holding one zooms the view.
@@ -610,6 +617,7 @@ impl Pack {
             shields: Vec::new(),
             boats: Vec::new(),
             minecarts: Vec::new(),
+            leads: Vec::new(),
             compasses: Vec::new(),
             spyglasses: Vec::new(),
             brushes: Vec::new(),
@@ -2159,6 +2167,12 @@ impl Pack {
                     .map(|cart| cart.icon.as_str())
             })
             .or_else(|| {
+                self.leads
+                    .iter()
+                    .find(|lead| lead.id == id)
+                    .map(|lead| lead.icon.as_str())
+            })
+            .or_else(|| {
                 self.compasses
                     .iter()
                     .find(|compass| compass.id == id)
@@ -2669,6 +2683,16 @@ impl Pack {
         self.minecarts.iter().map(|cart| cart.id.clone()).collect()
     }
 
+    /// True when `id` hitches a tamed horse to a fence.
+    pub fn is_lead(&self, id: &str) -> bool {
+        self.leads.iter().any(|lead| lead.id == id)
+    }
+
+    /// Lead ids, in data-pack order.
+    pub fn lead_ids(&self) -> Vec<String> {
+        self.leads.iter().map(|lead| lead.id.clone()).collect()
+    }
+
     /// True when `id` is a shield. Holding it blocks zombie bites.
     pub fn is_shield(&self, id: &str) -> bool {
         self.shields.iter().any(|shield| shield.id == id)
@@ -2793,6 +2817,7 @@ impl Pack {
         let mut shields = Vec::new();
         let mut boats = Vec::new();
         let mut minecarts = Vec::new();
+        let mut leads = Vec::new();
         let mut compasses = Vec::new();
         let mut spyglasses = Vec::new();
         let mut brushes = Vec::new();
@@ -2833,6 +2858,7 @@ impl Pack {
                 || shields.iter().any(|shield: &ShieldDef| shield.id == id)
                 || boats.iter().any(|boat: &BoatDef| boat.id == id)
                 || minecarts.iter().any(|cart: &MinecartDef| cart.id == id)
+                || leads.iter().any(|lead: &LeadDef| lead.id == id)
                 || compasses
                     .iter()
                     .any(|compass: &CompassDef| compass.id == id)
@@ -2873,6 +2899,7 @@ impl Pack {
                 PackItem::Shield(shield) => shields.push(shield),
                 PackItem::Boat(boat) => boats.push(boat),
                 PackItem::Minecart(cart) => minecarts.push(cart),
+                PackItem::Lead(lead) => leads.push(lead),
                 PackItem::Compass(compass) => compasses.push(compass),
                 PackItem::Spyglass(glass) => spyglasses.push(glass),
                 PackItem::Brush(brush) => brushes.push(brush),
@@ -2906,6 +2933,7 @@ impl Pack {
         self.shields = shields;
         self.boats = boats;
         self.minecarts = minecarts;
+        self.leads = leads;
         self.compasses = compasses;
         self.spyglasses = spyglasses;
         self.brushes = brushes;
@@ -2942,6 +2970,7 @@ enum PackItem {
     Shield(ShieldDef),
     Boat(BoatDef),
     Minecart(MinecartDef),
+    Lead(LeadDef),
     Compass(CompassDef),
     Spyglass(SpyglassDef),
     Brush(BrushDef),
@@ -3143,6 +3172,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             return Err(format!("{id}.json icon {icon} is a bad id"));
         }
         return Ok(PackItem::Minecart(MinecartDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
+    if obj.contains_key("lead") {
+        require_only(obj, &["lead", "icon"], &format!("{id}.json"))?;
+        if obj.get("lead") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json lead must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Lead(LeadDef {
             id: id.to_string(),
             icon: icon.to_string(),
         }));
@@ -3695,6 +3741,7 @@ impl Pack {
             shields: Vec::new(),
             boats: Vec::new(),
             minecarts: Vec::new(),
+            leads: Vec::new(),
             compasses: Vec::new(),
             spyglasses: Vec::new(),
             brushes: Vec::new(),
@@ -7235,6 +7282,10 @@ mod tests {
         assert!(!pack.is_minecart("boat"));
         assert_eq!(pack.tool_icon("minecart"), Some("iron_ore"));
         assert!(pack.minecart_ids().contains(&"minecart".to_string()));
+        assert!(pack.is_lead("lead"));
+        assert!(!pack.is_lead("saddle"));
+        assert_eq!(pack.tool_icon("lead"), Some("tripwire"));
+        assert!(pack.lead_ids().contains(&"lead".to_string()));
         assert_eq!(pack.hardness_of(Block::new("rail", 0)), Some(0.7));
         assert_eq!(pack.hardness_of(Block::new("powered_rail", 0)), Some(0.7));
         assert!(pack.is_compass("compass"));
