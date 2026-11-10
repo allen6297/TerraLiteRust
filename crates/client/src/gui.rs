@@ -125,6 +125,23 @@ const LETTERS: [[u8; 5]; 26] = [
     [0b000, 0b111, 0b010, 0b100, 0b111],
 ];
 
+/// Three-wide digits `0..=9`, top to bottom. The high bit of the three is left.
+const DIGITS: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111], // 0
+    [0b010, 0b110, 0b010, 0b010, 0b111], // 1
+    [0b111, 0b001, 0b111, 0b100, 0b111], // 2
+    [0b111, 0b001, 0b111, 0b001, 0b111], // 3
+    [0b101, 0b101, 0b111, 0b001, 0b001], // 4
+    [0b111, 0b100, 0b111, 0b001, 0b111], // 5
+    [0b111, 0b100, 0b111, 0b101, 0b111], // 6
+    [0b111, 0b001, 0b001, 0b001, 0b001], // 7
+    [0b111, 0b101, 0b111, 0b101, 0b111], // 8
+    [0b111, 0b101, 0b111, 0b001, 0b111], // 9
+];
+
+/// Slash `/` (3-wide, 5 rows).
+const SLASH: [u8; 5] = [0b001, 0b001, 0b010, 0b100, 0b100];
+
 /// Five-wide capitals, top to bottom. The high bit of the five is the left column.
 const CAPITALS: [[u8; 7]; 26] = [
     [
@@ -7681,7 +7698,7 @@ fn glyph_advance(ch: char, scale: f32) -> f32 {
     if ch.is_ascii_uppercase() {
         return 5.0 * CELL * scale;
     }
-    if ch.is_ascii_lowercase() {
+    if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '/' {
         return 3.0 * CELL * scale;
     }
     0.0
@@ -7742,6 +7759,10 @@ fn draw_glyphs(
             }
         } else if let Some(rows) = letter_rows(ch) {
             blit(quads, width, height, x, y, &rows, 3, cell, color);
+        } else if let Some(rows) = digit_rows(ch) {
+            blit(quads, width, height, x, y, &rows, 3, cell, color);
+        } else if ch == '/' {
+            blit(quads, width, height, x, y, &SLASH, 3, cell, color);
         }
         x += adv;
     }
@@ -7782,6 +7803,14 @@ fn blit(
 fn letter_rows(ch: char) -> Option<[u8; 5]> {
     if ch.is_ascii_lowercase() {
         Some(LETTERS[(ch as u8 - b'a') as usize])
+    } else {
+        None
+    }
+}
+
+fn digit_rows(ch: char) -> Option<[u8; 5]> {
+    if ch.is_ascii_digit() {
+        Some(DIGITS[(ch as u8 - b'0') as usize])
     } else {
         None
     }
@@ -8118,6 +8147,10 @@ mod tests {
         let tank_w = measure("Tank  water 3/8", 1.0) + 12.0;
         let oak_w = measure("Oak Log", 1.0) + 12.0;
         assert!(tank_w > oak_w, "tank level tip is wider than a bare name");
+        assert!(
+            measure("3/8", 1.0) > measure("water", 1.0) * 0.3,
+            "digits and slash take glyph width"
+        );
         let held = look_quads(200.0, 400.0, None, Some("cobblestone"), None, 1.0);
         let held_plate = held
             .iter()
