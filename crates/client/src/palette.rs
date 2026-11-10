@@ -195,6 +195,8 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "vine" => [0.18, 0.55, 0.22],
         "lily_pad" => [0.24, 0.62, 0.28],
         "snow" => [0.93, 0.95, 0.98],
+        "obsidian" => [0.12, 0.06, 0.18],
+        "crying_obsidian" => [0.28, 0.08, 0.42],
         "sugar_cane" => [0.55, 0.78, 0.36],
         "chorus_plant" => [0.58, 0.28, 0.72],
         "chorus_flower" => [0.82, 0.46, 0.94],

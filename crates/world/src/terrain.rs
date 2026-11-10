@@ -153,6 +153,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_camp(&mut blocks, chunk_x, chunk_z);
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
+    stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
@@ -389,6 +390,17 @@ pub const SHAFT_LODESTONE: (i32, i32) = (SHAFT_MOUTH.0 - 1, SHAFT_MOUTH.1 + 2);
 
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
+/// Ruined nether-portal frame, northwest of the demo pad.
+///
+/// The chunk is `(-2, -2)`. Walk west past the pad, then north. Incomplete
+/// obsidian / crying-obsidian upright with a loot chest on the apron.
+pub const RUINED_PORTAL: (i32, i32) = (-24, -24);
+
+/// Loot chest on the ruined portal apron, two blocks east of the SE foot.
+pub const RUINED_PORTAL_CHEST: (i32, i32) = (RUINED_PORTAL.0 + 2, RUINED_PORTAL.1 + 1);
+
+const PORTAL_CHUNK: (i32, i32) = (-2, -2);
+
 /// Broken stone-brick shrine, southeast of the demo pad.
 ///
 /// The chunk is `(2, 2)`. Walk east past the pad, then south. A chest sits on
@@ -535,6 +547,105 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((brew_x, floor, brew_z, Block::new("brewing_stand", 0)));
     // Nether wart beside it so the brew loop is findable without creative give.
     blocks.push((brew_x - 1, floor, brew_z, Block::new("nether_wart_block", 0)));
+}
+
+/// Incomplete portal frame + apron + chest. Guaranteed in [`PORTAL_CHUNK`];
+/// rare copies in other non-reserved chunks.
+fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    let guaranteed = (chunk_x, chunk_z) == PORTAL_CHUNK;
+    let reserved = matches!(
+        (chunk_x, chunk_z),
+        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | (0, 0)
+    );
+    if !guaranteed {
+        if reserved || hash2(chunk_x.wrapping_mul(31), chunk_z.wrapping_mul(17)) % 113 != 0 {
+            return;
+        }
+    }
+    let (cx, cz) = if guaranteed {
+        RUINED_PORTAL
+    } else {
+        (chunk_x * 16 + 8, chunk_z * 16 + 8)
+    };
+    let floor = column_height(cx, cz, biome_at(cx, cz)).max(2);
+    // Clear a small pad so the frame stands free, then lay the apron.
+    let x0 = ((cx - 2) - chunk_x * 16) as u8;
+    let x1 = ((cx + 4) - chunk_x * 16) as u8;
+    let z0 = ((cz - 2) - chunk_z * 16) as u8;
+    let z1 = ((cz + 3) - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x >= x0 && *x <= x1 && *z >= z0 && *z <= z1 && *y + 1 >= floor));
+    for dz in -2..=3 {
+        for dx in -2..=4 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            // Netherrack / magma apron under the ruin.
+            let apron = if (dx + dz).rem_euclid(3) == 0 {
+                Block::new("magma", 0)
+            } else if (dx * 2 + dz).rem_euclid(4) == 0 {
+                Block::new("netherrack", 0)
+            } else {
+                Block::new("blackstone", 0)
+            };
+            blocks.push((lx, floor - 1, lz, apron));
+        }
+    }
+    let obsidian = Block::new("obsidian", 0);
+    let crying = Block::new("crying_obsidian", 0);
+    let cracked = Block::new("cracked_blackstone_bricks", 0);
+    // Outer frame 4 wide × 5 tall, incomplete (classic ruined portal silhouette).
+    // Columns at dx=0 and dx=3; bottom lintel dy=0; broken top.
+    let frame = [
+        // West column (mostly intact).
+        (0, 0, false),
+        (0, 1, false),
+        (0, 2, true),
+        (0, 3, false),
+        // East column (gappy).
+        (3, 0, false),
+        (3, 1, true),
+        (3, 3, false),
+        // Bottom lintel (one missing).
+        (1, 0, false),
+        // Top lintel fragments.
+        (1, 4, true),
+        (2, 4, false),
+        // Fallen / cracked rubble beside the east foot.
+        (4, 0, false),
+    ];
+    for &(dx, dy, tear) in &frame {
+        let wx = cx + dx;
+        let wz = cz;
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (wz - chunk_z * 16) as u8;
+        let block = if tear {
+            crying
+        } else if dx == 4 {
+            cracked
+        } else {
+            obsidian
+        };
+        blocks.push((lx, floor + dy as u16, lz, block));
+    }
+    // Extra cracked rubble on the apron.
+    let rubble = [(1, 1), (2, -1), (-1, 0), (3, 2)];
+    for &(dx, dz) in &rubble {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        blocks.push((lx, floor, lz, cracked));
+    }
+    // Loot chest east of the SE foot.
+    let (chest_x, chest_z) = if guaranteed {
+        RUINED_PORTAL_CHEST
+    } else {
+        (cx + 2, cz + 1)
+    };
+    let chest_lx = (chest_x - chunk_x * 16) as u8;
+    let chest_lz = (chest_z - chunk_z * 16) as u8;
+    blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
+    // Gold fleck so the ruin reads "nether" even from a distance.
+    let gold_lx = (cx + 1 - chunk_x * 16) as u8;
+    let gold_lz = (cz + 2 - chunk_z * 16) as u8;
+    blocks.push((gold_lx, floor, gold_lz, Block::new("gilded_blackstone", 0)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -1139,6 +1250,46 @@ mod tests {
         );
         assert_ne!(SHRINE_CHUNK, CAMP_CHUNK);
         assert_ne!(SHRINE_CHUNK, SHAFT_CHUNK);
+        assert_ne!(SHRINE_CHUNK, PORTAL_CHUNK);
+    }
+
+    #[test]
+    fn a_ruined_portal_stands_northwest_of_the_pad() {
+        let portal = generate_chunk(-2, -2);
+        let (cx, cz) = RUINED_PORTAL;
+        let lx = (cx - (-2) * 16) as u8;
+        let lz = (cz - (-2) * 16) as u8;
+        let floor = column_height(cx, cz, biome_at(cx, cz)).max(2);
+        let mut obsidian = false;
+        let mut crying = false;
+        for y in floor..(floor + 5) {
+            let id = portal.block(lx, y, lz).id;
+            if id == "obsidian" {
+                obsidian = true;
+            }
+            if id == "crying_obsidian" {
+                crying = true;
+            }
+        }
+        assert!(obsidian, "west column should include obsidian");
+        assert!(crying, "frame should include crying obsidian");
+        let chest_lx = (RUINED_PORTAL_CHEST.0 - (-2) * 16) as u8;
+        let chest_lz = (RUINED_PORTAL_CHEST.1 - (-2) * 16) as u8;
+        assert_eq!(
+            portal.block(chest_lx, floor, chest_lz).id,
+            "chest",
+            "loot chest on the apron"
+        );
+        assert_ne!(PORTAL_CHUNK, CAMP_CHUNK);
+        assert_ne!(PORTAL_CHUNK, SHAFT_CHUNK);
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster
+                .block_at(RUINED_PORTAL_CHEST.0, i32::from(floor), RUINED_PORTAL_CHEST.1)
+                .id,
+            "chest"
+        );
     }
 
     #[test]

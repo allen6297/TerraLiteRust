@@ -268,6 +268,8 @@ struct Args {
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
     shot_mine: Option<std::path::PathBuf>,
+    /// Northwest ruined portal frame + chest, then quit.
+    shot_portal: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
     /// Axolotl companion swim, then quit.
@@ -532,6 +534,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         creative: args.creative,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
+        shot_portal: args.shot_portal,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
         shot_frog: args.shot_frog,
@@ -681,6 +684,7 @@ struct App {
     creative: bool,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
+    shot_portal: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
     shot_frog: Option<std::path::PathBuf>,
@@ -1000,6 +1004,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_mine.take() {
                     state.arm_mine_shot(path);
+                }
+                if let Some(path) = self.shot_portal.take() {
+                    state.arm_ruined_portal_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -1368,6 +1375,7 @@ where
         creative: false,
         shot_shrine: None,
         shot_mine: None,
+        shot_portal: None,
         shot_keybinds: None,
         shot_axolotl: None,
         shot_frog: None,
@@ -1900,6 +1908,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-mine".to_string())?;
                 parsed.shot_mine = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-portal" | "--shot-ruined-portal" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-portal".to_string())?;
+                parsed.shot_portal = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter
