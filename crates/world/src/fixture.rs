@@ -96,11 +96,15 @@ fn synthetic_chunk_at(x: i32, z: i32) -> Chunk {
     let mut blocks = wool_floor(neighbor_wool(x, z));
     if x == 1 && z == 0 {
         blocks.push((0, 1, 8, Block::new("cobblestone", 0)));
-        // West of the meadow horse: a fence post to hitch with a lead.
+        // West of the meadow horse: a hitch post plus a fenced stable ring.
         let (hx, hz) = crate::terrain::HORSE_HITCH;
-        let lx = (hx - x * 16) as u8;
-        let lz = (hz - z * 16) as u8;
-        blocks.push((lx, 1, lz, Block::new("fence", 0)));
+        blocks.push((
+            (hx - x * 16) as u8,
+            1,
+            (hz - z * 16) as u8,
+            Block::new("fence", 0),
+        ));
+        push_horse_stable(&mut blocks, x, z);
     }
     if x != 0 && z != 0 {
         blocks.push((8, 1, 8, Block::new("cobblestone", 0)));
@@ -112,6 +116,28 @@ fn neighbor_wool(x: i32, z: i32) -> u8 {
     let index = (z + 1) * 3 + (x + 1);
     let metadata = if index > 4 { index - 1 } else { index };
     metadata as u8
+}
+
+/// Fence ring around the meadow horse with a west-facing gate.
+fn push_horse_stable(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    let (x0, x1, z0, z1) = crate::terrain::HORSE_STABLE;
+    let (gx, gz) = crate::terrain::HORSE_STABLE_GATE;
+    for wz in z0..=z1 {
+        for wx in x0..=x1 {
+            let edge = wx == x0 || wx == x1 || wz == z0 || wz == z1;
+            if !edge {
+                continue;
+            }
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            let id = if wx == gx && wz == gz {
+                "fence_gate"
+            } else {
+                "fence"
+            };
+            blocks.push((lx, 1, lz, Block::new(id, 0)));
+        }
+    }
 }
 
 fn wool_floor(metadata: u8) -> Vec<(u8, u16, u8, Block)> {
@@ -187,9 +213,10 @@ mod tests {
         // Center demo is 267 blocks, plus the east-edge cobblestone, the
         // stairs, four compound hosts, the coal ore, the iron ore, the sign,
         // the lantern, the perch, and the seven compound-demo cells (285).
-        // Eight wool floors are 256 each. The east neighbor adds cobblestone
-        // and the horse hitch fence; four corners each add one cobblestone:
-        // 285 + 8 * 256 + 6 = 2339. The rest of the 31×31 square is empty.
+        // Eight wool floors are 256 each. The east neighbor adds cobblestone,
+        // the hitch fence, and the stable ring (17 fence + 1 gate); four
+        // corners each add one cobblestone: 285 + 8 * 256 + 24 = 2357.
+        // The rest of the 31×31 square is empty.
         let side = crate::WorldSize::Small.side();
         let radius = crate::WorldSize::Small.chunk_radius();
         assert_eq!(cluster.center(), (0, 0));
@@ -205,7 +232,7 @@ mod tests {
             )
         );
         assert_eq!(center.non_air_count(), 285);
-        assert_eq!(cluster.non_air_count(), 2339);
+        assert_eq!(cluster.non_air_count(), 2357);
         assert_eq!(center.block(15, 1, 8), Block::new("cobblestone", 0));
         assert_eq!(center.block(8, 1, 12), Block::new(OAK_STAIRS, 0));
         assert_eq!(center.block(9, 1, 13), Block::new(COAL_ORE, 0));
@@ -265,6 +292,20 @@ mod tests {
                 .id,
             "fence"
         );
+        assert_eq!(
+            cluster
+                .block_at(
+                    crate::terrain::HORSE_STABLE_GATE.0,
+                    1,
+                    crate::terrain::HORSE_STABLE_GATE.1
+                )
+                .id,
+            "fence_gate"
+        );
+        let (sx0, sx1, sz0, sz1) = crate::terrain::HORSE_STABLE;
+        assert_eq!(cluster.block_at(sx1, 1, sz0).id, "fence");
+        assert_eq!(cluster.block_at(sx0, 1, sz1).id, "fence");
+        assert!(cluster.block_at(sx0 + 1, 1, sz0 + 1).is_air());
         assert_eq!(
             cluster.get(-1, -1).unwrap().block(0, 0, 0),
             Block::new("wool", 0)

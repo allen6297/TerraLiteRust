@@ -226,6 +226,8 @@ struct Args {
     shot_horse: Option<std::path::PathBuf>,
     /// Horse hitched to the meadow fence, then quit.
     shot_hitch: Option<std::path::PathBuf>,
+    /// Meadow horse stable fence ring, then quit.
+    shot_stable: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -352,6 +354,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_boost: args.shot_boost,
         shot_horse: args.shot_horse,
         shot_hitch: args.shot_hitch,
+        shot_stable: args.shot_stable,
         state: None,
         last_frame: Instant::now(),
     };
@@ -427,6 +430,7 @@ struct App {
     shot_boost: Option<std::path::PathBuf>,
     shot_horse: Option<std::path::PathBuf>,
     shot_hitch: Option<std::path::PathBuf>,
+    shot_stable: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -644,6 +648,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_hitch.take() {
                     state.arm_hitch_shot(path);
                 }
+                if let Some(path) = self.shot_stable.take() {
+                    state.arm_stable_shot(path);
+                }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
                 self.state = Some(state);
@@ -836,6 +843,7 @@ where
         shot_boost: None,
         shot_horse: None,
         shot_hitch: None,
+        shot_stable: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -1207,6 +1215,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-hitch".to_string())?;
                 parsed.shot_hitch = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-stable" | "--shot-meadow-stable" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-stable".to_string())?;
+                parsed.shot_stable = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

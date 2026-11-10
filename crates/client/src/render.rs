@@ -1081,6 +1081,7 @@ pub struct State {
     found_parrot: bool,
     found_horse: bool,
     found_hitch: bool,
+    found_stable: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -2104,6 +2105,7 @@ impl State {
             found_parrot: false,
             found_horse: false,
             found_hitch: false,
+            found_stable: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3912,6 +3914,12 @@ impl State {
             self.found_hitch = true;
             self.gui.push_chat("a hitch");
         }
+        let (gx, gz) = rebuild_world::HORSE_STABLE_GATE;
+        if !self.found_stable && near(gx, gz) {
+            self.ensure_horse_stable();
+            self.found_stable = true;
+            self.gui.push_chat("a stable");
+        }
     }
 
     /// Step the demo zombie back when it wanders near the camp scarecrow.
@@ -5653,29 +5661,59 @@ impl State {
         true
     }
 
-    /// Fence foot under the meadow hitch. Places one on the wool floor when missing.
+    /// Fence foot under the meadow hitch. Places the stable ring when missing.
     fn horse_hitch_cell(&mut self) -> Option<[i32; 3]> {
+        self.ensure_horse_stable();
         let (hx, hz) = crate::mobs::HORSE_HITCH;
         for y in 0..80 {
             if self.world.block_at(hx, y, hz).id == "fence" {
                 return Some([hx, y, hz]);
             }
         }
-        let y = 1;
-        if self.world.block_at(hx, y, hz).is_air() {
-            apply_changes(
-                &mut self.world,
-                &[CellChange {
-                    x: hx,
-                    y,
-                    z: hz,
-                    block: Block::new("fence", 0),
-                }],
-            );
-            self.chunk_bake.touch(hx, hz);
-            return Some([hx, y, hz]);
-        }
         None
+    }
+
+    /// Stamp the meadow hitch post and stable fence ring onto empty wool cells.
+    fn ensure_horse_stable(&mut self) {
+        let y = 1i32;
+        let mut changes = Vec::new();
+        let (hx, hz) = crate::mobs::HORSE_HITCH;
+        if self.world.block_at(hx, y, hz).is_air() {
+            changes.push(CellChange {
+                x: hx,
+                y,
+                z: hz,
+                block: Block::new("fence", 0),
+            });
+        }
+        let (x0, x1, z0, z1) = rebuild_world::HORSE_STABLE;
+        let (gx, gz) = rebuild_world::HORSE_STABLE_GATE;
+        for wz in z0..=z1 {
+            for wx in x0..=x1 {
+                let edge = wx == x0 || wx == x1 || wz == z0 || wz == z1;
+                if !edge || !self.world.block_at(wx, y, wz).is_air() {
+                    continue;
+                }
+                let id = if wx == gx && wz == gz {
+                    "fence_gate"
+                } else {
+                    "fence"
+                };
+                changes.push(CellChange {
+                    x: wx,
+                    y,
+                    z: wz,
+                    block: Block::new(id, 0),
+                });
+            }
+        }
+        if changes.is_empty() {
+            return;
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
     }
 
     /// Lead a tamed horse to the meadow hitch, or untie one already hitched.
@@ -7966,6 +8004,62 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Meadow horse stable fence ring with the hitch gate in view, then quit with a PNG.
+    pub fn arm_stable_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.ensure_horse_stable();
+        self.horse = crate::mobs::Horse::new();
+        let _ = self.horse.feed();
+        self.rebuild_horse();
+        let (gx, gz) = rebuild_world::HORSE_STABLE_GATE;
+        let focus = glam::Vec3::new(gx as f32 + 2.5, 1.2, gz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            gx as f32 - 2.8,
+            1.35 + body::EYE_HEIGHT,
+            gz as f32 + 3.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.found_horse = true;
+        self.found_hitch = true;
+        self.found_stable = true;
+        self.gui.push_chat("stable");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("fence");
+        let _ = self.hotbar.give_stack("fence_gate");
+        let _ = self.hotbar.give_stack("lead");
+        self.hotbar_dirty = true;
+        let mote = [gx as f32 + 0.5, 1.55, gz as f32 + 0.5];
+        self.drops.puff(mote, [0.62, 0.48, 0.26]);
+        self.rebuild_drops();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(gx + dx * 8, gz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Tamed horse hitched to the meadow fence with a lead rope, then quit with a PNG.
     pub fn arm_hitch_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -8003,6 +8097,7 @@ impl State {
         self.wanted_focus = chunk_of(self.camera.eye);
         self.found_horse = true;
         self.found_hitch = true;
+        self.found_stable = true;
         self.gui.push_chat("hitched");
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("wheat");

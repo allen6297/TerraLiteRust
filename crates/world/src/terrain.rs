@@ -196,6 +196,12 @@ pub const CAMP_SCARECROW: (i32, i32) = (CAMP_FARM.0, CAMP_FARM.1 - 3);
 /// Fence hitch west of the east meadow horse pad (demo chunk `(1, 0)`).
 pub const HORSE_HITCH: (i32, i32) = (18, 6);
 
+/// West gate of the meadow horse stable ring. Walk east from the stairs.
+pub const HORSE_STABLE_GATE: (i32, i32) = (17, 6);
+
+/// Inclusive world bounds of the meadow stable fence ring `[x0, x1, z0, z1]`.
+pub const HORSE_STABLE: (i32, i32, i32, i32) = (17, 22, 4, 8);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.
