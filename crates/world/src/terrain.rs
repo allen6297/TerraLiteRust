@@ -190,6 +190,9 @@ pub const CAMP_CAULDRON: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 - 2);
 /// Fenced wheat plot east of the camp ring.
 pub const CAMP_FARM: (i32, i32) = (CAMP_FIRE.0 + 5, CAMP_FIRE.1);
 
+/// Scarecrow south of the farm plot (fence post + carved pumpkin).
+pub const CAMP_SCARECROW: (i32, i32) = (CAMP_FARM.0, CAMP_FARM.1 - 3);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.
@@ -290,6 +293,22 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
             }
         }
     }
+    // South of the plot: fence post with a carved pumpkin head.
+    let sx = local_x + 5;
+    let sz = local_z - 3;
+    blocks.retain(|(x, y, z, _)| !(*x == sx && *z == sz && *y + 1 >= floor));
+    let top = blocks
+        .iter()
+        .filter(|(x, _, z, _)| *x == sx && *z == sz)
+        .map(|(_, y, _, _)| *y)
+        .max()
+        .unwrap_or(0);
+    for y in (top + 1)..floor.saturating_sub(1) {
+        blocks.push((sx, y, sz, Block::new("dirt", 0)));
+    }
+    blocks.push((sx, floor - 1, sz, Block::new("grass", 0)));
+    blocks.push((sx, floor, sz, Block::new("fence", 0)));
+    blocks.push((sx, floor + 1, sz, Block::new("pumpkin", 1)));
 }
 
 /// The open pit of the mine mouth, west and south of the demo pad.
@@ -928,6 +947,13 @@ mod tests {
         );
         assert_eq!(camp.block(x + 4, y, z).id, "fence_gate");
         assert_eq!(camp.block(x + 4, y, z - 1).id, "fence");
+        assert_eq!(camp.block(x + 5, y, z - 3).id, "fence");
+        assert_eq!(camp.block(x + 5, y + 1, z - 3).id, "pumpkin");
+        assert_eq!(camp.block(x + 5, y + 1, z - 3).metadata, 1);
+        assert_eq!(
+            (2 * 16 + i32::from(x + 5), -2 * 16 + i32::from(z - 3)),
+            CAMP_SCARECROW
+        );
         let elsewhere = generate_chunk(3, 0);
         for local_z in 0..16u8 {
             for local_x in 0..16u8 {

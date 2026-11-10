@@ -1038,6 +1038,7 @@ pub struct State {
     /// First approach chat tips for the three findable landmarks this session.
     found_camp: bool,
     found_farm: bool,
+    found_scarecrow: bool,
     found_shrine: bool,
     found_mine: bool,
     found_clay: bool,
@@ -2036,6 +2037,7 @@ impl State {
             rain_told: false,
             found_camp: false,
             found_farm: false,
+            found_scarecrow: false,
             found_shrine: false,
             found_mine: false,
             found_clay: false,
@@ -3757,6 +3759,15 @@ impl State {
             self.found_farm = true;
             self.gui.push_chat("a farm plot");
         }
+        if !self.found_scarecrow
+            && near(
+                rebuild_world::CAMP_SCARECROW.0,
+                rebuild_world::CAMP_SCARECROW.1,
+            )
+        {
+            self.found_scarecrow = true;
+            self.gui.push_chat("a scarecrow");
+        }
         if !self.found_shrine && near(rebuild_world::SHRINE.0, rebuild_world::SHRINE.1) {
             self.found_shrine = true;
             self.gui.push_chat("a shrine");
@@ -3787,6 +3798,36 @@ impl State {
             self.found_parrot = true;
             self.gui.push_chat("a parrot");
         }
+    }
+
+    /// Step the demo zombie back when it wanders near the camp scarecrow.
+    fn tick_scarecrow(&mut self) {
+        if !self.zombie.living() {
+            return;
+        }
+        let (sx, sz) = rebuild_world::CAMP_SCARECROW;
+        let mut head_y = None;
+        for y in 0..80 {
+            let block = self.world.block_at(sx, y, sz);
+            if block.id == "pumpkin" && block.metadata >= 1 {
+                head_y = Some(y);
+                break;
+            }
+        }
+        let Some(hy) = head_y else {
+            return;
+        };
+        if self.world.block_at(sx, hy - 1, sz).id != "fence" {
+            return;
+        }
+        let feet = self.zombie.origin();
+        let dx = feet[0] - (sx as f32 + 0.5);
+        let dz = feet[2] - (sz as f32 + 0.5);
+        if dx * dx + dz * dz > 7.0 * 7.0 {
+            return;
+        }
+        self.zombie.spook([sx as f32 + 0.5, sz as f32 + 0.5]);
+        self.rebuild_zombie();
     }
 
     /// Once: hold raw, look at a campfire or smoker — tip to use it.
@@ -8972,6 +9013,76 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(lx + dx * 8, lz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Camp scarecrow south of the farm plot, then quit with a PNG.
+    pub fn arm_scarecrow_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CAMP_SCARECROW;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "pumpkin"
+                && self.world.block_at(cx, y, cz).metadata >= 1
+            {
+                cy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.35, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 - 2.6,
+            cy as f32 + 0.55 + body::EYE_HEIGHT,
+            cz as f32 + 3.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote = [cx as f32 + 0.5, cy as f32 + 0.85, cz as f32 + 0.5];
+        self.note_shot_at = Some(mote);
+        self.note_shot_pitch = 1;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(mote, [0.92, 0.55, 0.18]);
+        self.drops.note(mote, 1);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(1), mote);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.zombie.spook([cx as f32 + 0.5, cz as f32 + 0.5]);
+        self.rebuild_zombie();
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("pumpkin");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("scarecrow");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -15705,6 +15816,7 @@ impl State {
                 self.rebuild_zombie();
             }
             self.rebuild_cat();
+            self.tick_scarecrow();
             let body = [
                 self.camera.eye.x,
                 self.camera.eye.y - body::EYE_HEIGHT,

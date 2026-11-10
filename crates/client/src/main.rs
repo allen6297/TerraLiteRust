@@ -215,6 +215,8 @@ struct Args {
     shot_bread: Option<std::path::PathBuf>,
     /// Camp fenced farm plot, then quit.
     shot_plot: Option<std::path::PathBuf>,
+    /// Camp scarecrow south of the farm, then quit.
+    shot_scarecrow: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -336,6 +338,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_farmland: args.shot_farmland,
         shot_bread: args.shot_bread,
         shot_plot: args.shot_plot,
+        shot_scarecrow: args.shot_scarecrow,
         state: None,
         last_frame: Instant::now(),
     };
@@ -406,6 +409,7 @@ struct App {
     shot_farmland: Option<std::path::PathBuf>,
     shot_bread: Option<std::path::PathBuf>,
     shot_plot: Option<std::path::PathBuf>,
+    shot_scarecrow: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -608,6 +612,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_plot.take() {
                     state.arm_farm_plot_shot(path);
                 }
+                if let Some(path) = self.shot_scarecrow.take() {
+                    state.arm_scarecrow_shot(path);
+                }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
                 self.state = Some(state);
@@ -795,6 +802,7 @@ where
         shot_farmland: None,
         shot_bread: None,
         shot_plot: None,
+        shot_scarecrow: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -1136,6 +1144,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-plot".to_string())?;
                 parsed.shot_plot = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-scarecrow" | "--shot-crow" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-scarecrow".to_string())?;
+                parsed.shot_scarecrow = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }
