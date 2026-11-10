@@ -5274,6 +5274,7 @@ pub fn look_tip_or_label(id: &str) -> Option<String> {
     if id.contains('/')
         || id.starts_with("Tank  ")
         || id.starts_with("Battery  ")
+        || id.starts_with("Lamp  ")
         || id.starts_with("Pump  ")
         || id.starts_with("Pipe  ")
         || id.starts_with("Wire  ")

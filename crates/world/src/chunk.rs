@@ -71,6 +71,7 @@ pub fn compound_host(id: &str) -> bool {
             | "pump"
             | "tank"
             | "battery"
+            | "lamp"
             | "fence"
             | "fence_gate"
             | "slab"
@@ -132,9 +133,24 @@ pub fn is_battery(id: &str) -> bool {
     id == "battery"
 }
 
+/// True when `id` is an ember lamp (wire-powered light).
+pub fn is_lamp(id: &str) -> bool {
+    id == "lamp"
+}
+
 /// True when `id` is a leveled compound buffer (tank or battery).
 pub fn is_buffer(id: &str) -> bool {
     is_tank(id) || is_battery(id)
+}
+
+/// Lamp lit bit (metadata bit 0), same pattern as copper bulbs.
+pub fn lamp_on(metadata: u8) -> bool {
+    metadata & 1 != 0
+}
+
+/// Lamp block with on/off bit.
+pub fn lamp_at(on: bool) -> Block {
+    Block::new("lamp", if on { 1 } else { 0 })
 }
 
 /// Max stored units in a tank (metadata `1..=TANK_MAX` while filled).
@@ -236,33 +252,55 @@ pub fn compound_accepts_meta(id: &str, metadata: u8, fill: u8) -> bool {
         "pipe" => fill == FILL_WATER,
         "wire" => fill == FILL_EMBER,
         "battery" => fill == FILL_EMBER,
+        // Lamps are wire-powered consumers; they do not hold fill themselves.
+        "lamp" => false,
         "pump" => pump_on(metadata) && (fill == FILL_WATER || fill == FILL_EMBER),
         _ => fill == FILL_WATER || fill == FILL_EMBER,
     }
 }
 
-/// Neighbor link for pipe/wire/pump/tank/battery mesh arms.
+/// Neighbor link for pipe/wire/pump/tank/battery/lamp mesh arms.
 ///
-/// Pipes join pipes/pumps/tanks (not batteries); wires join wires/pumps/batteries
-/// and tanks; pumps/tanks/batteries join any compound host.
+/// Pipes join pipes/pumps/tanks (not batteries/lamps); wires join wires/pumps/
+/// batteries/lamps and tanks; pumps/tanks/batteries/lamps join energy hosts.
 pub fn conduit_links(a: &str, b: &str) -> bool {
     match a {
         "pipe" => {
             b == "pipe"
                 || b == "pump"
                 || b == "tank"
-                || (compound_host(b) && b != "wire" && b != "battery")
+                || (compound_host(b) && b != "wire" && b != "battery" && b != "lamp")
         }
         "wire" => {
             b == "wire"
                 || b == "pump"
                 || b == "battery"
+                || b == "lamp"
                 || b == "tank"
                 || (compound_host(b) && b != "pipe")
+        }
+        "lamp" => {
+            b == "wire"
+                || b == "battery"
+                || b == "pump"
+                || b == "lamp"
+                || (compound_host(b) && b != "pipe" && b != "tank")
         }
         "pump" | "tank" | "battery" => compound_host(b),
         _ => false,
     }
+}
+
+/// True when a cell conducts ember power for lamp networks.
+pub fn ember_conducts(block: Block) -> bool {
+    if is_wire(block.id) || is_battery(block.id) || is_lamp(block.id) {
+        return true;
+    }
+    if is_pump(block.id) {
+        return pump_on(block.metadata);
+    }
+    // Ember-filled compound hosts also feed the network.
+    compound_host(block.id) && block.fill == FILL_EMBER && block.id != "pipe"
 }
 
 /// Pack fill byte for a named compound kind.

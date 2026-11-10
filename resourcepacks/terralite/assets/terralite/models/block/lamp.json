@@ -1,0 +1,21 @@
+{
+  "elements": [
+    {
+      "from": [4, 0, 4],
+      "to": [12, 2, 12]
+    },
+    {
+      "from": [3, 2, 3],
+      "to": [13, 12, 13]
+    },
+    {
+      "from": [5, 12, 5],
+      "to": [11, 14, 11]
+    },
+    {
+      "from": [6, 14, 6],
+      "to": [10, 16, 10]
+    }
+  ],
+  "texture": "assets/terralite/textures/lantern.png"
+}

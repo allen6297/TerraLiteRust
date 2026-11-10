@@ -1961,6 +1961,12 @@ impl Pack {
                 level: 15,
             });
         }
+        if block.id == "lamp" && crate::chunk::lamp_on(block.metadata) {
+            return Some(Light {
+                color: [1.0, 0.45, 0.12],
+                level: 14,
+            });
+        }
         if let Some(light) = self.script_light(block.id) {
             return Some(light);
         }

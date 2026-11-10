@@ -13,11 +13,13 @@ use bytemuck::bytes_of;
 use rebuild_world::{
     BAG_SLOTS, BATTERY_CHARGE, BATTERY_MAX, Block, CellChange, Cluster, Emitter, FILL_EMBER,
     FILL_NONE, FILL_WATER, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, TANK_BUCKET,
-    TANK_MAX, apply_changes, apply_compound_seeps, apply_pump_pushes, battery_at, battery_level,
+    TANK_MAX, apply_changes, apply_compound_seeps, apply_ember_lamps, apply_pump_pushes, battery_at,
+    battery_level,
     buffer_level, buffer_max, compound_accepts_meta, compound_host, encode_bag, encode_break,
     encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind, fill_name,
-    held_light_of, is_battery, is_buffer, is_pipe, is_pump, is_tank, is_wire, load_dir,
-    plan_compound_seeps, plan_pump_pushes, pump_meta, pump_on, shape_of, tank_at, tank_level,
+    held_light_of, is_battery, is_buffer, is_lamp, is_pipe, is_pump, is_tank, is_wire, lamp_at,
+    lamp_on, load_dir, plan_compound_seeps, plan_ember_lamps, plan_pump_pushes, pump_meta,
+    pump_on, shape_of, tank_at, tank_level,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -1005,6 +1007,8 @@ pub struct State {
     place_click_at: Option<Instant>,
     /// Seconds until the next compound fill seep pulse.
     compound_flow_wait: f32,
+    /// Pulses since the last lamp battery drain (slow charge consume).
+    lamp_drain_wait: u8,
     /// One tip when fill first seeps through a pipe this session.
     compound_flow_told: bool,
     /// The full map sheet is open.
@@ -1044,6 +1048,8 @@ pub struct State {
     told_tank: bool,
     /// Once: look at a battery — tip that it stores ember charge.
     told_battery: bool,
+    /// Once: look at a lamp — tip that wires power it.
+    told_lamp: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1980,6 +1986,7 @@ impl State {
             ctrl_mod: false,
             place_click_at: None,
             compound_flow_wait: 0.35,
+            lamp_drain_wait: 0,
             compound_flow_told: false,
             map_open: false,
             zoom_key: false,
@@ -2001,6 +2008,7 @@ impl State {
             told_pump: false,
             told_tank: false,
             told_battery: false,
+            told_lamp: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3737,6 +3745,28 @@ impl State {
         }
     }
 
+    /// Once: look at a lamp — tip that wire power lights it.
+    fn tell_lamp(&mut self) {
+        if self.told_lamp || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "lamp" {
+            return;
+        }
+        self.told_lamp = true;
+        if lamp_on(block.metadata) {
+            self.gui.push_chat("lamp on");
+        } else {
+            self.gui.push_chat("wire a battery to light");
+        }
+    }
+
     /// Once: hold clay, look at a furnace — tip to use it.
     fn tell_furnace_heat(&mut self) {
         if self.told_furnace_heat
@@ -4957,14 +4987,45 @@ impl State {
             eye.y.floor() as i32,
             eye.z.floor() as i32,
         ];
+        self.lamp_drain_wait = self.lamp_drain_wait.saturating_add(1);
+        let drain_lamps = self.lamp_drain_wait >= 8;
+        if drain_lamps {
+            self.lamp_drain_wait = 0;
+        }
         let cell = plan_pump_pushes(&self.world, focus, 20, 1)
             .into_iter()
             .next()
-            .or_else(|| plan_compound_seeps(&self.world, focus, 20, 1).into_iter().next());
+            .or_else(|| plan_compound_seeps(&self.world, focus, 20, 1).into_iter().next())
+            .or_else(|| {
+                plan_ember_lamps(&self.world, focus, 20, 2, drain_lamps)
+                    .into_iter()
+                    .next()
+            });
         let Some(cell) = cell else {
             self.compound_flow_wait = 0.42;
             return;
         };
+        // When lamps drain a battery, apply the lamp toggle too if both are planned.
+        if is_battery(cell.block.id) || is_lamp(cell.block.id) {
+            let planned = plan_ember_lamps(&self.world, focus, 20, 4, drain_lamps);
+            let player = PlayerBox {
+                min: [1.0e6, 1.0e6, 1.0e6],
+                max: [1.000_000_6e6, 1.000_001_8e6, 1.000_000_6e6],
+            };
+            for change in planned.into_iter().take(2) {
+                self.send_edit(
+                    encode_place(change.x, change.y, change.z, change.block, player),
+                    TAG_PLACE,
+                    None,
+                );
+            }
+            self.compound_flow_wait = 0.35;
+            if !self.compound_flow_told {
+                self.compound_flow_told = true;
+                self.gui.push_chat("flow");
+            }
+            return;
+        }
         let conduit =
             is_pipe(cell.block.id) || is_wire(cell.block.id) || is_pump(cell.block.id);
         self.compound_flow_wait = if conduit { 0.22 } else { 0.42 };
@@ -5514,6 +5575,10 @@ impl State {
                 "empty"
             };
             return Some(format!("Battery  {kind} {level}/{BATTERY_MAX}"));
+        }
+        if is_lamp(block.id) {
+            let power = if lamp_on(block.metadata) { "on" } else { "off" };
+            return Some(format!("Lamp  {power}"));
         }
         if is_tank(block.id) {
             let level = tank_level(block);
@@ -7010,9 +7075,11 @@ impl State {
         let pipes = name.contains("pipe") || name.contains("wire");
         let connected = name.contains("connected");
         let pump_shot = name.contains("pump") || name.contains("valve");
-        let battery_shot = name.contains("battery") || name.contains("charge");
+        let lamp_shot = name.contains("lamp");
+        let battery_shot =
+            !lamp_shot && (name.contains("battery") || name.contains("charge"));
         let tank_shot =
-            !battery_shot && (name.contains("tank") || name.contains("buffer"));
+            !battery_shot && !lamp_shot && (name.contains("tank") || name.contains("buffer"));
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -7024,12 +7091,14 @@ impl State {
         self.guests.clear();
         self.rebuild_zombie();
         self.rebuild_guests();
-        // Ember / wire / pump / battery shots at night so fill light reads; water stays day.
-        self.clock.set_time_of_day(if ember || pipes || pump_shot || battery_shot {
-            0.88
-        } else {
-            0.42
-        });
+        // Ember / wire / pump / battery / lamp shots at night so fill light reads.
+        self.clock.set_time_of_day(
+            if ember || pipes || pump_shot || battery_shot || lamp_shot {
+                0.88
+            } else {
+                0.42
+            },
+        );
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
@@ -7056,7 +7125,33 @@ impl State {
                 }
             }
         }
-        if battery_shot {
+        if lamp_shot {
+            // Charged battery → wire → lit lamp; separate dark lamp with no power.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: battery_at(6),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("wire", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: lamp_at(true),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz + 2,
+                block: lamp_at(false),
+            });
+        } else if battery_shot {
             // Ember glass → wire → mid battery → outlet wire run.
             changes.push(CellChange {
                 x: gx,
@@ -7356,7 +7451,9 @@ impl State {
             });
         }
         apply_changes(&mut self.world, &changes);
-        if battery_shot {
+        if lamp_shot {
+            let _ = apply_ember_lamps(&mut self.world, [gx + 2, gy, gz], 8, 4, false);
+        } else if battery_shot {
             for _ in 0..2 {
                 let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
             }
@@ -7396,7 +7493,18 @@ impl State {
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
         self.chunk_bake.touch(gx + 2, gz - 2);
-        let (eye, focus) = if battery_shot {
+        let (eye, focus) = if lamp_shot {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("ember_charge");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 2.15 + body::EYE_HEIGHT,
+                    gz as f32 - 2.7,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.65, gz as f32 + 0.5),
+            )
+        } else if battery_shot {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("ember_charge");
             (
@@ -11924,6 +12032,7 @@ impl State {
         self.tell_pump();
         self.tell_tank();
         self.tell_battery();
+        self.tell_lamp();
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();

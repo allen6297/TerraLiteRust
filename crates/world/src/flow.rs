@@ -8,11 +8,21 @@ use std::collections::HashSet;
 
 use crate::changes::CellChange;
 use crate::chunk::{
-    BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, battery_at, buffer_level, buffer_max,
-    compound_accepts_meta, is_battery, is_buffer, is_pipe, is_pump, is_tank, is_wire, pump_dir,
-    pump_on, tank_at,
+    BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, battery_at, battery_level, buffer_level,
+    buffer_max, compound_accepts_meta, ember_conducts, is_battery, is_buffer, is_lamp, is_pipe,
+    is_pump, is_tank, is_wire, lamp_at, lamp_on, pump_dir, pump_on, tank_at,
 };
 use crate::cluster::Cluster;
+
+/// Neighbors used when tracing ember lamp power through wire networks.
+const POWER_NEIGHBORS: [[i32; 3]; 6] = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+];
 
 /// Water: down first, then horizontal, then up.
 const WATER_NEIGHBORS: [[i32; 3]; 6] = [
@@ -337,6 +347,169 @@ pub fn plan_pump_pushes(
     out
 }
 
+/// Trace the ember power network from a lamp. Returns whether the lamp should
+/// light, and an optional battery cell to draw from when `drain` is set.
+fn lamp_power(
+    world: &Cluster,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> (bool, Option<(i32, i32, i32, crate::chunk::Block)>) {
+    let mut seen = HashSet::new();
+    let mut queue = Vec::new();
+    seen.insert((x, y, z));
+    queue.push((x, y, z));
+    let mut powered = false;
+    let mut battery: Option<(i32, i32, i32, crate::chunk::Block)> = None;
+    let mut head = 0usize;
+    while head < queue.len() && head < 128 {
+        let (cx, cy, cz) = queue[head];
+        head += 1;
+        for [dx, dy, dz] in POWER_NEIGHBORS {
+            let nx = cx + dx;
+            let ny = cy + dy;
+            let nz = cz + dz;
+            if !seen.insert((nx, ny, nz)) {
+                continue;
+            }
+            let block = world.block_at(nx, ny, nz);
+            if !ember_conducts(block) {
+                continue;
+            }
+            queue.push((nx, ny, nz));
+            if is_battery(block.id) {
+                let level = battery_level(block);
+                if level > 0 {
+                    powered = true;
+                    let better = match battery {
+                        Some((_, _, _, cur)) => battery_level(cur) < level,
+                        None => true,
+                    };
+                    if better {
+                        battery = Some((nx, ny, nz, block));
+                    }
+                }
+            } else if block.fill == FILL_EMBER {
+                powered = true;
+            }
+        }
+    }
+    (powered, battery)
+}
+
+/// Plan ember lamp on/off updates (and optional battery drain) near `focus`.
+///
+/// A lamp lights when a wire/battery network reaches ember fill or a charged
+/// battery. When `drain` is true and any planned lamp stays lit off a battery,
+/// one charge unit is drawn from the strongest connected battery.
+pub fn plan_ember_lamps(
+    world: &Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_lamps: usize,
+    drain: bool,
+) -> Vec<CellChange> {
+    if max_lamps == 0 || radius < 0 {
+        return Vec::new();
+    }
+    let mut lamps = Vec::new();
+    let min_cx = (focus[0] - radius).div_euclid(16);
+    let max_cx = (focus[0] + radius).div_euclid(16);
+    let min_cz = (focus[2] - radius).div_euclid(16);
+    let max_cz = (focus[2] + radius).div_euclid(16);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let Some(chunk) = world.get(cx, cz) else {
+                continue;
+            };
+            chunk.for_each_block(|x, y, z, block| {
+                if !is_lamp(block.id) {
+                    return;
+                }
+                if (x - focus[0]).abs() > radius
+                    || (y - focus[1]).abs() > radius
+                    || (z - focus[2]).abs() > radius
+                {
+                    return;
+                }
+                lamps.push((x, y, z, block.metadata));
+            });
+        }
+    }
+    lamps.sort_by_key(|&(x, y, z, _)| {
+        (
+            (x - focus[0]).abs() + (z - focus[2]).abs(),
+            y,
+            x,
+            z,
+        )
+    });
+
+    let mut out = Vec::new();
+    let mut drain_battery: Option<(i32, i32, i32, crate::chunk::Block)> = None;
+    let mut any_lit = false;
+    for (x, y, z, meta) in lamps {
+        if out.len() >= max_lamps {
+            break;
+        }
+        let (powered, battery) = lamp_power(world, x, y, z);
+        let on = lamp_on(meta);
+        if powered != on {
+            out.push(CellChange {
+                x,
+                y,
+                z,
+                block: lamp_at(powered),
+            });
+        }
+        if powered {
+            any_lit = true;
+            if let Some((bx, by, bz, block)) = battery {
+                let better = match drain_battery {
+                    Some((_, _, _, cur)) => battery_level(cur) < battery_level(block),
+                    None => true,
+                };
+                if better {
+                    drain_battery = Some((bx, by, bz, block));
+                }
+            }
+        }
+    }
+    if drain && any_lit {
+        if let Some((bx, by, bz, block)) = drain_battery {
+            let level = battery_level(block);
+            let after = if level <= 1 {
+                crate::chunk::Block::new("battery", 0)
+            } else {
+                battery_at(level - 1)
+            };
+            out.push(CellChange {
+                x: bx,
+                y: by,
+                z: bz,
+                block: after,
+            });
+        }
+    }
+    out
+}
+
+/// Apply [`plan_ember_lamps`] into `world`. Returns how many cells changed.
+pub fn apply_ember_lamps(
+    world: &mut Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_lamps: usize,
+    drain: bool,
+) -> usize {
+    let planned = plan_ember_lamps(world, focus, radius, max_lamps, drain);
+    let count = planned.len();
+    for cell in planned {
+        world.set_block(cell.x, cell.y, cell.z, cell.block);
+    }
+    count
+}
+
 /// Apply [`plan_compound_seeps`] into `world`. Returns how many cells filled.
 pub fn apply_compound_seeps(
     world: &mut Cluster,
@@ -641,5 +814,55 @@ mod tests {
         assert!(plan_compound_seeps(&cluster, [2, 1, 2], 8, 1)
             .iter()
             .all(|c| c.x != 3));
+    }
+
+    #[test]
+    fn lamp_lights_from_wired_battery_and_drains() {
+        use crate::chunk::{battery_at, battery_level, lamp_at, lamp_on};
+        let mut cluster = world(&[
+            (1, 1, 1, battery_at(3)),
+            (2, 1, 1, Block::new("wire", 0)),
+            (3, 1, 1, lamp_at(false)),
+        ]);
+        let planned = plan_ember_lamps(&cluster, [2, 1, 1], 8, 4, true);
+        assert!(
+            planned.iter().any(|c| c.x == 3 && lamp_on(c.block.metadata)),
+            "lamp turns on"
+        );
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 1 && is_battery(c.block.id) && battery_level(c.block) == 2),
+            "battery loses one charge while lighting"
+        );
+        assert_eq!(apply_ember_lamps(&mut cluster, [2, 1, 1], 8, 4, true), 2);
+        assert!(lamp_on(cluster.block_at(3, 1, 1).metadata));
+        assert_eq!(battery_level(cluster.block_at(1, 1, 1)), 2);
+    }
+
+    #[test]
+    fn lamp_lights_from_ember_wire_without_drain() {
+        use crate::chunk::{lamp_at, lamp_on};
+        let cluster = world(&[
+            (1, 1, 1, Block::new("glass", 0).with_fill(FILL_EMBER)),
+            (2, 1, 1, Block::new("wire", 0).with_fill(FILL_EMBER)),
+            (3, 1, 1, lamp_at(false)),
+        ]);
+        let planned = plan_ember_lamps(&cluster, [2, 1, 1], 8, 4, true);
+        assert_eq!(planned.len(), 1);
+        assert!(lamp_on(planned[0].block.metadata));
+        assert_eq!(planned[0].x, 3);
+    }
+
+    #[test]
+    fn lamp_turns_off_without_power() {
+        use crate::chunk::{lamp_at, lamp_on};
+        let cluster = world(&[
+            (2, 1, 1, Block::new("wire", 0)),
+            (3, 1, 1, lamp_at(true)),
+        ]);
+        let planned = plan_ember_lamps(&cluster, [2, 1, 1], 8, 4, false);
+        assert_eq!(planned.len(), 1);
+        assert!(!lamp_on(planned[0].block.metadata));
     }
 }
