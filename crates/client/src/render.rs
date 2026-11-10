@@ -8670,6 +8670,79 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the camp beehive panel mid-fill with a mote, then quit with a PNG.
+    pub fn arm_hive_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (hx, hz) = rebuild_world::CAMP_HIVE;
+        let mut hy = 4;
+        for y in 0..80 {
+            if self.world.block_at(hx, y, hz).id == "beehive" {
+                hy = y;
+                break;
+            }
+        }
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: hx,
+                y: hy,
+                z: hz,
+                block: Block::new("beehive", 1),
+            }],
+        );
+        self.chunk_bake.touch(hx, hz);
+        let focus = glam::Vec3::new(hx as f32 + 0.5, hy as f32 + 0.85, hz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            hx as f32 + 2.8,
+            hy as f32 + 1.35 + body::EYE_HEIGHT,
+            hz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote_at = [hx as f32 + 0.5, hy as f32 + 1.05, hz as f32 + 0.5];
+        self.note_shot_at = Some(mote_at);
+        self.note_shot_pitch = 7;
+        self.drops.note(mote_at, 7);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(7), mote_at);
+        let _ = self.gui.open_hive([hx, hy, hz], 1);
+        self.gui.note_hive("level 1");
+        self.gui.push_chat("level 1");
+        self.found_camp = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("flower");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(hx + dx * 8, hz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the camp compost panel mid-fill with a mote, then quit with a PNG.
     pub fn arm_compost_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -11431,6 +11504,19 @@ impl State {
                     self.gui.note_hive(word);
                     self.gui.push_chat(word);
                     self.hotbar_dirty = true;
+                    if matches!(word, "level 1" | "level 2" | "level 3" | "honey") {
+                        if let Some(at) = self.gui.hive_at() {
+                            let source =
+                                [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+                            let pitch = if word == "honey" { 9 } else { 7 };
+                            self.play_world(crate::audio::Sound::Note(pitch), source);
+                            self.drops.note(
+                                [source[0], at[1] as f32 + 1.05, source[2]],
+                                pitch,
+                            );
+                            self.rebuild_drops();
+                        }
+                    }
                 }
                 if self.gui.cauldron_open() && code == KeyCode::Enter {
                     let word = self.fill_cauldron();
