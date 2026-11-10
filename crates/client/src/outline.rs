@@ -9,8 +9,8 @@
 use glam::Vec3;
 use rebuild_world::{
     Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts_meta, compound_host,
-    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, is_drain, is_lamp,
-    is_spout, lamp_on, pump_on, shape_of,
+    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, generator_on,
+    is_drain, is_generator, is_lamp, is_spout, lamp_on, pump_on, shape_of,
 };
 
 use crate::look;
@@ -84,6 +84,10 @@ pub fn selection_lines(
 fn outline_color(held: Option<&str>, host_id: &str, metadata: u8, fill: u8) -> [f32; 3] {
     // Lit lamps read amber even with empty hand so powered state is obvious.
     if is_lamp(host_id) && lamp_on(metadata) {
+        return AMBER;
+    }
+    // Running generators read amber like charged ember gear.
+    if is_generator(host_id) && generator_on(metadata) {
         return AMBER;
     }
     // Open spouts / drains read cyan so faucet and intake state is obvious.

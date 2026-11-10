@@ -1967,6 +1967,12 @@ impl Pack {
                 level: 14,
             });
         }
+        if block.id == "generator" && crate::chunk::generator_on(block.metadata) {
+            return Some(Light {
+                color: [1.0, 0.4, 0.08],
+                level: 11,
+            });
+        }
         if let Some(light) = self.script_light(block.id) {
             return Some(light);
         }

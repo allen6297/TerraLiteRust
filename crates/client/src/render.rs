@@ -13,13 +13,14 @@ use bytemuck::bytes_of;
 use rebuild_world::{
     BAG_SLOTS, BATTERY_CHARGE, BATTERY_MAX, Block, CellChange, Cluster, Emitter, FILL_EMBER,
     FILL_NONE, FILL_WATER, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, TANK_BUCKET,
-    TANK_MAX, apply_changes, apply_compound_seeps, apply_ember_lamps, apply_pump_pushes,
-    apply_water_spouts, battery_at, battery_level, buffer_level, buffer_max,
+    TANK_MAX, apply_changes, apply_compound_seeps, apply_ember_charges, apply_ember_lamps,
+    apply_pump_pushes, apply_water_spouts, battery_at, battery_level, buffer_level, buffer_max,
     compound_accepts_meta, compound_host, encode_bag, encode_break, encode_chat, encode_chest,
-    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of, is_battery,
-    is_buffer, is_drain, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire, lamp_at, lamp_on,
-    load_dir, plan_compound_seeps, plan_ember_lamps, plan_pump_pushes, plan_water_drains,
-    plan_water_spouts, pump_dir, pump_meta, pump_on, shape_of, tank_at, tank_level,
+    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, generator_at, generator_on,
+    held_light_of, is_battery, is_buffer, is_drain, is_generator, is_lamp, is_pipe, is_pump,
+    is_spout, is_tank, is_wire, lamp_at, lamp_on, load_dir, plan_compound_seeps, plan_ember_charges,
+    plan_ember_lamps, plan_pump_pushes, plan_water_drains, plan_water_spouts, pump_dir, pump_meta,
+    pump_on, shape_of, tank_at, tank_level,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -1009,6 +1010,8 @@ pub struct State {
     compound_flow_wait: f32,
     /// Pulses since the last lamp battery drain (slow charge consume).
     lamp_drain_wait: u8,
+    /// Pulses until the next ember generator charge tick.
+    gen_charge_wait: u8,
     /// One tip when fill first seeps through a pipe this session.
     compound_flow_told: bool,
     /// The full map sheet is open.
@@ -1054,6 +1057,8 @@ pub struct State {
     told_spout: bool,
     /// Once: look at a drain — tip that it pulls world water into pipes.
     told_drain: bool,
+    /// Once: look at a generator — tip that it charges batteries.
+    told_generator: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1991,6 +1996,7 @@ impl State {
             place_click_at: None,
             compound_flow_wait: 0.35,
             lamp_drain_wait: 0,
+            gen_charge_wait: 0,
             compound_flow_told: false,
             map_open: false,
             zoom_key: false,
@@ -2015,6 +2021,7 @@ impl State {
             told_lamp: false,
             told_spout: false,
             told_drain: false,
+            told_generator: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3300,6 +3307,10 @@ impl State {
             self.toggle_drain(hit.block, block.metadata);
             return;
         }
+        if block.id == "generator" {
+            self.toggle_generator(hit.block, block.metadata);
+            return;
+        }
         if hinge(block.id) {
             self.toggle_swing(block.id, hit.block, block.metadata);
             return;
@@ -3548,6 +3559,28 @@ impl State {
         );
     }
 
+    /// On bit (0) on a generator — off stops charging.
+    fn toggle_generator(&mut self, at: [i32; 3], metadata: u8) {
+        let next = metadata ^ 1;
+        self.gui.push_chat(if generator_on(next) {
+            "generator on"
+        } else {
+            "generator off"
+        });
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                at[0],
+                at[1],
+                at[2],
+                Block::new("generator", next),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            None,
+        );
+    }
+
     /// Right-click a pump to toggle when not holding a block to place.
     fn try_use_pump(&mut self) -> bool {
         if self.hotbar.selected_block().is_some() {
@@ -3565,6 +3598,10 @@ impl State {
         }
         if block.id == "drain" {
             self.toggle_drain(hit.block, block.metadata);
+            return true;
+        }
+        if block.id == "generator" {
+            self.toggle_generator(hit.block, block.metadata);
             return true;
         }
         if block.id != "pump" {
@@ -3861,6 +3898,43 @@ impl State {
         }
         self.told_drain = true;
         self.gui.push_chat("drain pulls world water");
+    }
+
+    /// Once: look at a generator — tip that it charges the wire net.
+    fn tell_generator(&mut self) {
+        if self.told_generator || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead)
+        {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "generator" {
+            return;
+        }
+        self.told_generator = true;
+        self.gui.push_chat("generator charges batteries");
+    }
+
+    /// True when a campfire sits on any face of `at` (optional fuel flavor).
+    fn campfire_beside(&self, at: [i32; 3]) -> bool {
+        const DIRS: [[i32; 3]; 6] = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ];
+        DIRS.iter().any(|[dx, dy, dz]| {
+            self.world
+                .block_at(at[0] + dx, at[1] + dy, at[2] + dz)
+                .id
+                == "campfire"
+        })
     }
 
     /// Once: hold clay, look at a furnace — tip to use it.
@@ -5088,6 +5162,11 @@ impl State {
         if drain_lamps {
             self.lamp_drain_wait = 0;
         }
+        self.gen_charge_wait = self.gen_charge_wait.saturating_add(1);
+        let charge_gens = self.gen_charge_wait >= 6;
+        if charge_gens {
+            self.gen_charge_wait = 0;
+        }
         let player = PlayerBox {
             min: [1.0e6, 1.0e6, 1.0e6],
             max: [1.000_000_6e6, 1.000_001_8e6, 1.000_000_6e6],
@@ -5158,6 +5237,21 @@ impl State {
             self.compound_flow_wait = 0.35;
             note_flow(&mut self.gui, &mut self.compound_flow_told);
             return;
+        }
+        if charge_gens {
+            let gen_plan = plan_ember_charges(&self.world, focus, 20, 1);
+            if !gen_plan.is_empty() {
+                for change in gen_plan.into_iter().take(1) {
+                    self.send_edit(
+                        encode_place(change.x, change.y, change.z, change.block, player),
+                        TAG_PLACE,
+                        None,
+                    );
+                }
+                self.compound_flow_wait = 0.45;
+                note_flow(&mut self.gui, &mut self.compound_flow_told);
+                return;
+            }
         }
         self.compound_flow_wait = 0.42;
     }
@@ -5698,6 +5792,19 @@ impl State {
             let power = if lamp_on(block.metadata) { "on" } else { "off" };
             return Some(format!("Lamp  {power}"));
         }
+        if is_generator(block.id) {
+            let power = if generator_on(block.metadata) {
+                "on"
+            } else {
+                "off"
+            };
+            let fueled = self.campfire_beside(target.block);
+            return Some(if fueled && generator_on(block.metadata) {
+                format!("Gen  {power}  fueled")
+            } else {
+                format!("Gen  {power}")
+            });
+        }
         if is_spout(block.id) {
             let power = if pump_on(block.metadata) { "open" } else { "closed" };
             let dir = pump_dir(block.metadata);
@@ -6067,6 +6174,10 @@ impl State {
                 "drain",
                 pump_meta(pump_facing_from_look(self.camera.forward()), true),
             );
+        }
+        if block.id == "generator" {
+            // Starts running so a fresh place begins charging.
+            block = generator_at(true);
         }
         if block.id == "painting"
             || block.id == "vine"
@@ -7238,12 +7349,15 @@ impl State {
         let connected = name.contains("connected");
         let pump_shot = name.contains("pump") || name.contains("valve");
         let lamp_shot = name.contains("lamp");
+        let gen_shot = name.contains("generator") || name.contains("dynamo");
         let spout_shot = name.contains("spout") || name.contains("faucet");
         let drain_shot = name.contains("drain") || name.contains("intake");
-        let battery_shot =
-            !lamp_shot && (name.contains("battery") || name.contains("charge"));
+        let battery_shot = !lamp_shot
+            && !gen_shot
+            && (name.contains("battery") || name.contains("charge"));
         let tank_shot = !battery_shot
             && !lamp_shot
+            && !gen_shot
             && !spout_shot
             && !drain_shot
             && (name.contains("tank") || name.contains("buffer"));
@@ -7258,9 +7372,9 @@ impl State {
         self.guests.clear();
         self.rebuild_zombie();
         self.rebuild_guests();
-        // Ember / wire / pump / battery / lamp shots at night so fill light reads.
+        // Ember / wire / pump / battery / lamp / generator shots at night so fill light reads.
         self.clock.set_time_of_day(
-            if ember || pipes || pump_shot || battery_shot || lamp_shot {
+            if ember || pipes || pump_shot || battery_shot || lamp_shot || gen_shot {
                 0.88
             } else {
                 0.42
@@ -7292,7 +7406,33 @@ impl State {
                 }
             }
         }
-        if drain_shot {
+        if gen_shot {
+            // Running generator → wire → empty battery; optional campfire fuel beside.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: generator_at(true),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("wire", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: Block::new("battery", 0),
+            });
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz + 1,
+                block: Block::new("campfire", 0),
+            });
+        } else if drain_shot {
             // World water ahead → open drain (+X) pulls into empty pipe behind.
             changes.push(CellChange {
                 x: gx + 2,
@@ -7652,7 +7792,12 @@ impl State {
             });
         }
         apply_changes(&mut self.world, &changes);
-        if spout_shot {
+        if gen_shot {
+            // Charge a few pulses so the battery shows ember.
+            for _ in 0..3 {
+                let _ = apply_ember_charges(&mut self.world, [gx + 1, gy, gz], 8, 2);
+            }
+        } else if spout_shot {
             let _ = apply_water_spouts(&mut self.world, [gx + 1, gy, gz], 8, 2);
         } else if lamp_shot {
             let _ = apply_ember_lamps(&mut self.world, [gx + 2, gy, gz], 8, 4, false);
@@ -7696,7 +7841,18 @@ impl State {
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
         self.chunk_bake.touch(gx + 2, gz - 2);
-        let (eye, focus) = if drain_shot {
+        let (eye, focus) = if gen_shot {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("ember_charge");
+            (
+                glam::Vec3::new(
+                    gx as f32 + 0.3,
+                    gy as f32 + 2.05 + body::EYE_HEIGHT,
+                    gz as f32 - 2.5,
+                ),
+                glam::Vec3::new(gx as f32 + 0.55, gy as f32 + 0.7, gz as f32 + 0.45),
+            )
+        } else if drain_shot {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("water_bucket");
             (
@@ -12260,6 +12416,7 @@ impl State {
         self.tell_lamp();
         self.tell_spout();
         self.tell_drain();
+        self.tell_generator();
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();

@@ -42,8 +42,8 @@ use std::collections::{HashMap, HashSet};
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
     Plane, Shape, buffer_level, buffer_max, compound_accepts, conduit_edge_tube, conduit_fill_span,
-    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, is_drain, is_lamp, is_spout,
-    is_tank, lamp_on, pump_dir, pump_on, shape_of, tank_level,
+    conduit_links, conduit_shell_boxes, conduit_span, generator_on, is_buffer, is_drain,
+    is_generator, is_lamp, is_spout, is_tank, lamp_on, pump_dir, pump_on, shape_of, tank_level,
 };
 
 use crate::daylight;
@@ -1589,6 +1589,25 @@ fn mesh_partial_shapes(
                         let fill = Block::new("magma", 0);
                         let fill_shape = Shape::from_boxes(&[CellBox {
                             min: [5, 3, 5],
+                            max: [11, 11, 11],
+                        }]);
+                        mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                    }
+                    continue;
+                }
+                if is_generator(block.id) {
+                    let shape = shape_of(block);
+                    if !shape.is_empty() {
+                        mesh_cell(block, shape, cell, sample, light, sun, mesh);
+                        if !shape.faces().is_empty() {
+                            mesh_faces(block, shape, cell, sample, light, sun, mesh);
+                        }
+                    }
+                    // Running generator shows a magma core (ember forge).
+                    if generator_on(block.metadata) {
+                        let fill = Block::new("magma", 0);
+                        let fill_shape = Shape::from_boxes(&[CellBox {
+                            min: [5, 5, 5],
                             max: [11, 11, 11],
                         }]);
                         mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);

@@ -9,9 +9,9 @@ use std::collections::HashSet;
 use crate::changes::CellChange;
 use crate::chunk::{
     BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, TANK_MAX, battery_at, battery_level,
-    buffer_level, buffer_max, compound_accepts_meta, ember_conducts, is_battery, is_buffer,
-    is_drain, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire, lamp_at, lamp_on, pump_dir,
-    pump_on, tank_at, tank_level,
+    buffer_level, buffer_max, compound_accepts_meta, ember_conducts, generator_on, is_battery,
+    is_buffer, is_drain, is_generator, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire,
+    lamp_at, lamp_on, pump_dir, pump_on, tank_at, tank_level,
 };
 use crate::cluster::Cluster;
 
@@ -390,6 +390,8 @@ fn lamp_power(
                         battery = Some((nx, ny, nz, block));
                     }
                 }
+            } else if is_generator(block.id) && generator_on(block.metadata) {
+                powered = true;
             } else if block.fill == FILL_EMBER {
                 powered = true;
             }
@@ -504,6 +506,149 @@ pub fn apply_ember_lamps(
     drain: bool,
 ) -> usize {
     let planned = plan_ember_lamps(world, focus, radius, max_lamps, drain);
+    let count = planned.len();
+    for cell in planned {
+        world.set_block(cell.x, cell.y, cell.z, cell.block);
+    }
+    count
+}
+
+/// BFS from a running generator: pick the emptiest connected battery under cap,
+/// or the first empty wire on the network when no battery needs charge.
+fn generator_charge_target(
+    world: &Cluster,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> Option<(i32, i32, i32, crate::chunk::Block)> {
+    let mut seen = HashSet::new();
+    let mut queue = Vec::new();
+    seen.insert((x, y, z));
+    queue.push((x, y, z));
+    let mut best_battery: Option<(i32, i32, i32, crate::chunk::Block)> = None;
+    let mut empty_wire: Option<(i32, i32, i32, crate::chunk::Block)> = None;
+    let mut head = 0usize;
+    while head < queue.len() && head < 128 {
+        let (cx, cy, cz) = queue[head];
+        head += 1;
+        for [dx, dy, dz] in POWER_NEIGHBORS {
+            let nx = cx + dx;
+            let ny = cy + dy;
+            let nz = cz + dz;
+            if !seen.insert((nx, ny, nz)) {
+                continue;
+            }
+            let block = world.block_at(nx, ny, nz);
+            // Wires and batteries always join; other cells need ember_conducts.
+            let joins = is_wire(block.id) || is_battery(block.id) || ember_conducts(block);
+            if !joins {
+                continue;
+            }
+            queue.push((nx, ny, nz));
+            if is_battery(block.id) {
+                let level = battery_level(block);
+                if level < BATTERY_MAX {
+                    let better = match best_battery {
+                        Some((_, _, _, cur)) => battery_level(cur) > level,
+                        None => true,
+                    };
+                    if better {
+                        best_battery = Some((nx, ny, nz, block));
+                    }
+                }
+            } else if is_wire(block.id) && block.fill == FILL_NONE && empty_wire.is_none() {
+                empty_wire = Some((nx, ny, nz, block));
+            }
+        }
+    }
+    best_battery.or(empty_wire)
+}
+
+/// Plan ember generator charges near `focus`.
+///
+/// Each running generator slowly adds one ember unit to the emptiest connected
+/// battery (or fills one empty wire). Free tick for demo — campfire adjacency
+/// is optional flavor handled by the client tip/mesh, not required here.
+pub fn plan_ember_charges(
+    world: &Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_gens: usize,
+) -> Vec<CellChange> {
+    if max_gens == 0 || radius < 0 {
+        return Vec::new();
+    }
+    let mut gens = Vec::new();
+    let min_cx = (focus[0] - radius).div_euclid(16);
+    let max_cx = (focus[0] + radius).div_euclid(16);
+    let min_cz = (focus[2] - radius).div_euclid(16);
+    let max_cz = (focus[2] + radius).div_euclid(16);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let Some(chunk) = world.get(cx, cz) else {
+                continue;
+            };
+            chunk.for_each_block(|x, y, z, block| {
+                if !is_generator(block.id) || !generator_on(block.metadata) {
+                    return;
+                }
+                if (x - focus[0]).abs() > radius
+                    || (y - focus[1]).abs() > radius
+                    || (z - focus[2]).abs() > radius
+                {
+                    return;
+                }
+                gens.push((x, y, z));
+            });
+        }
+    }
+    gens.sort_by_key(|&(x, y, z)| {
+        (
+            (x - focus[0]).abs() + (z - focus[2]).abs(),
+            y,
+            x,
+            z,
+        )
+    });
+
+    let mut claimed = HashSet::new();
+    let mut out = Vec::new();
+    for (x, y, z) in gens {
+        if out.len() >= max_gens {
+            break;
+        }
+        let Some((tx, ty, tz, block)) = generator_charge_target(world, x, y, z) else {
+            continue;
+        };
+        if !claimed.insert((tx, ty, tz)) {
+            continue;
+        }
+        let after = if is_battery(block.id) {
+            let level = battery_level(block);
+            battery_at(level.saturating_add(1).min(BATTERY_MAX))
+        } else if is_wire(block.id) {
+            block.with_fill(FILL_EMBER)
+        } else {
+            continue;
+        };
+        out.push(CellChange {
+            x: tx,
+            y: ty,
+            z: tz,
+            block: after,
+        });
+    }
+    out
+}
+
+/// Apply [`plan_ember_charges`] into `world`. Returns how many cells changed.
+pub fn apply_ember_charges(
+    world: &mut Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_gens: usize,
+) -> usize {
+    let planned = plan_ember_charges(world, focus, radius, max_gens);
     let count = planned.len();
     for cell in planned {
         world.set_block(cell.x, cell.y, cell.z, cell.block);
@@ -1272,5 +1417,94 @@ mod tests {
             (1, 1, 1, Block::new("pipe", 0)),
         ]);
         assert!(plan_water_drains(&cluster, [2, 1, 1], 8, 2).is_empty());
+    }
+
+    #[test]
+    fn generator_charges_empty_battery_over_wire() {
+        use crate::chunk::{battery_level, generator_at};
+        let mut cluster = world(&[
+            (1, 1, 1, generator_at(true)),
+            (2, 1, 1, Block::new("wire", 0)),
+            (3, 1, 1, Block::new("battery", 0)),
+        ]);
+        let planned = plan_ember_charges(&cluster, [2, 1, 1], 8, 2);
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 3 && is_battery(c.block.id) && battery_level(c.block) == 1),
+            "empty battery gains one charge"
+        );
+        assert_eq!(apply_ember_charges(&mut cluster, [2, 1, 1], 8, 2), 1);
+        assert_eq!(battery_level(cluster.block_at(3, 1, 1)), 1);
+    }
+
+    #[test]
+    fn generator_fills_empty_wire_when_no_battery() {
+        use crate::chunk::generator_at;
+        let planned = plan_ember_charges(
+            &world(&[
+                (1, 1, 1, generator_at(true)),
+                (2, 1, 1, Block::new("wire", 0)),
+            ]),
+            [2, 1, 1],
+            8,
+            2,
+        );
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 2 && c.block.id == "wire" && c.block.fill == FILL_EMBER),
+            "wire takes ember when no battery"
+        );
+    }
+
+    #[test]
+    fn generator_prefers_emptier_battery() {
+        use crate::chunk::{battery_at, battery_level, generator_at};
+        let planned = plan_ember_charges(
+            &world(&[
+                (2, 1, 1, generator_at(true)),
+                (1, 1, 1, battery_at(5)),
+                (3, 1, 1, battery_at(2)),
+            ]),
+            [2, 1, 1],
+            8,
+            2,
+        );
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 3 && battery_level(c.block) == 3),
+            "charges the lower battery first"
+        );
+    }
+
+    #[test]
+    fn off_generator_does_not_charge() {
+        use crate::chunk::generator_at;
+        let cluster = world(&[
+            (1, 1, 1, generator_at(false)),
+            (2, 1, 1, Block::new("wire", 0)),
+            (3, 1, 1, Block::new("battery", 0)),
+        ]);
+        assert!(plan_ember_charges(&cluster, [2, 1, 1], 8, 2).is_empty());
+    }
+
+    #[test]
+    fn lamp_lights_from_running_generator() {
+        use crate::chunk::{generator_at, lamp_at, lamp_on};
+        let planned = plan_ember_lamps(
+            &world(&[
+                (1, 1, 1, generator_at(true)),
+                (2, 1, 1, Block::new("wire", 0)),
+                (3, 1, 1, lamp_at(false)),
+            ]),
+            [2, 1, 1],
+            8,
+            4,
+            false,
+        );
+        assert_eq!(planned.len(), 1);
+        assert!(lamp_on(planned[0].block.metadata));
     }
 }

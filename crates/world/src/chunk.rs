@@ -72,6 +72,7 @@ pub fn compound_host(id: &str) -> bool {
             | "tank"
             | "battery"
             | "lamp"
+            | "generator"
             | "spout"
             | "drain"
             | "fence"
@@ -148,6 +149,21 @@ pub fn is_spout(id: &str) -> bool {
 /// True when `id` is a water drain / intake (pulls world water into pipes/tanks).
 pub fn is_drain(id: &str) -> bool {
     id == "drain"
+}
+
+/// True when `id` is an ember generator (charges battery / wire networks).
+pub fn is_generator(id: &str) -> bool {
+    id == "generator"
+}
+
+/// Generator running bit (metadata bit 0), same pattern as lamps.
+pub fn generator_on(metadata: u8) -> bool {
+    metadata & 1 != 0
+}
+
+/// Generator block with on/off bit.
+pub fn generator_at(on: bool) -> Block {
+    Block::new("generator", if on { 1 } else { 0 })
 }
 
 /// True when `id` is a leveled compound buffer (tank or battery).
@@ -264,8 +280,8 @@ pub fn compound_accepts_meta(id: &str, metadata: u8, fill: u8) -> bool {
         "pipe" => fill == FILL_WATER,
         "wire" => fill == FILL_EMBER,
         "battery" => fill == FILL_EMBER,
-        // Lamps / spouts / drains are consumers; they do not hold fill themselves.
-        "lamp" | "spout" | "drain" => false,
+        // Lamps / spouts / drains / generators are consumers; they do not hold fill.
+        "lamp" | "spout" | "drain" | "generator" => false,
         "pump" => pump_on(metadata) && (fill == FILL_WATER || fill == FILL_EMBER),
         _ => fill == FILL_WATER || fill == FILL_EMBER,
     }
@@ -283,21 +299,27 @@ pub fn conduit_links(a: &str, b: &str) -> bool {
                 || b == "tank"
                 || b == "spout"
                 || b == "drain"
-                || (compound_host(b) && b != "wire" && b != "battery" && b != "lamp")
+                || (compound_host(b)
+                    && b != "wire"
+                    && b != "battery"
+                    && b != "lamp"
+                    && b != "generator")
         }
         "wire" => {
             b == "wire"
                 || b == "pump"
                 || b == "battery"
                 || b == "lamp"
+                || b == "generator"
                 || b == "tank"
                 || (compound_host(b) && b != "pipe" && b != "spout" && b != "drain")
         }
-        "lamp" => {
+        "lamp" | "generator" => {
             b == "wire"
                 || b == "battery"
                 || b == "pump"
                 || b == "lamp"
+                || b == "generator"
                 || (compound_host(b) && b != "pipe" && b != "tank" && b != "spout" && b != "drain")
         }
         "spout" | "drain" => {
@@ -306,7 +328,11 @@ pub fn conduit_links(a: &str, b: &str) -> bool {
                 || b == "pump"
                 || b == "spout"
                 || b == "drain"
-                || (compound_host(b) && b != "wire" && b != "battery" && b != "lamp")
+                || (compound_host(b)
+                    && b != "wire"
+                    && b != "battery"
+                    && b != "lamp"
+                    && b != "generator")
         }
         "pump" | "tank" | "battery" => compound_host(b),
         _ => false,
@@ -317,6 +343,9 @@ pub fn conduit_links(a: &str, b: &str) -> bool {
 pub fn ember_conducts(block: Block) -> bool {
     if is_wire(block.id) || is_battery(block.id) || is_lamp(block.id) {
         return true;
+    }
+    if is_generator(block.id) {
+        return generator_on(block.metadata);
     }
     if is_pump(block.id) {
         return pump_on(block.metadata);
