@@ -819,9 +819,14 @@ pub struct State {
     /// One-shot capture of the Godot-style settings screen, then quit.
     settings_shot_path: Option<std::path::PathBuf>,
     settings_shot_frames: u32,
-    /// One-shot night cave with a held torch, then quit.
+    /// One-shot night corridor: dirt hand vs torch, then quit.
     held_light_shot_path: Option<std::path::PathBuf>,
     held_light_shot_frames: u32,
+    held_light_shot_phase: HeldLightShotPhase,
+    held_light_shot_dark: Option<CapturedRgba>,
+    held_light_shot_eye: glam::Vec3,
+    held_light_shot_yaw: f32,
+    held_light_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1635,6 +1640,11 @@ impl State {
             settings_shot_frames: 0,
             held_light_shot_path: None,
             held_light_shot_frames: 0,
+            held_light_shot_phase: HeldLightShotPhase::Idle,
+            held_light_shot_dark: None,
+            held_light_shot_eye: glam::Vec3::ZERO,
+            held_light_shot_yaw: 0.0,
+            held_light_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -4885,10 +4895,12 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Midnight stone cave, torch in hand — proof that held light uses block light.
+    /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
         self.held_light_shot_frames = 0;
+        self.held_light_shot_phase = HeldLightShotPhase::WaitingDark;
+        self.held_light_shot_dark = None;
         self.playing = true;
         self.menu.close_menu();
         self.apply_chosen_size();
@@ -4897,11 +4909,12 @@ impl State {
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
 
+        // Long sealed corridor so a held torch falloff reads (near bright → far black).
         let mut changes = Vec::new();
-        for y in 2..=7 {
-            for z in 18..=24 {
-                for x in 18..=24 {
-                    let wall = x == 18 || x == 24 || z == 18 || z == 24 || y == 2 || y == 7;
+        for z in 16..=46 {
+            for y in 2..=5 {
+                for x in 20..=22 {
+                    let wall = x != 21 || y == 2 || y == 5 || z == 16 || z == 46;
                     changes.push(CellChange {
                         x,
                         y,
@@ -4920,8 +4933,8 @@ impl State {
             self.chunk_bake.touch(change.x, change.z);
         }
 
-        let eye = glam::Vec3::new(21.0, 4.0 + body::EYE_HEIGHT, 21.0);
-        let target = glam::Vec3::new(21.0, 4.6, 18.6);
+        let eye = glam::Vec3::new(21.5, 3.0 + body::EYE_HEIGHT, 18.5);
+        let target = glam::Vec3::new(21.5, 3.6, 44.0);
         self.camera = Camera::looking_at(eye, target);
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.posed_eye = self.camera.eye;
@@ -4929,12 +4942,33 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        self.held_light_shot_eye = eye;
+        self.held_light_shot_yaw = yaw;
+        self.held_light_shot_pitch = pitch;
 
+        // Start dark: non-light item so LightField has no held emitter.
         self.hotbar.select_digit(1);
-        let _ = self.hotbar.give_stack("torch");
+        let _ = self.hotbar.give_stack("dirt");
         self.hotbar_dirty = true;
         self.sync_held_light();
         let _ = self.window.focus_window();
+    }
+
+    fn pin_held_light_shot_camera(&mut self) {
+        if self.held_light_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.held_light_shot_eye,
+            self.held_light_shot_yaw,
+            self.held_light_shot_pitch,
+        );
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.camera.eye;
+        self.posed_yaw = self.held_light_shot_yaw;
+        self.posed_pitch = self.held_light_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
     }
 
     /// Seed the mesh light field from the selected hotbar placeable, or clear it.
@@ -5003,25 +5037,77 @@ impl State {
         let Some(path) = self.held_light_shot_path.clone() else {
             return;
         };
+        self.pin_held_light_shot_camera();
         self.held_light_shot_frames = self.held_light_shot_frames.saturating_add(1);
-        // Cave remesh + held torch light need a few dozen frames to land.
-        if self.held_light_shot_frames < 180 {
+        // Wait for corridor remesh (and later, torch light remesh) to settle.
+        if self.held_light_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.held_light_shot_frames > 600 {
+                eprintln!("held-light shot timed out waiting for mesh");
+                self.held_light_shot_path = None;
+                self.held_light_shot_phase = HeldLightShotPhase::Idle;
+                self.quit = true;
+            }
             return;
         }
         let _ = self.window.focus_window();
-        match capture_window_png(&self.window, &path) {
-            Ok(()) => {
-                eprintln!("held-light shot wrote {}", path.display());
-                self.held_light_shot_path = None;
-                self.quit = true;
-            }
-            Err(err) => {
-                eprintln!("held-light shot failed: {err}");
-                if self.held_light_shot_frames > 360 {
+        match self.held_light_shot_phase {
+            HeldLightShotPhase::WaitingDark => match capture_window_rgba(&self.window) {
+                Ok(dark) => {
+                    eprintln!(
+                        "held-light dark frame {}x{}",
+                        dark.width, dark.height
+                    );
+                    self.held_light_shot_dark = Some(dark);
+                    self.hotbar.select_digit(1);
+                    let _ = self.hotbar.give_stack("torch");
+                    self.hotbar_dirty = true;
+                    self.sync_held_light();
+                    self.held_light_shot_frames = 0;
+                    self.held_light_shot_phase = HeldLightShotPhase::WaitingLit;
+                }
+                Err(err) => {
+                    eprintln!("held-light dark capture failed: {err}");
+                    if self.held_light_shot_frames > 400 {
+                        self.held_light_shot_path = None;
+                        self.held_light_shot_phase = HeldLightShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            HeldLightShotPhase::WaitingLit => {
+                let Some(dark) = self.held_light_shot_dark.take() else {
                     self.held_light_shot_path = None;
+                    self.held_light_shot_phase = HeldLightShotPhase::Idle;
                     self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(lit) => match stitch_held_light_proof(&dark, &lit, &path) {
+                        Ok(()) => {
+                            eprintln!("held-light shot wrote {}", path.display());
+                            self.held_light_shot_path = None;
+                            self.held_light_shot_phase = HeldLightShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("held-light stitch failed: {err}");
+                            self.held_light_shot_path = None;
+                            self.held_light_shot_phase = HeldLightShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("held-light lit capture failed: {err}");
+                        self.held_light_shot_dark = Some(dark);
+                        if self.held_light_shot_frames > 400 {
+                            self.held_light_shot_path = None;
+                            self.held_light_shot_phase = HeldLightShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
                 }
             }
+            HeldLightShotPhase::Idle => {}
         }
     }
 
@@ -7435,6 +7521,7 @@ impl State {
             self.wanted_lookups = lookups;
             self.wanted_sun = light.direction;
         }
+        self.pin_held_light_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -8553,8 +8640,79 @@ impl State {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeldLightShotPhase {
+    Idle,
+    WaitingDark,
+    WaitingLit,
+}
+
+struct CapturedRgba {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+fn write_rgba_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|err| err.to_string())?;
+    let mut encoder = png::Encoder::new(file, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|err| err.to_string())?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+/// Dirt (left) vs torch (right) so the LightField difference is obvious.
+fn stitch_held_light_proof(
+    dark: &CapturedRgba,
+    lit: &CapturedRgba,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    if dark.width != lit.width || dark.height != lit.height {
+        return Err(format!(
+            "size mismatch dark {}x{} lit {}x{}",
+            dark.width, dark.height, lit.width, lit.height
+        ));
+    }
+    let gap = 8u32;
+    let out_w = dark.width * 2 + gap;
+    let out_h = dark.height;
+    let mut out = vec![0u8; (out_w * out_h * 4) as usize];
+    for y in 0..dark.height {
+        let src_row = (y * dark.width * 4) as usize;
+        let dark_dst = (y * out_w * 4) as usize;
+        let lit_dst = dark_dst + ((dark.width + gap) * 4) as usize;
+        let row = (dark.width * 4) as usize;
+        out[dark_dst..dark_dst + row].copy_from_slice(&dark.rgba[src_row..src_row + row]);
+        out[lit_dst..lit_dst + row].copy_from_slice(&lit.rgba[src_row..src_row + row]);
+        // Warm gap so the seam does not read as world light.
+        for x in 0..gap {
+            let i = dark_dst + ((dark.width + x) * 4) as usize;
+            out[i] = 40;
+            out[i + 1] = 28;
+            out[i + 2] = 18;
+            out[i + 3] = 255;
+        }
+    }
+    write_rgba_png(path, out_w, out_h, &out)
+}
+
+#[cfg(windows)]
+fn capture_window_rgba(window: &Window) -> Result<CapturedRgba, String> {
+    capture_window_rgba_impl(window)
+}
+
 #[cfg(windows)]
 fn capture_window_png(window: &Window, path: &std::path::Path) -> Result<(), String> {
+    let shot = capture_window_rgba(window)?;
+    write_rgba_png(path, shot.width, shot.height, &shot.rgba)
+}
+
+#[cfg(windows)]
+fn capture_window_rgba_impl(window: &Window) -> Result<CapturedRgba, String> {
     use std::ptr;
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -8725,20 +8883,24 @@ fn capture_window_png(window: &Window, path: &std::path::Path) -> Result<(), Str
         dst[3] = 255;
     }
     // Reject empty/black captures so we keep retrying.
-    let lit = rgba.chunks(4).filter(|px| px[0] > 8 || px[1] > 8 || px[2] > 8).count();
+    let lit = rgba
+        .chunks(4)
+        .filter(|px| px[0] > 8 || px[1] > 8 || px[2] > 8)
+        .count();
     if lit < 200 {
         return Err(format!("capture too dark ({lit} lit px)"));
     }
-    let file = std::fs::File::create(path).map_err(|err| err.to_string())?;
-    let mut encoder = png::Encoder::new(file, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|err| err.to_string())?;
-    writer
-        .write_image_data(&rgba)
-        .map_err(|err| err.to_string())?;
     let _ = ptr::null::<()>();
-    Ok(())
+    Ok(CapturedRgba {
+        width: width as u32,
+        height: height as u32,
+        rgba,
+    })
+}
+
+#[cfg(not(windows))]
+fn capture_window_rgba(_window: &Window) -> Result<CapturedRgba, String> {
+    Err("window shot is Windows-only".into())
 }
 
 #[cfg(not(windows))]

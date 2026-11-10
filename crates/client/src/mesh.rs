@@ -377,6 +377,11 @@ impl ChunkBake {
         !self.urgent.is_empty()
     }
 
+    /// True when nothing is waiting on a worker or the frame queue.
+    pub fn is_idle(&self) -> bool {
+        self.pending.is_empty() && self.inflight.is_empty() && !self.light_dirty
+    }
+
     /// The edited cell, plus a neighbor chunk when the cell is on that shared face.
     pub fn touch(&mut self, x: i32, z: i32) {
         self.light_dirty = true;
@@ -3594,6 +3599,75 @@ mod tests {
                 .vertices
                 .iter()
                 .any(|vertex| (vertex.textured - face_slot).abs() < 1.0e-3)
+        );
+    }
+
+    #[test]
+    fn a_held_torch_bakes_block_light_into_nearby_faces() {
+        let mut blocks = Vec::new();
+        for z in 0..8u8 {
+            for x in 0..8u8 {
+                blocks.push((x, 0, z, Block::new("stone", 0)));
+            }
+        }
+        let chunk = Chunk::from_blocks(0, 0, blocks).unwrap();
+        let cluster = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
+        let sun = [0.25, 1.0, -0.72];
+        let mut bake = ChunkBake::new(&cluster, sun, [0, 0]);
+        bake.queue_unmeshed(&cluster);
+        let dark = bake.pump(&cluster, std::time::Duration::from_secs(2), 8);
+        assert!(!dark.is_empty());
+        let dark_block: f32 = dark
+            .iter()
+            .flat_map(|baked| baked.mesh.vertices.iter())
+            .map(|v| v.block[0] + v.block[1] + v.block[2])
+            .sum();
+        assert!(
+            dark_block < 1.0e-3,
+            "stone tops stay unlit without a held torch: {dark_block}"
+        );
+
+        let torch = rebuild_world::light_of(Block::new("torch", 0)).expect("torch");
+        bake.set_held(Some(Emitter {
+            x: 3,
+            y: 1,
+            z: 3,
+            light: torch,
+        }));
+        let lit = bake.pump(&cluster, std::time::Duration::from_secs(2), 8);
+        assert!(!lit.is_empty());
+        let lit_block: f32 = lit
+            .iter()
+            .flat_map(|baked| baked.mesh.vertices.iter())
+            .map(|v| v.block[0] + v.block[1] + v.block[2])
+            .sum();
+        assert!(
+            lit_block > 1.0,
+            "held torch should bake block light into stone faces: {lit_block}"
+        );
+        let near = lit
+            .iter()
+            .flat_map(|baked| baked.mesh.vertices.iter())
+            .filter(|v| {
+                let x = v.position[0];
+                let z = v.position[2];
+                (x - 3.5).abs() < 1.5 && (z - 3.5).abs() < 1.5 && v.normal[1] > 0.9
+            })
+            .map(|v| v.block[0])
+            .fold(0.0_f32, f32::max);
+        let far = lit
+            .iter()
+            .flat_map(|baked| baked.mesh.vertices.iter())
+            .filter(|v| {
+                let x = v.position[0];
+                let z = v.position[2];
+                x > 6.0 && z > 6.0 && v.normal[1] > 0.9
+            })
+            .map(|v| v.block[0])
+            .fold(0.0_f32, f32::max);
+        assert!(
+            near > far + 0.15,
+            "held light should fall off across the floor: near {near} far {far}"
         );
     }
 
