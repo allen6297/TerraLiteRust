@@ -1144,6 +1144,8 @@ pub struct State {
     hiss_at: Option<[f32; 3]>,
     /// Once: stood by a lantern and heard the soft hiss.
     found_hiss: bool,
+    /// Once: swung a fence gate and heard the creak.
+    found_creak: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2179,6 +2181,7 @@ impl State {
             hiss_mix: 0.0,
             hiss_at: None,
             found_hiss: false,
+            found_creak: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -3723,6 +3726,14 @@ impl State {
             TAG_PLACE,
             None,
         );
+        if id == "fence_gate" {
+            let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.55, at[2] as f32 + 0.5];
+            self.play_world(crate::audio::Sound::Creak, source);
+            if !self.found_creak {
+                self.found_creak = true;
+                self.gui.push_chat("creak");
+            }
+        }
     }
 
     /// Power bit (8) on a pump — facing bits stay. Off is a closed valve.
@@ -10359,6 +10370,117 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Open fence gate with a wood creak, then quit with a PNG.
+    pub fn arm_gate_creak_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let gx = 11;
+        let gy = 2;
+        let gz = 17;
+        let mut changes = Vec::new();
+        for z in (gz - 1)..=(gz + 1) {
+            for x in (gx - 1)..=(gx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Fence posts with an open gate leaf between them.
+        changes.push(CellChange {
+            x: gx,
+            y: gy,
+            z: gz - 1,
+            block: Block::new("fence", 0),
+        });
+        changes.push(CellChange {
+            x: gx,
+            y: gy,
+            z: gz + 1,
+            block: Block::new("fence", 0),
+        });
+        changes.push(CellChange {
+            x: gx,
+            y: gy,
+            z: gz,
+            block: Block::new("fence_gate", 1),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(gx as f32 + 0.5, gy as f32 + 0.7, gz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            gx as f32 - 2.2,
+            gy as f32 + 0.35 + body::EYE_HEIGHT,
+            gz as f32 + 1.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let source = [gx as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.5];
+        self.drops = crate::drops::Drops::new();
+        self.drops.puff(source, [0.62, 0.48, 0.28]);
+        self.rebuild_drops();
+        self.found_creak = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("creak");
+        self.play_world(crate::audio::Sound::Creak, source);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(gx + dx * 8, gz + dz * 8);
             }
         }
         let _ = self.window.focus_window();

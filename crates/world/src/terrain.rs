@@ -213,6 +213,9 @@ pub const CAMP_CAULDRON: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 - 2);
 /// Fenced wheat plot east of the camp ring.
 pub const CAMP_FARM: (i32, i32) = (CAMP_FIRE.0 + 5, CAMP_FIRE.1);
 
+/// West-facing fence gate into the camp farm plot.
+pub const CAMP_FARM_GATE: (i32, i32) = (CAMP_FARM.0 - 1, CAMP_FARM.1);
+
 /// Scarecrow south of the farm plot (fence post + carved pumpkin).
 pub const CAMP_SCARECROW: (i32, i32) = (CAMP_FARM.0, CAMP_FARM.1 - 3);
 
@@ -1005,6 +1008,10 @@ mod tests {
             CAMP_FARM
         );
         assert_eq!(camp.block(x + 4, y, z).id, "fence_gate");
+        assert_eq!(
+            (2 * 16 + i32::from(x + 4), -2 * 16 + i32::from(z)),
+            CAMP_FARM_GATE
+        );
         assert_eq!(camp.block(x + 4, y, z - 1).id, "fence");
         assert_eq!(camp.block(x + 5, y, z - 3).id, "fence");
         assert_eq!(camp.block(x + 5, y + 1, z - 3).id, "pumpkin");

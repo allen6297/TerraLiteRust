@@ -69,6 +69,8 @@ pub enum Sound {
     Rustle,
     /// A soft warm lantern / torch hiss.
     Hiss,
+    /// A soft wooden fence-gate / door creak.
+    Creak,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -577,6 +579,7 @@ impl Audio {
             Sound::Drip => cave_drip(),
             Sound::Rustle => leaf_rustle(),
             Sound::Hiss => lantern_hiss(),
+            Sound::Creak => gate_creak(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -917,6 +920,25 @@ fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
         let tone = (t * slide * std::f32::consts::TAU).sin();
         let env = (t / 0.015).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((tone * 0.85 + n * 0.08) * volume * env * 32_767.0) as i16);
+    }
+    samples
+}
+
+/// Soft wooden gate creak. Short scrape with a low wood tone.
+fn gate_creak() -> Vec<i16> {
+    let seconds = 0.2;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 83u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let wood = (t * 140.0 * std::f32::consts::TAU).sin() * 0.4
+            + (t * 260.0 * std::f32::consts::TAU).sin() * 0.18;
+        let scrape = (t * 920.0 * std::f32::consts::TAU).sin() * 0.12;
+        let env = (t / 0.02).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.28 + wood + scrape) * 0.14 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1290,6 +1312,17 @@ mod tests {
             .hiss_ready(10.0, 0.25)
             .expect("edge of range still hisses");
         assert!(edge < level);
+    }
+
+    #[test]
+    fn gate_creak_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Creak);
+        assert_eq!(audio.played, vec![Sound::Creak]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Creak);
+        assert_eq!(audio.played, vec![Sound::Creak]);
     }
 
     #[test]
