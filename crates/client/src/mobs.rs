@@ -1,5 +1,5 @@
 //! A pig, a horse, a zombie, a breeze, a copper golem, a wolf, a cat, a parrot,
-//! a frog, an axolotl, a chicken, a bee, a fox, and a goat.
+//! a frog, an axolotl, a chicken, a bee, a fox, a goat, and a village trader.
 //!
 //! The zombie body is `models/entity/zombie.bbmodel` with `textures/entity/zombie.png`,
 //! playing `idle`, `walk`, and `attack` the same way the chicken and player do.
@@ -4711,6 +4711,181 @@ fn push_box(out: &mut Vec<Vertex>, center: [f32; 3], half: [f32; 3], color: [f32
                 ao: 1.0,
             });
         }
+    }
+}
+
+/// Village green pad — same cell as `rebuild_world::VILLAGE_GREEN`.
+pub const TRADER_PAD: (i32, i32) = (8, -22);
+
+/// One emerald trade row. Cost then payout.
+#[derive(Clone, Copy, Debug)]
+pub struct TradeOffer {
+    pub cost: &'static str,
+    pub cost_n: u16,
+    pub give: &'static str,
+    pub give_n: u16,
+    pub stock: u16,
+}
+
+/// Stock recipes the village trader keeps.
+pub const TRADER_OFFERS: [TradeOffer; 3] = [
+    TradeOffer {
+        cost: "emerald",
+        cost_n: 1,
+        give: "torch",
+        give_n: 8,
+        stock: 12,
+    },
+    TradeOffer {
+        cost: "emerald",
+        cost_n: 1,
+        give: "apple",
+        give_n: 4,
+        stock: 8,
+    },
+    TradeOffer {
+        cost: "emerald",
+        cost_n: 1,
+        give: "map",
+        give_n: 1,
+        stock: 4,
+    },
+];
+
+/// Idle boxy villager on the village green. Right-click opens trades.
+pub struct Trader {
+    origin: [f32; 3],
+    yaw: f32,
+    pose: f32,
+    stock: [u16; 3],
+}
+
+impl Trader {
+    pub fn new() -> Self {
+        let (x, z) = TRADER_PAD;
+        Self {
+            origin: [x as f32 + 0.5, 4.0, z as f32 + 0.5],
+            yaw: std::f32::consts::PI,
+            pose: 0.0,
+            stock: [
+                TRADER_OFFERS[0].stock,
+                TRADER_OFFERS[1].stock,
+                TRADER_OFFERS[2].stock,
+            ],
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn stock(&self) -> [u16; 3] {
+        self.stock
+    }
+
+    pub fn set_stock(&mut self, stock: [u16; 3]) {
+        self.stock = stock;
+    }
+
+    /// True when looking at the trader within interact range.
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.9, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=5.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 1.1
+    }
+
+    /// Idle bob; face the player when nearby. Settle onto solid ground.
+    pub fn tick(&mut self, count: u32, player: [f32; 2], world: &Cluster) {
+        for _ in 0..count {
+            self.pose += 0.04;
+            settle_land(&mut self.origin, world);
+            let dx = player[0] - self.origin[0];
+            let dz = player[1] - self.origin[2];
+            if dx * dx + dz * dz < 64.0 {
+                face_forward(&mut self.yaw, dx, dz);
+            }
+        }
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let [x, y, z] = self.origin;
+        ([x - 0.35, y, z - 0.35], [x + 0.35, y + 1.85, z + 0.35])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let [x, y, z] = self.origin;
+        let bob = (self.pose * 2.0).sin() * 0.02;
+        let mut out = Vec::new();
+        let robe = [0.42, 0.38, 0.55];
+        let skin = [0.86, 0.68, 0.52];
+        let belt = [0.55, 0.42, 0.18];
+        // Legs.
+        push_box(
+            &mut out,
+            [x - 0.1, y + 0.35 + bob, z],
+            [0.1, 0.35, 0.1],
+            [0.28, 0.24, 0.36],
+        );
+        push_box(
+            &mut out,
+            [x + 0.1, y + 0.35 + bob, z],
+            [0.1, 0.35, 0.1],
+            [0.28, 0.24, 0.36],
+        );
+        // Body / robe.
+        push_box(
+            &mut out,
+            [x, y + 0.95 + bob, z],
+            [0.28, 0.4, 0.18],
+            robe,
+        );
+        push_box(
+            &mut out,
+            [x, y + 0.7 + bob, z],
+            [0.3, 0.06, 0.2],
+            belt,
+        );
+        // Arms.
+        push_box(
+            &mut out,
+            [x - 0.38, y + 0.95 + bob, z],
+            [0.08, 0.32, 0.08],
+            robe,
+        );
+        push_box(
+            &mut out,
+            [x + 0.38, y + 0.95 + bob, z],
+            [0.08, 0.32, 0.08],
+            robe,
+        );
+        // Head + nose.
+        push_box(
+            &mut out,
+            [x, y + 1.5 + bob, z],
+            [0.22, 0.22, 0.2],
+            skin,
+        );
+        push_box(
+            &mut out,
+            [x, y + 1.42 + bob, z + 0.22],
+            [0.06, 0.06, 0.08],
+            skin,
+        );
+        yaw_mesh(&mut out, self.origin, self.yaw);
+        out
     }
 }
 

@@ -208,7 +208,12 @@ impl EguiHost {
 
     /// True when egui should own pointer/keyboard instead of the world.
     pub fn wants_input(menu: &Menu, gui: &Gui, dead: bool, map_open: bool) -> bool {
-        dead || menu.is_open() || gui.bag_open() || gui.player_inv_open() || map_open
+        dead
+            || menu.is_open()
+            || gui.bag_open()
+            || gui.player_inv_open()
+            || gui.trade_open()
+            || map_open
     }
 
     /// Build menus for this frame. Returns tessellated output ready to paint.
@@ -285,6 +290,10 @@ impl EguiHost {
                 touched = inv_touched;
                 crafted = inv_crafted;
                 draw_pinned_tip(ui, gui);
+            } else if gui.trade_open() {
+                if draw_trade(ui, gui, hotbar, bag) {
+                    touched = true;
+                }
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
@@ -2634,6 +2643,97 @@ fn category_arrow(ui: &mut Ui, label: &str) -> egui::Response {
             .corner_radius(CornerRadius::same(3))
             .min_size(Vec2::new(28.0, 26.0)),
     )
+}
+
+/// Village trader stock panel — emerald buys for torch / apple / map.
+fn draw_trade(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+) -> bool {
+    let mut touched = false;
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(48.0);
+                Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, LIP))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::same(16))
+                    .show(ui, |ui| {
+                        ui.set_min_width(420.0);
+                        ui.label(
+                            RichText::new("Village trader")
+                                .size(20.0)
+                                .color(INK)
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("Emeralds for stock goods. Esc closes.")
+                                .size(13.0)
+                                .color(MUTED),
+                        );
+                        ui.add_space(12.0);
+                        let mut stock = gui.trade_stock();
+                        for (index, offer) in crate::mobs::TRADER_OFFERS.iter().enumerate() {
+                            let left = stock[index];
+                            let can = left > 0
+                                && hotbar.holds(offer.cost, offer.cost_n)
+                                && (hotbar.room_for(offer.give) || bag.room_for(offer.give));
+                            ui.horizontal(|ui| {
+                                let label = format!(
+                                    "{}× {}  →  {}× {}   ({} left)",
+                                    offer.cost_n,
+                                    offer.cost,
+                                    offer.give_n,
+                                    offer.give,
+                                    left
+                                );
+                                ui.label(RichText::new(label).size(14.0).color(INK));
+                                ui.add_space(8.0);
+                                let btn = egui::Button::new(
+                                    RichText::new(if left == 0 { "Sold out" } else { "Trade" })
+                                        .size(14.0)
+                                        .color(INK),
+                                )
+                                .fill(if can { SELECT_SOFT } else { BUTTON })
+                                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                .corner_radius(CornerRadius::same(3))
+                                .min_size(Vec2::new(88.0, 28.0));
+                                if ui.add_enabled(can, btn).clicked() {
+                                    let mut paid = true;
+                                    for _ in 0..offer.cost_n {
+                                        if !hotbar.consume_one(offer.cost) {
+                                            paid = false;
+                                            break;
+                                        }
+                                    }
+                                    if paid {
+                                        for _ in 0..offer.give_n {
+                                            if !hotbar.collect(offer.give) {
+                                                bag.collect(offer.give);
+                                            }
+                                        }
+                                        stock[index] = left.saturating_sub(1);
+                                        touched = true;
+                                    }
+                                }
+                            });
+                            ui.add_space(6.0);
+                        }
+                        gui.set_trade_stock(stock);
+                        ui.add_space(8.0);
+                        if close_button(ui, "Close (Esc)").clicked() {
+                            gui.close_trade();
+                        }
+                    });
+            });
+        });
+    touched
 }
 
 fn draw_player_inventory(

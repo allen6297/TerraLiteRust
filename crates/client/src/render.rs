@@ -1634,6 +1634,9 @@ pub struct State {
     chicken: crate::mobs::Chicken,
     chicken_buf: Option<wgpu::Buffer>,
     chicken_count: u32,
+    trader: crate::mobs::Trader,
+    trader_buf: Option<wgpu::Buffer>,
+    trader_count: u32,
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
     bee_count: u32,
@@ -2771,6 +2774,9 @@ impl State {
             chicken: crate::mobs::Chicken::new(),
             chicken_buf: None,
             chicken_count: 0,
+            trader: crate::mobs::Trader::new(),
+            trader_buf: None,
+            trader_count: 0,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
             bee_count: 0,
@@ -2851,6 +2857,7 @@ impl State {
         state.rebuild_frog();
         state.rebuild_axolotl();
         state.rebuild_chicken();
+        state.rebuild_trader();
         state.rebuild_bee();
         state.rebuild_fox();
         state.rebuild_goat();
@@ -4913,6 +4920,23 @@ impl State {
             },
         ));
         self.chicken_count = vertices.len() as u32;
+    }
+
+    fn rebuild_trader(&mut self) {
+        let vertices = self.trader.vertices();
+        if vertices.is_empty() {
+            self.trader_buf = None;
+            self.trader_count = 0;
+            return;
+        }
+        self.trader_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("trader"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.trader_count = vertices.len() as u32;
     }
 
     fn rebuild_bee(&mut self) {
@@ -8213,6 +8237,20 @@ impl State {
         true
     }
 
+    /// Right-click the village trader to open emerald stock trades.
+    fn try_trader(&mut self) -> bool {
+        let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+        let forward = self.camera.forward();
+        let forward = [forward.x, forward.y, forward.z];
+        if !self.trader.aimed(eye, forward) {
+            return false;
+        }
+        self.gui.open_trade(self.trader.stock());
+        self.set_capture(false);
+        self.gui.push_chat("trades");
+        true
+    }
+
     /// Feed the parrot a hay bale, or empty-hand perch/hop-off a tamed one.
     fn try_parrot(&mut self) -> bool {
         let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
@@ -9507,6 +9545,7 @@ impl State {
             ("frog", self.frog.bounds()),
             ("axolotl", self.axolotl.bounds()),
             ("chicken", self.chicken.bounds()),
+            ("trader", self.trader.bounds()),
             ("bee", self.bee.bounds()),
             ("fox", self.fox.bounds()),
             ("goat", self.goat.bounds()),
@@ -9761,6 +9800,7 @@ impl State {
             || self.try_frog()
             || self.try_axolotl()
             || self.try_chicken()
+            || self.try_trader()
             || self.try_parrot()
             || self.try_cat()
             || self.try_wolf()
@@ -13231,6 +13271,60 @@ impl State {
                 }
             }
         }
+    }
+
+    /// Village trader trade panel on the green, then quit.
+    pub fn arm_village_trader_shot(&mut self, path: std::path::PathBuf) {
+        self.village_shot_path = Some(path);
+        self.village_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, -2));
+        self.clock.set_time_of_day(0.30);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_village = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a village remnant");
+        self.gui.push_chat("trades");
+        // Seed emeralds so the Trade buttons are live in the shot.
+        for _ in 0..8 {
+            let _ = self.hotbar.collect("emerald");
+        }
+        self.hotbar_dirty = true;
+        self.trader = crate::mobs::Trader::new();
+        self.trader.tick(8, [8.5, -20.0], &self.world);
+        self.rebuild_trader();
+        self.gui.open_trade(self.trader.stock());
+        self.set_capture(false);
+
+        let [tx, ty, tz] = self.trader.origin();
+        let focus = glam::Vec3::new(tx, ty + 1.2, tz);
+        let eye = glam::Vec3::new(tx + 0.5, ty + 1.6 + body::EYE_HEIGHT, tz + 4.5);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.village_shot_eye = eye;
+        self.village_shot_yaw = yaw;
+        self.village_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(
+                    rebuild_world::VILLAGE.0 + dx * 8,
+                    rebuild_world::VILLAGE.1 + dz * 8,
+                );
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Hold cooked food over a campfire after a one-step cook, then quit with a PNG.
@@ -25681,6 +25775,11 @@ impl State {
                 self.gui.push_chat("egg");
             }
             self.rebuild_chicken();
+            self.trader.tick(steps, feet, &self.world);
+            if self.gui.trade_open() {
+                self.trader.set_stock(self.gui.trade_stock());
+            }
+            self.rebuild_trader();
             let feet_at = [
                 self.camera.eye.x,
                 self.camera.eye.y - body::EYE_HEIGHT,
@@ -26389,6 +26488,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, chicken.slice(..));
                     pass.draw(0..self.chicken_count, 0..1);
+                }
+            }
+            if let Some(trader) = &self.trader_buf {
+                if self.trader_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, trader.slice(..));
+                    pass.draw(0..self.trader_count, 0..1);
                 }
             }
             if let Some(bee) = &self.bee_buf {

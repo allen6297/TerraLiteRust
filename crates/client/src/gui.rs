@@ -645,6 +645,10 @@ pub struct Gui {
     selected: usize,
     bag_open: bool,
     bag_selected: usize,
+    /// Village trader egui panel (emerald stock recipes).
+    trade_open: bool,
+    /// Remaining stock per [`crate::mobs::TRADER_OFFERS`] row while trading.
+    trade_stock: [u16; 3],
     /// PLAYER vs Craft tab while the player inventory (E) is open.
     inv_tab: PlayerInvTab,
     /// The creative grid has the cursor. False means the carried row does.
@@ -843,6 +847,8 @@ impl Gui {
                 selected: 0,
                 bag_open: false,
                 bag_selected: 0,
+                trade_open: false,
+                trade_stock: [0; 3],
                 inv_tab: PlayerInvTab::Player,
                 catalog_on: false,
                 catalog_at: 0,
@@ -963,6 +969,8 @@ impl Gui {
                     selected: 0,
                     bag_open: false,
                     bag_selected: 0,
+                    trade_open: false,
+                    trade_stock: [0; 3],
                     inv_tab: PlayerInvTab::Player,
                     catalog_on: false,
                     catalog_at: 0,
@@ -1093,6 +1101,8 @@ impl Gui {
             selected: 0,
             bag_open: false,
             bag_selected: 0,
+            trade_open: false,
+            trade_stock: [0; 3],
             inv_tab: PlayerInvTab::Player,
             catalog_on: false,
             catalog_at: 0,
@@ -1210,6 +1220,7 @@ impl Gui {
     pub fn is_open(&self) -> bool {
         self.open
             || self.bag_open
+            || self.trade_open
             || self.command_open
             || self.chat_open
             || self.chest_open
@@ -1245,6 +1256,32 @@ impl Gui {
 
     pub fn bag_open(&self) -> bool {
         self.bag_open
+    }
+
+    pub fn trade_open(&self) -> bool {
+        self.trade_open
+    }
+
+    /// Open the village trader panel with the current offer stock.
+    pub fn open_trade(&mut self, stock: [u16; 3]) {
+        self.trade_open = true;
+        self.trade_stock = stock;
+        self.open = false;
+        self.bag_open = false;
+        self.extra = None;
+        self.built_at = None;
+    }
+
+    pub fn close_trade(&mut self) {
+        self.trade_open = false;
+    }
+
+    pub fn trade_stock(&self) -> [u16; 3] {
+        self.trade_stock
+    }
+
+    pub fn set_trade_stock(&mut self, stock: [u16; 3]) {
+        self.trade_stock = stock;
     }
 
     /// Alias for [`Self::player_inv_open`] (older call sites / EMI bridge).
@@ -2801,6 +2838,12 @@ impl Gui {
 
     /// Open, close, or move the selection. Other keys are ignored.
     pub fn on_press(&mut self, code: KeyCode) -> bool {
+        if self.trade_open {
+            if code == KeyCode::Escape {
+                self.close_trade();
+            }
+            return true;
+        }
         if self.chest_open {
             return self.on_chest(code);
         }
@@ -9094,6 +9137,8 @@ mod tests {
             selected: 0,
             bag_open: false,
             bag_selected: 0,
+            trade_open: false,
+            trade_stock: [0; 3],
             inv_tab: PlayerInvTab::Player,
             catalog_on: false,
             catalog_at: 0,
