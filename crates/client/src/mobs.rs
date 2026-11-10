@@ -1898,6 +1898,42 @@ impl Wolf {
             [0.08, 0.06, 0.05],
             [0.28, 0.28, 0.32],
         );
+        if self.sitting {
+            // Front paws tucked under the chest while sitting.
+            push_box(
+                &mut out,
+                [x + 0.14, y + 0.08, z - 0.09],
+                [0.07, 0.06, 0.05],
+                [0.4, 0.4, 0.44],
+            );
+            push_box(
+                &mut out,
+                [x + 0.14, y + 0.08, z + 0.09],
+                [0.07, 0.06, 0.05],
+                [0.4, 0.4, 0.44],
+            );
+            // Haunches drop onto the grass.
+            push_box(
+                &mut out,
+                [x - 0.12, y + 0.1, z],
+                [0.12, 0.08, 0.12],
+                [0.42, 0.42, 0.46],
+            );
+        } else {
+            for &(dx, dz) in &[
+                (0.16f32, 0.1f32),
+                (0.16, -0.1),
+                (-0.16, 0.1),
+                (-0.16, -0.1),
+            ] {
+                push_box(
+                    &mut out,
+                    [x + dx, y + 0.1, z + dz],
+                    [0.05, 0.1, 0.05],
+                    [0.4, 0.4, 0.44],
+                );
+            }
+        }
         if self.tamed {
             push_box(
                 &mut out,
@@ -3529,6 +3565,14 @@ impl Bee {
         self.origin
     }
 
+    /// Put the body somewhere for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.goal = None;
+        self.loose = 0;
+        self.wait = 0;
+    }
+
     pub fn pollen(&self) -> bool {
         self.pollen
     }
@@ -4785,11 +4829,40 @@ mod tests {
         // Empty-hand companion: sit stays put, stand follows again.
         assert!(wolf.sit());
         assert!(wolf.sitting());
+        let sit_low = wolf
+            .vertices()
+            .iter()
+            .map(|v| v.position[1])
+            .fold(f32::MAX, f32::min);
+        assert!(
+            sit_low < home[1] + 0.12,
+            "tucked sit paws rest near the grass, low {sit_low}"
+        );
         let parked = wolf.origin();
         wolf.tick(30, [home[0] + 10.0, home[2]], None, &ground);
         assert!((wolf.origin()[0] - parked[0]).abs() < 0.05);
         assert!(!wolf.sit());
         assert!(!wolf.sitting());
+        let stand_span = {
+            let verts = wolf.vertices();
+            let lo = verts.iter().map(|v| v.position[1]).fold(f32::MAX, f32::min);
+            let hi = verts.iter().map(|v| v.position[1]).fold(f32::MIN, f32::max);
+            hi - lo
+        };
+        let sit_span = {
+            // re-sit briefly to compare body height to the standing pose
+            assert!(wolf.sit());
+            let verts = wolf.vertices();
+            let lo = verts.iter().map(|v| v.position[1]).fold(f32::MAX, f32::min);
+            let hi = verts.iter().map(|v| v.position[1]).fold(f32::MIN, f32::max);
+            let span = hi - lo;
+            assert!(!wolf.sit());
+            span
+        };
+        assert!(
+            stand_span > sit_span,
+            "standing reads taller than the tucked sit, stand {stand_span} sit {sit_span}"
+        );
         wolf.tick(40, [home[0] + 10.0, home[2]], None, &ground);
         assert!(wolf.origin()[0] > home[0] + 2.0);
         let mut bit = false;

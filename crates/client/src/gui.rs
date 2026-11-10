@@ -5393,6 +5393,15 @@ pub fn leash_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "leash")
 }
 
+pub fn wolf_quads(width: f32, height: f32, amount: f32, sitting: bool) -> Vec<Quad> {
+    status_plate(
+        width,
+        height,
+        amount,
+        if sitting { "sit" } else { "heel" },
+    )
+}
+
 pub fn chew_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "chew")
 }

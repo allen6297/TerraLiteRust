@@ -1000,6 +1000,8 @@ pub struct State {
     leash_show: f32,
     /// True when the current axolotl follow consumed a lead item.
     axolotl_held_lead: bool,
+    /// HUD plate while a tamed wolf sits or heels, `0`..`1`.
+    wolf_show: f32,
     /// One-shot idle horse vs gallop FOV stitch, then quit.
     horse_shot_path: Option<std::path::PathBuf>,
     horse_shot_frames: u32,
@@ -2067,6 +2069,7 @@ impl State {
             pollen_drip: 0.0,
             leash_show: 0.0,
             axolotl_held_lead: false,
+            wolf_show: 0.0,
             horse_shot_path: None,
             horse_shot_frames: 0,
             horse_shot_phase: HorseShotPhase::Idle,
@@ -5665,6 +5668,7 @@ impl State {
                 return false;
             }
             self.wolf.sit();
+            self.wolf_show = 1.0;
             self.rebuild_wolf();
             self.gui
                 .push_chat(if self.wolf.sitting() { "sit" } else { "follow" });
@@ -5679,6 +5683,7 @@ impl State {
         self.wolf.feed();
         self.hotbar.consume_selected();
         self.hotbar_dirty = true;
+        self.wolf_show = 1.0;
         self.rebuild_wolf();
         self.gui.push_chat("tamed");
         true
@@ -9617,6 +9622,12 @@ impl State {
         self.wolf.place_at([8.5, 1.0, 9.2]);
         let _ = self.wolf.feed();
         let _ = self.wolf.sit();
+        self.wolf_show = 1.0;
+        // Keep the pad clear of other demo pets for the sit plate shot.
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.rebuild_bee();
+        self.rebuild_axolotl();
         self.rebuild_wolf();
         self.found_wolf = true;
         self.gui.push_chat("sit");
@@ -9624,8 +9635,9 @@ impl State {
         self.hotbar.install_saved(0, &[]);
         self.hotbar_dirty = true;
 
-        let focus = glam::Vec3::from(self.wolf.origin()) + glam::Vec3::new(0.0, 0.35, 0.0);
-        let eye = glam::Vec3::new(focus.x - 0.4, focus.y + 1.35 + body::EYE_HEIGHT, focus.z - 2.6);
+        // Side angle so the tucked sit pose and collar read clearly.
+        let focus = glam::Vec3::from(self.wolf.origin()) + glam::Vec3::new(0.05, 0.28, 0.0);
+        let eye = glam::Vec3::new(focus.x + 1.9, focus.y + 0.55 + body::EYE_HEIGHT, focus.z + 2.4);
         self.camera = Camera::looking_at(eye, focus);
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;
@@ -16991,6 +17003,11 @@ impl State {
                 }
                 self.rebuild_zombie();
             }
+            if self.wolf.tamed() {
+                self.wolf_show = (self.wolf_show + 0.35).min(1.0);
+            } else {
+                self.wolf_show = (self.wolf_show - steps as f32 * 0.08).max(0.0);
+            }
             self.rebuild_wolf();
             if self.cat.tick(steps, feet, self.zombie.feet(), &self.world) {
                 let spot = self.cat.origin();
@@ -17792,6 +17809,14 @@ impl State {
         }
         if self.leash_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::leash_quads(gui_w, gui_h, self.leash_show));
+        }
+        if self.wolf_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::wolf_quads(
+                gui_w,
+                gui_h,
+                self.wolf_show,
+                self.wolf.sitting(),
+            ));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));
