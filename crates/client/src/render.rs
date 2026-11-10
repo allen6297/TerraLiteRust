@@ -3344,6 +3344,13 @@ impl State {
         self.flush_script_writes();
     }
 
+    /// Soft chat tip when the sky crosses dawn or dusk while playing.
+    fn tell_sky_edge(&mut self, word: &str) {
+        if sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            self.gui.push_chat(word);
+        }
+    }
+
     /// True when `events.jump` keeps the player on the ground.
     ///
     /// The cell is where the feet are. A consumed jump still sends the first
@@ -9614,16 +9621,20 @@ impl State {
         if time < 0.25 || time >= 0.75 {
             if sky.dawn {
                 self.note_dawn();
+                self.tell_sky_edge("dawn");
             }
             if sky.dusk {
                 self.note_dusk();
+                self.tell_sky_edge("dusk");
             }
         } else {
             if sky.dusk {
                 self.note_dusk();
+                self.tell_sky_edge("dusk");
             }
             if sky.dawn {
                 self.note_dawn();
+                self.tell_sky_edge("dawn");
             }
         }
         self.horn_wait = crate::audio::horn_cool(self.horn_wait, dt);
@@ -11672,6 +11683,11 @@ fn camp_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::CAMP_CHEST
 }
 
+/// Dawn/dusk chat tips only while the world is live (not menu / death).
+fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
+    playing && !menu_open && !dead
+}
+
 /// True when the column above the eye is clear of full cubes (~open sky).
 fn open_sky(world: &Cluster, eye: [f32; 3]) -> bool {
     let x = eye[0].floor() as i32;
@@ -12173,6 +12189,14 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_camp(true, x, z, false).is_none());
         assert!(super::fresh_camp(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn sky_edge_tips_only_while_playing_alive() {
+        assert!(super::sky_edge_tip_open(true, false, false));
+        assert!(!super::sky_edge_tip_open(false, false, false));
+        assert!(!super::sky_edge_tip_open(true, true, false));
+        assert!(!super::sky_edge_tip_open(true, false, true));
     }
 
     #[test]
