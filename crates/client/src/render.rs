@@ -1036,6 +1036,12 @@ pub struct State {
     campfire_smoke_shot_eye: glam::Vec3,
     campfire_smoke_shot_yaw: f32,
     campfire_smoke_shot_pitch: f32,
+    /// One-shot campfire cook (raw → cooked) proof PNG, then quit.
+    cook_shot_path: Option<std::path::PathBuf>,
+    cook_shot_frames: u32,
+    cook_shot_eye: glam::Vec3,
+    cook_shot_yaw: f32,
+    cook_shot_pitch: f32,
     /// One-shot shrine ruin proof PNG, then quit.
     shrine_shot_path: Option<std::path::PathBuf>,
     shrine_shot_frames: u32,
@@ -1967,6 +1973,11 @@ impl State {
             campfire_smoke_shot_eye: glam::Vec3::ZERO,
             campfire_smoke_shot_yaw: 0.0,
             campfire_smoke_shot_pitch: 0.0,
+            cook_shot_path: None,
+            cook_shot_frames: 0,
+            cook_shot_eye: glam::Vec3::ZERO,
+            cook_shot_yaw: 0.0,
+            cook_shot_pitch: 0.0,
             shrine_shot_path: None,
             shrine_shot_frames: 0,
             shrine_shot_eye: glam::Vec3::ZERO,
@@ -3269,7 +3280,13 @@ impl State {
             "hanging_sign" => self.gui.open_hang(hit.block),
             "composter" => self.gui.open_compost(hit.block, block.metadata),
             "stonecutter" => self.gui.open_cut(),
-            "campfire" => self.gui.open_fire(),
+            "campfire" => {
+                if self.try_cook_campfire() {
+                    true
+                } else {
+                    self.gui.open_fire()
+                }
+            }
             "fletching_table" => self.gui.open_fletch(),
             "smoker" => self.gui.open_smoker(),
             "blast_furnace" => self.gui.open_blast(),
@@ -3711,6 +3728,44 @@ impl State {
             return;
         }
         self.chest_dirty = false;
+    }
+
+    /// Hold raw food and use a looked-at campfire to cook it in one step.
+    fn try_cook_campfire(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if id != "raw" {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "campfire"
+        {
+            return false;
+        }
+        let word = self.hotbar.cook_raw_now();
+        self.gui.push_chat(word);
+        if word == "cooked" {
+            self.hotbar_dirty = true;
+            let at = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 0.9,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.play_world(crate::audio::Sound::Crackle, at);
+            // A couple smoke motes so the cook reads in the world.
+            self.drops.smoke(at);
+            self.drops
+                .smoke([at[0] + 0.08, at[1] + 0.12, at[2] - 0.05]);
+            self.rebuild_drops();
+        }
+        true
     }
 
     /// Eat the held food. True when the selected slot is food, even if the bar is full.
@@ -4988,6 +5043,7 @@ impl State {
             || self.try_parrot()
             || self.try_cat()
             || self.try_wolf()
+            || self.try_cook_campfire()
             || self.try_eat()
             || self.try_key()
             || self.try_wind()
@@ -6087,6 +6143,127 @@ impl State {
                 eprintln!("mine shot failed: {err}");
                 if self.mine_shot_frames > 250 {
                     self.mine_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    /// Hold cooked food over a campfire after a one-step cook, then quit with a PNG.
+    pub fn arm_cook_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.45);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let fx = 8;
+        let fy = 2;
+        let fz = 10;
+        let mut changes = Vec::new();
+        for z in 8..=12 {
+            for x in 6..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: fx,
+            y: fy,
+            z: fz,
+            block: Block::new("campfire", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let _ = self.hotbar.give_stack("raw");
+        let _ = self.hotbar.select_digit(2);
+        let word = self.hotbar.cook_raw_now();
+        self.gui.push_chat(word);
+        self.hotbar_dirty = true;
+        let fire = glam::Vec3::new(fx as f32 + 0.5, fy as f32 + 0.85, fz as f32 + 0.5);
+        self.drops.smoke([fire.x, fire.y + 0.2, fire.z]);
+        self.drops.smoke([fire.x + 0.1, fire.y + 0.35, fire.z - 0.05]);
+        self.rebuild_drops();
+        let eye = glam::Vec3::new(
+            fx as f32 + 0.5,
+            fy as f32 + 1.05 + body::EYE_HEIGHT,
+            fz as f32 - 3.4,
+        );
+        let look = glam::Vec3::new(fire.x, fire.y + 0.55, fire.z);
+        self.camera = Camera::looking_at(eye, look);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_cook_shot_camera(&mut self) {
+        if self.cook_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(self.cook_shot_eye, self.cook_shot_yaw, self.cook_shot_pitch);
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.cook_shot_eye;
+        self.posed_yaw = self.cook_shot_yaw;
+        self.posed_pitch = self.cook_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+    }
+
+    fn poll_cook_shot(&mut self) {
+        let Some(path) = self.cook_shot_path.clone() else {
+            return;
+        };
+        self.pin_cook_shot_camera();
+        self.cook_shot_frames = self.cook_shot_frames.saturating_add(1);
+        if self.cook_shot_frames % 5 == 0 {
+            self.drops.smoke([8.5, 2.95, 10.5]);
+            self.rebuild_drops();
+        }
+        if self.cook_shot_frames < 100 || !self.chunk_bake.is_idle() {
+            if self.cook_shot_frames > 500 {
+                eprintln!("cook shot timed out");
+                self.cook_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("cook shot wrote {}", path.display());
+                self.cook_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("cook shot failed: {err}");
+                if self.cook_shot_frames > 220 {
+                    self.cook_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -11610,6 +11787,7 @@ impl State {
         self.poll_jump_shot();
         self.poll_place_shot();
         self.poll_campfire_smoke_shot();
+        self.poll_cook_shot();
         self.poll_shrine_shot();
         self.poll_mine_shot();
         self.poll_swap_shot();

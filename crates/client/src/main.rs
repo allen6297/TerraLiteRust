@@ -139,6 +139,8 @@ struct Args {
     shot_break: Option<std::path::PathBuf>,
     /// Campfire smoke puffs, then quit.
     shot_campfire_smoke: Option<std::path::PathBuf>,
+    /// Campfire cook raw→cooked, then quit.
+    shot_cook: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -228,6 +230,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_swap: args.shot_swap,
         shot_break: args.shot_break,
         shot_campfire_smoke: args.shot_campfire_smoke,
+        shot_cook: args.shot_cook,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -263,6 +266,7 @@ struct App {
     shot_swap: Option<std::path::PathBuf>,
     shot_break: Option<std::path::PathBuf>,
     shot_campfire_smoke: Option<std::path::PathBuf>,
+    shot_cook: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -353,6 +357,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_campfire_smoke.take() {
                     state.arm_campfire_smoke_shot(path);
+                }
+                if let Some(path) = self.shot_cook.take() {
+                    state.arm_cook_shot(path);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -498,6 +505,7 @@ where
         shot_swap: None,
         shot_break: None,
         shot_campfire_smoke: None,
+        shot_cook: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -614,6 +622,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-campfire-smoke".to_string())?;
                 parsed.shot_campfire_smoke = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-cook" | "--shot-campfire-cook" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-cook".to_string())?;
+                parsed.shot_cook = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter

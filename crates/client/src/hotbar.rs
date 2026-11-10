@@ -1000,6 +1000,32 @@ impl Hotbar {
             self.camp_heat = 1;
             return "cooking";
         }
+        self.finish_cook_raw()
+    }
+
+    /// One-step campfire cook: hold raw, use the fire, get cooked food.
+    pub fn cook_raw_now(&mut self) -> &'static str {
+        let Some(item) = self.item(self.selected) else {
+            self.camp_heat = 0;
+            return "need raw";
+        };
+        if item.id != "raw" {
+            self.camp_heat = 0;
+            return "need raw";
+        }
+        self.camp_heat = 1;
+        self.finish_cook_raw()
+    }
+
+    fn finish_cook_raw(&mut self) -> &'static str {
+        let Some(item) = self.item(self.selected) else {
+            self.camp_heat = 0;
+            return "need raw";
+        };
+        if item.id != "raw" {
+            self.camp_heat = 0;
+            return "need raw";
+        }
         let count = item.count;
         if count > 1 && !self.room_for("cooked") {
             return "no room";
@@ -2370,6 +2396,10 @@ mod tests {
         assert_eq!(bar.cook_raw(), "cooking");
         assert_eq!(bar.cook_raw(), "cooked");
         assert_eq!(bar.slot(2), Some("cooked"));
+        assert!(bar.collect("raw"));
+        assert!(bar.select_digit(4));
+        assert_eq!(bar.cook_raw_now(), "cooked");
+        assert_eq!(bar.slot(3), Some("cooked"));
     }
 
     #[test]
