@@ -291,6 +291,9 @@ pub const SHRINE_BELL: (i32, i32) = (SHRINE.0 - 2, SHRINE.1);
 /// Lectern with a guidebook, north of the altar.
 pub const SHRINE_LECTERN: (i32, i32) = (SHRINE.0, SHRINE.1 + 2);
 
+/// Enchanting table northwest of the altar (west of the lectern).
+pub const SHRINE_ENCHANT: (i32, i32) = (SHRINE.0 - 2, SHRINE.1 + 2);
+
 const SHRINE_CHUNK: (i32, i32) = (2, 2);
 
 /// Marsh clay bank south of the demo pad, under the shallow water.
@@ -396,6 +399,12 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     let lectern_x = (SHRINE_LECTERN.0 - chunk_x * 16) as u8;
     let lectern_z = (SHRINE_LECTERN.1 - chunk_z * 16) as u8;
     blocks.push((lectern_x, floor, lectern_z, Block::new("lectern", 1)));
+    // Northwest of the altar: spend a bookshelf for Efficiency on a pick.
+    let enchant_x = (SHRINE_ENCHANT.0 - chunk_x * 16) as u8;
+    let enchant_z = (SHRINE_ENCHANT.1 - chunk_z * 16) as u8;
+    blocks.push((enchant_x, floor, enchant_z, Block::new("enchanting_table", 0)));
+    // A bookshelf beside it so the spend loop is findable without creative give.
+    blocks.push((enchant_x, floor, enchant_z - 1, Block::new("bookshelf", 0)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -910,6 +919,12 @@ mod tests {
             (2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z + 2)),
             SHRINE_LECTERN
         );
+        assert_eq!(shrine.block(local_x - 2, floor, local_z + 2).id, "enchanting_table");
+        assert_eq!(
+            (2 * 16 + i32::from(local_x - 2), 2 * 16 + i32::from(local_z + 2)),
+            SHRINE_ENCHANT
+        );
+        assert_eq!(shrine.block(local_x - 2, floor, local_z + 1).id, "bookshelf");
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);
         assert_eq!(

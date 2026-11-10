@@ -152,6 +152,36 @@ impl Drops {
         });
     }
 
+    /// Purple book pages swirling up from an enchanting table.
+    pub fn book_swirl(&mut self, origin: [f32; 3]) {
+        // Tangential + rise so a still PNG still reads as a swirl.
+        const PAGES: [([f32; 3], [f32; 3], f32); 6] = [
+            ([0.55, 0.95, 0.12], [0.72, 0.42, 0.92], 1.25),
+            ([-0.48, 1.05, 0.35], [0.58, 0.32, 0.88], 1.15),
+            ([-0.22, 0.85, -0.52], [0.82, 0.55, 0.96], 1.35),
+            ([0.38, 1.15, -0.28], [0.48, 0.28, 0.78], 1.05),
+            ([0.12, 1.25, 0.48], [0.90, 0.62, 0.98], 1.4),
+            ([-0.42, 0.75, -0.18], [0.64, 0.38, 0.90], 1.2),
+        ];
+        for (i, (vel, color, life)) in PAGES.into_iter().enumerate() {
+            let wobble = (i as f32) * 0.04;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.08,
+                    origin[1] + 0.2,
+                    origin[2] - wobble * 0.35,
+                ],
+                velocity: vel,
+                color,
+                block: color,
+                life,
+                rise: true,
+                hover: false,
+                half: 0.07,
+            });
+        }
+    }
+
     /// A short pitch-tinted mote above a note block. Color steps with the note.
     pub fn note(&mut self, origin: [f32; 3], pitch: u8) {
         let color = note_color(pitch);
@@ -814,6 +844,18 @@ mod tests {
         assert!(drops.motes[0].center[1] > before);
         assert!(drops.tick_motes(2.0));
         assert!(drops.motes.is_empty());
+    }
+
+    #[test]
+    fn book_swirl_rises_in_purple() {
+        let mut drops = Drops::new();
+        drops.book_swirl([3.5, 1.0, 3.5]);
+        assert_eq!(drops.motes.len(), 6);
+        assert!(drops.motes.iter().all(|mote| mote.rise));
+        assert!(drops.motes.iter().all(|mote| mote.color[2] > mote.color[1]));
+        let before = drops.motes[0].center[1];
+        assert!(drops.tick_motes(0.15));
+        assert!(drops.motes[0].center[1] > before);
     }
 
     #[test]

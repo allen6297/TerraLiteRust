@@ -690,6 +690,8 @@ pub struct Gui {
     enchant_open: bool,
     /// The line under the enchant title. Enter replaces it with the enchant word.
     enchant_note: String,
+    /// The enchanting table the panel is spending at.
+    enchant_at: Option<[i32; 3]>,
     brew_open: bool,
     /// The line under the brew title. Enter replaces it with the brew word.
     brew_note: String,
@@ -847,6 +849,7 @@ impl Gui {
                 anvil_note: String::new(),
                 enchant_open: false,
                 enchant_note: String::new(),
+                enchant_at: None,
                 brew_open: false,
                 brew_note: String::new(),
                 grind_open: false,
@@ -960,6 +963,7 @@ impl Gui {
                     anvil_note: String::new(),
                     enchant_open: false,
                     enchant_note: String::new(),
+                    enchant_at: None,
                     brew_open: false,
                     brew_note: String::new(),
                     grind_open: false,
@@ -1083,6 +1087,7 @@ impl Gui {
             anvil_note: String::new(),
             enchant_open: false,
             enchant_note: String::new(),
+            enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
             grind_open: false,
@@ -1556,6 +1561,7 @@ impl Gui {
         self.blast = false;
         self.anvil_open = false;
         self.enchant_open = false;
+        self.enchant_at = None;
         self.brew_open = false;
         self.grind_open = false;
         self.smith_open = false;
@@ -1855,10 +1861,11 @@ impl Gui {
     }
 
     /// An enchant panel. Other screens keep it closed.
-    pub fn open_enchanting(&mut self) -> bool {
+    pub fn open_enchanting(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
+        self.enchant_at = Some(at);
         self.enchant_note = "enter spends one bookshelf".to_string();
         self.enchant_open = true;
         true
@@ -1866,6 +1873,10 @@ impl Gui {
 
     pub fn enchant_open(&self) -> bool {
         self.enchant_open
+    }
+
+    pub fn enchant_at(&self) -> Option<[i32; 3]> {
+        self.enchant_at
     }
 
     /// The word the last enchant left on the panel.
@@ -3090,6 +3101,7 @@ impl Gui {
     fn on_enchant(&mut self, code: KeyCode) -> bool {
         if code == KeyCode::KeyF || code == KeyCode::Escape {
             self.enchant_open = false;
+            self.enchant_at = None;
             return true;
         }
         code == KeyCode::Enter
@@ -8141,6 +8153,7 @@ mod tests {
             anvil_note: String::new(),
             enchant_open: false,
             enchant_note: String::new(),
+            enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
             grind_open: false,
@@ -8676,13 +8689,15 @@ mod tests {
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.anvil_open());
 
-        assert!(gui.open_enchanting());
+        assert!(gui.open_enchanting([6, 1, 6]));
         assert_eq!(gui.screen_id(), "enchanting");
+        assert_eq!(gui.enchant_at(), Some([6, 1, 6]));
         assert!(!gui.quads(1280.0, 720.0).is_empty());
         assert!(gui.on_press(KeyCode::Enter));
         assert!(gui.enchant_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.enchant_open());
+        assert_eq!(gui.enchant_at(), None);
 
         assert!(gui.open_brewing());
         assert_eq!(gui.screen_id(), "brewing");

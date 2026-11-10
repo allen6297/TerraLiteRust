@@ -1103,6 +1103,8 @@ pub struct State {
     /// While set, cook-shot frames keep a pitch mote rising at this origin.
     note_shot_at: Option<[f32; 3]>,
     note_shot_pitch: u8,
+    /// Cook-shot refresh uses book swirl pages instead of a note mote.
+    note_shot_book: bool,
     /// One-shot shrine ruin proof PNG, then quit.
     shrine_shot_path: Option<std::path::PathBuf>,
     shrine_shot_frames: u32,
@@ -2067,6 +2069,7 @@ impl State {
             cook_shot_pitch: 0.0,
             note_shot_at: None,
             note_shot_pitch: 0,
+            note_shot_book: false,
             shrine_shot_path: None,
             shrine_shot_frames: 0,
             shrine_shot_eye: glam::Vec3::ZERO,
@@ -3411,7 +3414,7 @@ impl State {
                 }
             }
             "anvil" => self.gui.open_anvil(),
-            "enchanting_table" => self.gui.open_enchanting(),
+            "enchanting_table" => self.gui.open_enchanting(hit.block),
             "brewing_stand" => self.gui.open_brewing(),
             "grindstone" => self.gui.open_grind(),
             "smithing_table" => self.gui.open_smith(),
@@ -8670,6 +8673,73 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shrine enchant panel mid-swirl with Efficiency tip, then quit with a PNG.
+    pub fn arm_enchant_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (ex, ez) = rebuild_world::SHRINE_ENCHANT;
+        let mut ey = 4;
+        for y in 0..80 {
+            if self.world.block_at(ex, y, ez).id == "enchanting_table" {
+                ey = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(ex, ez);
+        let focus = glam::Vec3::new(ex as f32 + 0.5, ey as f32 + 0.95, ez as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            ex as f32 + 2.6,
+            ey as f32 + 1.4 + body::EYE_HEIGHT,
+            ez as f32 + 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let swirl_at = [ex as f32 + 0.5, ey as f32 + 0.95, ez as f32 + 0.5];
+        self.note_shot_at = Some(swirl_at);
+        self.note_shot_pitch = 10;
+        self.note_shot_book = true;
+        self.drops.book_swirl(swirl_at);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(10), swirl_at);
+        let _ = self.gui.open_enchanting([ex, ey, ez]);
+        self.gui.note_enchant("efficiency");
+        self.gui.push_chat("efficiency");
+        self.found_shrine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        let _ = self.hotbar.give_stack("bookshelf");
+        let _ = self.hotbar.enchant_pick();
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(ex + dx * 8, ez + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the camp cauldron panel mid-pour with a mote, then quit with a PNG.
     pub fn arm_cauldron_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -9587,7 +9657,11 @@ impl State {
         self.cook_shot_frames = self.cook_shot_frames.saturating_add(1);
         if self.cook_shot_frames % 5 == 0 {
             if let Some(at) = self.note_shot_at {
-                self.drops.note(at, self.note_shot_pitch);
+                if self.note_shot_book {
+                    self.drops.book_swirl(at);
+                } else {
+                    self.drops.note(at, self.note_shot_pitch);
+                }
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
             }
@@ -9598,6 +9672,7 @@ impl State {
                 eprintln!("cook shot timed out");
                 self.cook_shot_path = None;
                 self.note_shot_at = None;
+                self.note_shot_book = false;
                 self.quit = true;
             }
             return;
@@ -9608,6 +9683,7 @@ impl State {
                 eprintln!("cook shot wrote {}", path.display());
                 self.cook_shot_path = None;
                 self.note_shot_at = None;
+                self.note_shot_book = false;
                 self.quit = true;
             }
             Err(err) => {
@@ -9615,6 +9691,7 @@ impl State {
                 if self.cook_shot_frames > 220 {
                     self.cook_shot_path = None;
                     self.note_shot_at = None;
+                    self.note_shot_book = false;
                     self.quit = true;
                 }
             }
@@ -12060,6 +12137,14 @@ impl State {
         self.gui.note_enchant(word);
         self.gui.push_chat(word);
         self.hotbar_dirty = true;
+        if word == "efficiency" {
+            if let Some(at) = self.gui.enchant_at() {
+                let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                self.play_world(crate::audio::Sound::Note(10), source);
+                self.drops.book_swirl(source);
+                self.rebuild_drops();
+            }
+        }
     }
 
     /// False from `events.enchant` keeps the bookshelf. A refused enchant
