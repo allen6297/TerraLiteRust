@@ -177,10 +177,10 @@ mod tests {
         assert_eq!(
             table.drops,
             [
+                "raw".to_string(),
                 "apple".to_string(),
                 "wool".to_string(),
-                "torch".to_string(),
-                "cooked".to_string()
+                "torch".to_string()
             ]
         );
         assert_eq!(
@@ -193,7 +193,7 @@ mod tests {
             ]
         );
         let (x, z) = rebuild_world::CAMP_CHEST;
-        assert_eq!(pick(&table, x, z, false), "apple");
+        assert_eq!(pick(&table, x, z, false), "raw");
         assert_eq!(pick(&table, x, z, true), "healing_potion");
     }
 
