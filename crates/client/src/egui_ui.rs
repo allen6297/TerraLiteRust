@@ -94,7 +94,22 @@ const SLOT_EDGE: Color32 = Color32::from_rgb(58, 60, 70);
 fn backdrop() -> Color32 {
     Color32::from_rgba_unmultiplied(0, 0, 0, 168)
 }
+/// Darker red veil for the survival death overlay.
+fn death_backdrop() -> Color32 {
+    Color32::from_rgba_unmultiplied(18, 2, 4, 210)
+}
+const DEATH_INK: Color32 = Color32::from_rgb(255, 214, 214);
 const TIP_BG: Color32 = Color32::from_rgb(18, 20, 28);
+
+/// Survival death overlay facts (coords + where Respawn will land).
+#[derive(Clone, Copy, Debug)]
+pub struct DeathView {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    /// Short line: `bed`, `anchor`, or `world spawn`.
+    pub spawn: &'static str,
+}
 const TIP_EDGE: Color32 = Color32::from_rgb(237, 199, 107);
 const DETAIL: Color32 = Color32::from_rgb(255, 235, 140);
 
@@ -152,11 +167,14 @@ impl EguiHost {
     }
 
     /// True when egui should own pointer/keyboard instead of the world.
-    pub fn wants_input(menu: &Menu, gui: &Gui) -> bool {
-        menu.is_open() || gui.bag_open() || gui.player_inv_open()
+    pub fn wants_input(menu: &Menu, gui: &Gui, dead: bool) -> bool {
+        dead || menu.is_open() || gui.bag_open() || gui.player_inv_open()
     }
 
     /// Build menus for this frame. Returns tessellated output ready to paint.
+    ///
+    /// `death` is `Some` while survival health is zero — dark overlay with
+    /// Respawn / Title / Quit. Creative never reaches this path.
     pub fn run(
         &mut self,
         window: &Window,
@@ -166,6 +184,7 @@ impl EguiHost {
         bag: &mut hotbar::Bag,
         armor: &mut Armor,
         binds: &mut Keybinds,
+        death: Option<DeathView>,
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
@@ -173,7 +192,9 @@ impl EguiHost {
         let icons = &mut self.icons;
         let output = self.ctx.run_ui(raw, |ui| {
             apply_theme(ui.ctx());
-            if menu.is_open() {
+            if let Some(view) = death {
+                pending = draw_death(ui, view);
+            } else if menu.is_open() {
                 pending = draw_menu(ui, menu, binds);
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
@@ -368,6 +389,55 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
         .corner_radius(CornerRadius::same(4))
         .min_size(Vec2::new(ui.available_width().max(280.0), 34.0));
     ui.add(btn)
+}
+
+fn draw_death(ui: &mut Ui, view: DeathView) -> MenuAction {
+    let mut action = MenuAction::None;
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(death_backdrop()))
+        .show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.18);
+                show_panel(ui, 380.0, |ui| {
+                    Frame::new()
+                        .fill(TITLE_PLATE)
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("You Died")
+                                    .font(FontId::proportional(28.0))
+                                    .color(DEATH_INK)
+                                    .strong(),
+                            );
+                        });
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(format!("at {}, {}, {}", view.x, view.y, view.z))
+                            .size(14.0)
+                            .color(MUTED),
+                    );
+                    ui.label(
+                        RichText::new(format!("respawn · {}", view.spawn))
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(14.0);
+                    if menu_button(ui, "Respawn", true).clicked() {
+                        action = MenuAction::Respawn;
+                    }
+                    ui.add_space(4.0);
+                    if menu_button(ui, "Title", false).clicked() {
+                        action = MenuAction::Title;
+                    }
+                    ui.add_space(4.0);
+                    if menu_button(ui, "Quit", false).clicked() {
+                        action = MenuAction::Quit;
+                    }
+                });
+            });
+        });
+    action
 }
 
 fn draw_menu(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuAction {

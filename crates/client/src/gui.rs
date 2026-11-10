@@ -4309,6 +4309,8 @@ pub enum MenuAction {
     Resize,
     /// A script settings row flipped. The name is on the menu until `take_changed`.
     Setting,
+    /// Survival death screen: return at bed / world spawn.
+    Respawn,
 }
 
 /// How an egui settings row draws its control (toggle vs discrete slider).

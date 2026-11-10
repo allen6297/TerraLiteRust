@@ -2905,6 +2905,73 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Survival death overlay (You Died + Respawn/Title/Quit), then quit with a PNG.
+    pub fn arm_death_respawn_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        // Stairs overlook so the world still reads under the dark veil.
+        let eye = glam::Vec3::new(8.5, 2.4 + crate::body::EYE_HEIGHT, 12.5);
+        let focus = glam::Vec3::new(8.5, 1.6, 8.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        // Force the survival death overlay without waiting on damage.
+        self.hearts = 0;
+        self.dead = true;
+        self.spawn_at = None;
+        let _ = self.window.focus_window();
+    }
+
     /// Peer dig/attack swing with held item, then quit with a PNG.
     pub fn arm_peer_swing_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -6223,9 +6290,10 @@ impl State {
         dropped
     }
 
-    /// Spend hearts. At zero the death screen waits instead of respawning now.
+    /// Spend hearts. At zero the egui death overlay waits instead of respawning now.
+    /// Creative ignores player damage so survival death stays clear.
     fn lose_hearts(&mut self, amount: i32) {
-        if self.dead || amount <= 0 {
+        if self.dead || amount <= 0 || self.menu.creative() {
             return;
         }
         self.hurt_flash = 1.0;
@@ -6239,6 +6307,33 @@ impl State {
             self.gui.close();
             self.map_open = false;
             self.set_capture(false);
+        }
+    }
+
+    /// Where Respawn will land, for the death overlay line.
+    fn death_spawn_label(&self) -> &'static str {
+        match self.spawn_at {
+            Some(at) => {
+                let block = self.world.block_at(at[0], at[1], at[2]);
+                if block.id == "bed" {
+                    "bed"
+                } else if block.id == "respawn_anchor" && block.metadata > 0 {
+                    "anchor"
+                } else {
+                    "world spawn"
+                }
+            }
+            None => "world spawn",
+        }
+    }
+
+    fn death_view(&self) -> crate::egui_ui::DeathView {
+        let eye = self.camera.eye;
+        crate::egui_ui::DeathView {
+            x: eye.x.floor() as i32,
+            y: eye.y.floor() as i32,
+            z: eye.z.floor() as i32,
+            spawn: self.death_spawn_label(),
         }
     }
 
@@ -18202,7 +18297,8 @@ impl State {
             );
         }
         let consumed = self.egui.on_window_event(&self.window, event);
-        if !consumed || !crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui) {
+        if !consumed || !crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui, self.dead)
+        {
             return false;
         }
         !matches!(
@@ -18283,8 +18379,12 @@ impl State {
             self.zoom_key = false;
         }
         if self.dead {
-            if pressed && matches!(code, KeyCode::Enter | KeyCode::Space | KeyCode::Escape) {
-                self.respawn();
+            if pressed {
+                match code {
+                    KeyCode::Enter | KeyCode::Space => self.respawn(),
+                    KeyCode::Escape => self.apply_menu(gui::MenuAction::Title),
+                    _ => {}
+                }
             }
             self.clear_motion();
             return;
@@ -19271,8 +19371,8 @@ impl State {
 
     /// Click the slot or button under the pointer.
     pub fn pointer_click(&mut self) {
+        // Death overlay is egui; clicks land on Respawn / Title / Quit there.
         if self.dead {
-            self.respawn();
             return;
         }
         if !self.menu.is_open() && !self.gui.is_open() {
@@ -19369,7 +19469,8 @@ impl State {
             self.hurt_flash,
             self.sip,
             self.sipping,
-            self.dead,
+            // egui owns the death overlay; keep the legacy soft HUD off.
+            false,
         );
         gui::quad_hit(
             &quads,
@@ -19393,6 +19494,16 @@ impl State {
                 self.playing = false;
                 // Drop the owned listen so a later Host can bind again.
                 self.host = None;
+                if self.dead {
+                    self.dead = false;
+                    self.hearts = body::HEARTS;
+                    self.hurt_flash = 0.0;
+                }
+            }
+            gui::MenuAction::Respawn => {
+                if self.dead {
+                    self.respawn();
+                }
             }
             gui::MenuAction::Volume => {
                 self.audio.set_muted(self.menu.muted());
@@ -22695,7 +22806,8 @@ impl State {
             self.hurt_flash,
             self.sip,
             self.sipping,
-            self.dead,
+            // egui owns the death overlay; keep the legacy soft HUD off.
+            false,
         );
         if self.playing && !self.menu.is_open() && !self.dead && !self.others.is_empty() {
             let aspect = (screen_w / screen_h.max(1.0)).max(0.01);
@@ -22924,7 +23036,8 @@ impl State {
             pass.draw_indexed(0..ui_indices.len() as u32, 0, 0..1);
         }
 
-        if crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui) {
+        if crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui, self.dead) {
+            let death = self.dead.then(|| self.death_view());
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -22933,6 +23046,7 @@ impl State {
                 &mut self.bag,
                 &mut self.armor,
                 &mut self.binds,
+                death,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();
