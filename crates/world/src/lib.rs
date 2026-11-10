@@ -83,6 +83,7 @@ pub use shape::{
 };
 pub use size::WorldSize;
 pub use terrain::{
-    Biome, CAMP_CHEST, CAMP_FIRE, SHAFT_MOUTH, SHRINE, SHRINE_CHEST, TerrainPump, biome_at,
+    Biome, CAMP_CHEST, CAMP_FIRE, SHAFT_CHEST, SHAFT_MOUTH, SHRINE, SHRINE_CHEST, TerrainPump,
+    biome_at,
     ensure_terrain, generate_chunk, seed_terrain_ring, sky_tint,
 };

@@ -220,8 +220,12 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
 /// The open pit of the mine mouth, west and south of the demo pad.
 ///
 /// The chunk is `(-2, 2)`. Walk west past the pad, then south. Oak posts and a
-/// lintel face east, toward the stairs. Coal sits in the hole.
+/// lintel face east, toward the stairs. Coal sits in the hole. A chest sits on
+/// the gravel apron just east of the mouth.
 pub const SHAFT_MOUTH: (i32, i32) = (-24, 40);
+
+/// The mine-mouth chest on the gravel apron, two blocks east of the pit center.
+pub const SHAFT_CHEST: (i32, i32) = (SHAFT_MOUTH.0 + 2, SHAFT_MOUTH.1);
 
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
@@ -364,6 +368,9 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     }
     blocks.push((9, floor + 1, 7, log));
     blocks.push((9, floor + 1, 8, log));
+    let chest_x = (SHAFT_CHEST.0 - chunk_x * 16) as u8;
+    let chest_z = (SHAFT_CHEST.1 - chunk_z * 16) as u8;
+    blocks.push((chest_x, floor, chest_z, Block::new("chest", 0)));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -786,6 +793,11 @@ mod tests {
             .expect("east post");
         assert_eq!(shaft.block(9, post + 1, local_z).id, "oak_log");
         assert_eq!(shaft.block(10, post - 1, local_z).id, "gravel");
+        assert_eq!(shaft.block(10, post, local_z).id, "chest");
+        assert_eq!(
+            (-2 * 16 + 10, 2 * 16 + i32::from(local_z)),
+            SHAFT_CHEST
+        );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;
         for lz in 0..16u8 {

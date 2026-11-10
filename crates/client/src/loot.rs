@@ -3,9 +3,10 @@
 //! `data/terralite/loot/copper_chest.json` is what a trial key finds in a
 //! copper chest. `data/terralite/loot/camp_chest.json` is what the first open
 //! of the camp chest finds. `data/terralite/loot/shrine_chest.json` is the
-//! southeast shrine. `drops` is the ordinary list. `omen` is the list after an
-//! ominous bottle. The chest's coordinates pick one entry. Repeating an id
-//! makes that drop more common.
+//! southeast shrine. `data/terralite/loot/mine_chest.json` is the west mine
+//! mouth. `drops` is the ordinary list. `omen` is the list after an ominous
+//! bottle. The chest's coordinates pick one entry. Repeating an id makes that
+//! drop more common.
 
 use std::fs;
 use std::path::PathBuf;
@@ -56,6 +57,19 @@ pub fn shrine_chest_file() -> PathBuf {
 /// The shrine-chest table from the data pack.
 pub fn load_shrine_chest() -> Result<Table, String> {
     load_file(&shrine_chest_file())
+}
+
+pub fn mine_chest_file() -> PathBuf {
+    rebuild_world::data_pack_root()
+        .join("data")
+        .join("terralite")
+        .join("loot")
+        .join("mine_chest.json")
+}
+
+/// The mine-chest table from the data pack.
+pub fn load_mine_chest() -> Result<Table, String> {
+    load_file(&mine_chest_file())
 }
 
 fn load_file(path: &std::path::Path) -> Result<Table, String> {
@@ -205,6 +219,32 @@ mod tests {
             ]
         );
         let (x, z) = rebuild_world::SHRINE_CHEST;
+        assert_eq!(pick(&table, x, z, false), pick(&table, x, z, false));
+        assert_eq!(pick(&table, x, z, true), pick(&table, x, z, true));
+    }
+
+    #[test]
+    fn the_mine_chest_file_is_what_the_first_open_pays() {
+        let table = load_mine_chest().unwrap();
+        assert_eq!(
+            table.drops,
+            [
+                "torch".to_string(),
+                "coal_ore".to_string(),
+                "iron_ore".to_string(),
+                "stone_pickaxe".to_string()
+            ]
+        );
+        assert_eq!(
+            table.omen,
+            [
+                "iron_pickaxe".to_string(),
+                "diamond_pickaxe".to_string(),
+                "healing_potion".to_string(),
+                "clock".to_string()
+            ]
+        );
+        let (x, z) = rebuild_world::SHAFT_CHEST;
         assert_eq!(pick(&table, x, z, false), pick(&table, x, z, false));
         assert_eq!(pick(&table, x, z, true), pick(&table, x, z, true));
     }

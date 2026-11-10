@@ -141,6 +141,8 @@ struct Args {
     shot_campfire_smoke: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
+    /// West mine-mouth chest, then quit.
+    shot_mine: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
 }
@@ -227,6 +229,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_break: args.shot_break,
         shot_campfire_smoke: args.shot_campfire_smoke,
         shot_shrine: args.shot_shrine,
+        shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
         state: None,
         last_frame: Instant::now(),
@@ -261,6 +264,7 @@ struct App {
     shot_break: Option<std::path::PathBuf>,
     shot_campfire_smoke: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
+    shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
@@ -352,6 +356,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
+                }
+                if let Some(path) = self.shot_mine.take() {
+                    state.arm_mine_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -492,6 +499,7 @@ where
         shot_break: None,
         shot_campfire_smoke: None,
         shot_shrine: None,
+        shot_mine: None,
         shot_keybinds: None,
     };
     let mut iter = args.into_iter();
@@ -612,6 +620,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-shrine".to_string())?;
                 parsed.shot_shrine = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-mine" | "--shot-mine-chest" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-mine".to_string())?;
+                parsed.shot_mine = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter

@@ -1038,6 +1038,12 @@ pub struct State {
     shrine_shot_eye: glam::Vec3,
     shrine_shot_yaw: f32,
     shrine_shot_pitch: f32,
+    /// One-shot mine-mouth chest proof PNG, then quit.
+    mine_shot_path: Option<std::path::PathBuf>,
+    mine_shot_frames: u32,
+    mine_shot_eye: glam::Vec3,
+    mine_shot_yaw: f32,
+    mine_shot_pitch: f32,
     /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
     wind_mix: f32,
     /// Eased water-edge proximity, `0` far through `1` at the surface.
@@ -1959,6 +1965,11 @@ impl State {
             shrine_shot_eye: glam::Vec3::ZERO,
             shrine_shot_yaw: 0.0,
             shrine_shot_pitch: 0.0,
+            mine_shot_path: None,
+            mine_shot_frames: 0,
+            mine_shot_eye: glam::Vec3::ZERO,
+            mine_shot_yaw: 0.0,
+            mine_shot_pitch: 0.0,
             wind_mix: 0.0,
             lap_mix: 0.0,
             lap_at: None,
@@ -3594,7 +3605,8 @@ impl State {
         };
         let mut seeded = false;
         let fresh = fresh_camp(has_record, hit.block[0], hit.block[2], self.omen)
-            .or_else(|| fresh_shrine(has_record, hit.block[0], hit.block[2], self.omen));
+            .or_else(|| fresh_shrine(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_mine(has_record, hit.block[0], hit.block[2], self.omen));
         if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
@@ -5947,6 +5959,102 @@ impl State {
                 eprintln!("shrine shot failed: {err}");
                 if self.shrine_shot_frames > 250 {
                     self.shrine_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    /// Look at the west mine-mouth chest, then quit with a PNG.
+    pub fn arm_mine_shot(&mut self, path: std::path::PathBuf) {
+        self.mine_shot_path = Some(path);
+        self.mine_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::SHAFT_CHEST;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "chest" {
+                cy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.9, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 4.5,
+            cy as f32 + 1.2 + body::EYE_HEIGHT,
+            cz as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.mine_shot_eye = eye;
+        self.mine_shot_yaw = yaw;
+        self.mine_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_mine_shot_camera(&mut self) {
+        if self.mine_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.mine_shot_eye,
+            self.mine_shot_yaw,
+            self.mine_shot_pitch,
+        );
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.mine_shot_eye;
+        self.posed_yaw = self.mine_shot_yaw;
+        self.posed_pitch = self.mine_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+    }
+
+    fn poll_mine_shot(&mut self) {
+        let Some(path) = self.mine_shot_path.clone() else {
+            return;
+        };
+        self.pin_mine_shot_camera();
+        self.mine_shot_frames = self.mine_shot_frames.saturating_add(1);
+        if self.mine_shot_frames < 110 || !self.chunk_bake.is_idle() {
+            if self.mine_shot_frames > 600 {
+                eprintln!("mine shot timed out");
+                self.mine_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("mine shot wrote {}", path.display());
+                self.mine_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("mine shot failed: {err}");
+                if self.mine_shot_frames > 250 {
+                    self.mine_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -11470,6 +11578,7 @@ impl State {
         self.poll_place_shot();
         self.poll_campfire_smoke_shot();
         self.poll_shrine_shot();
+        self.poll_mine_shot();
         self.poll_swap_shot();
         self.poll_break_shot();
     }
@@ -12105,6 +12214,11 @@ fn shrine_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::SHRINE_CHEST
 }
 
+/// The west mine-mouth chest on the gravel apron.
+fn mine_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::SHAFT_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -12257,6 +12371,28 @@ fn fresh_shrine(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> 
         return None;
     }
     shrine_loot(x, z, omen)
+}
+
+/// One drop from the mine chest, read from the data pack.
+fn mine_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !mine_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_mine_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the mine-mouth chest.
+fn fresh_mine(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    mine_loot(x, z, omen)
 }
 
 /// One drop from this chest, read from the data pack. The same cell always
@@ -12668,6 +12804,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_shrine(true, x, z, false).is_none());
         assert!(super::fresh_shrine(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_mine_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::SHAFT_CHEST;
+        assert!(super::mine_cell(x, z));
+        assert!(!super::mine_cell(
+            rebuild_world::SHAFT_MOUTH.0,
+            rebuild_world::SHAFT_MOUTH.1
+        ));
+        assert!(!super::camp_cell(x, z));
+        assert!(!super::shrine_cell(x, z));
+        let table = crate::loot::load_mine_chest().unwrap();
+        let paid = super::fresh_mine(false, x, z, false).unwrap();
+        let rich = super::fresh_mine(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_mine(true, x, z, false).is_none());
+        assert!(super::fresh_mine(false, 0, 0, false).is_none());
     }
 
     #[test]

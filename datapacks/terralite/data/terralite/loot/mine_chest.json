@@ -1,0 +1,4 @@
+{
+  "drops": ["torch", "coal_ore", "iron_ore", "stone_pickaxe"],
+  "omen": ["iron_pickaxe", "diamond_pickaxe", "healing_potion", "clock"]
+}
