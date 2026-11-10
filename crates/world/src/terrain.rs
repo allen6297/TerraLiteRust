@@ -153,6 +153,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_camp(&mut blocks, chunk_x, chunk_z);
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
     stamp_dungeon(&mut blocks, chunk_x, chunk_z);
+    stamp_mineshaft(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
@@ -406,6 +407,15 @@ pub const DUNGEON_SPAWNER: (i32, i32) = DUNGEON;
 
 /// Standing floor of the demo dungeon (cobble underfoot is one below).
 pub const DUNGEON_FLOOR: u16 = 2;
+
+/// Abandoned mineshaft spur east of the pit — timber supports + rails.
+pub const MINESHAFT: (i32, i32) = (SHAFT_MOUTH.0 + 3, SHAFT_MOUTH.1);
+
+/// Loot chest at the east end of the mineshaft spur (north of the rail).
+pub const MINESHAFT_CHEST: (i32, i32) = (SHAFT_MOUTH.0 + 6, SHAFT_MOUTH.1 + 1);
+
+/// Standing floor of the demo mineshaft (gravel underfoot is one below).
+pub const MINESHAFT_FLOOR: u16 = 2;
 
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
@@ -1152,6 +1162,60 @@ fn stamp_dungeon(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: 
     let torch_x = (cx + 1 - chunk_x * 16) as u8;
     let torch_z = (cz - 1 - chunk_z * 16) as u8;
     blocks.push((torch_x, floor, torch_z, Block::new("torch", 0)));
+}
+
+/// Abandoned timber spur east of the pit — oak posts, fence braces, rails, chest.
+/// Only the shaft chunk gets the guaranteed demo.
+fn stamp_mineshaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != SHAFT_CHUNK {
+        return;
+    }
+    let floor = MINESHAFT_FLOOR;
+    let log = Block::new("oak_log", 0);
+    let fence = Block::new("fence", 0);
+    let gravel = Block::new("gravel", 0);
+    let cobble = Block::new("cobblestone", 0);
+    let rail = Block::new("rail", 0);
+    // Start at the east pit wall so the spur opens from the ladder hole.
+    let (start_x, end_x) = (SHAFT_MOUTH.0 + 1, MINESHAFT_CHEST.0);
+    let cz = SHAFT_MOUTH.1;
+    for wx in start_x..=end_x {
+        for wz in (cz - 1)..=(cz + 1) {
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 2)
+            });
+            // Gravel bed under the rails; cobble flanks.
+            let bed = if wz == cz { gravel } else { cobble };
+            blocks.push((lx, floor - 1, lz, bed));
+            // Timber ceiling beam.
+            blocks.push((lx, floor + 2, lz, log));
+        }
+        let mid_x = (wx - chunk_x * 16) as u8;
+        let mid_z = (cz - chunk_z * 16) as u8;
+        // Center rail run.
+        blocks.push((mid_x, floor, mid_z, rail));
+        // Side posts + fence braces every other column.
+        if (wx - start_x).rem_euclid(2) == 0 {
+            for &side in &[-1i32, 1] {
+                let px = mid_x;
+                let pz = ((cz + side) - chunk_z * 16) as u8;
+                blocks.push((px, floor, pz, log));
+                blocks.push((px, floor + 1, pz, fence));
+            }
+        }
+    }
+    // Chest at the east stub, north of the rail so the track stays clear.
+    let chest_x = (MINESHAFT_CHEST.0 - chunk_x * 16) as u8;
+    let chest_z = (MINESHAFT_CHEST.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == chest_x && *z == chest_z && *y == floor));
+    blocks.push((chest_x, floor, chest_z, Block::new("chest", 0)));
+    // Torch on a south brace post so the still isn't black.
+    let torch_x = ((SHAFT_MOUTH.0 + 3) - chunk_x * 16) as u8;
+    let torch_z = ((SHAFT_MOUTH.1 - 1) - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == torch_x && *z == torch_z && *y == floor + 1));
+    blocks.push((torch_x, floor + 1, torch_z, Block::new("torch", 0)));
 }
 
 /// A timbered hole. Only the shaft chunk gets one.
@@ -2060,6 +2124,26 @@ mod tests {
         assert!(
             floor_id == "cobblestone" || floor_id == "mossy_cobblestone",
             "dungeon floor is cobble/mossy, got {floor_id}"
+        );
+        let shaft_lx = (MINESHAFT.0 - (-2 * 16)) as u8;
+        let shaft_lz = (MINESHAFT.1 - 2 * 16) as u8;
+        assert_eq!(
+            shaft.block(shaft_lx, MINESHAFT_FLOOR, shaft_lz).id,
+            "rail",
+            "mineshaft spur has a center rail"
+        );
+        let mchest_lx = (MINESHAFT_CHEST.0 - (-2 * 16)) as u8;
+        let mchest_lz = (MINESHAFT_CHEST.1 - 2 * 16) as u8;
+        assert_eq!(
+            shaft.block(mchest_lx, MINESHAFT_FLOOR, mchest_lz).id,
+            "chest",
+            "mineshaft chest at the east stub"
+        );
+        let post_lx = ((SHAFT_MOUTH.0 + 3) - (-2 * 16)) as u8;
+        assert!(
+            shaft.block(post_lx, MINESHAFT_FLOOR, shaft_lz - 1).id == "oak_log"
+                || shaft.block(post_lx, MINESHAFT_FLOOR, shaft_lz + 1).id == "oak_log",
+            "timber posts brace the spur"
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;

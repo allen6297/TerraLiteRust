@@ -9,6 +9,7 @@
 //! `data/terralite/loot/shipwreck_chest.json` is the west beach shipwreck.
 //! `data/terralite/loot/village_chest.json` is the north village remnant.
 //! `data/terralite/loot/dungeon_chest.json` is the underground mine dungeon.
+//! `data/terralite/loot/mineshaft_chest.json` is the abandoned mineshaft spur.
 //! `data/terralite/loot/blocks/<id>.json` overrides break drops for that
 //! block (`drops` only). `loot.chest` / ModAPI `chestLoot` replaces a table's
 //! `drops` list. `drops` is the ordinary list. `omen` is the list after an
@@ -116,6 +117,15 @@ pub fn dungeon_chest_file() -> PathBuf {
 /// The underground dungeon chest table from the data pack.
 pub fn load_dungeon_chest() -> Result<Table, String> {
     load_chest("dungeon_chest", &dungeon_chest_file())
+}
+
+pub fn mineshaft_chest_file() -> PathBuf {
+    loot_file("mineshaft_chest")
+}
+
+/// The abandoned mineshaft chest table from the data pack.
+pub fn load_mineshaft_chest() -> Result<Table, String> {
+    load_chest("mineshaft_chest", &mineshaft_chest_file())
 }
 
 fn load_chest(table: &str, path: &std::path::Path) -> Result<Table, String> {

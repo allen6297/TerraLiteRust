@@ -1358,6 +1358,8 @@ pub struct State {
     found_village: bool,
     /// Once: walked into the underground dungeon under the mine.
     found_dungeon: bool,
+    /// Once: walked into the abandoned mineshaft spur.
+    found_mineshaft: bool,
     found_rails: bool,
     found_clay: bool,
     /// Once: walked up to the starter compound demo by the pad.
@@ -2598,6 +2600,7 @@ impl State {
             found_wreck: false,
             found_village: false,
             found_dungeon: false,
+            found_mineshaft: false,
             found_rails: false,
             found_clay: false,
             found_compound: false,
@@ -6249,6 +6252,12 @@ impl State {
             self.found_dungeon = true;
             self.gui.push_chat("a dungeon under the mine");
         }
+        if !self.found_mineshaft
+            && near(rebuild_world::MINESHAFT.0, rebuild_world::MINESHAFT.1)
+        {
+            self.found_mineshaft = true;
+            self.gui.push_chat("an abandoned mineshaft");
+        }
         if !self.found_lodestone
             && near(
                 rebuild_world::SHAFT_LODESTONE.0,
@@ -6808,7 +6817,8 @@ impl State {
             .or_else(|| fresh_temple(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_village(has_record, hit.block[0], hit.block[2], self.omen))
-            .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen));
+            .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen));
         if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
@@ -8245,6 +8255,80 @@ impl State {
         self.rebuild_chicken();
         self.gui.push_chat("egg");
         true
+    }
+
+    /// Abandoned mineshaft spur east of the pit — rails, timber, chest.
+    pub fn arm_mineshaft_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.22);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (mx, mz) = rebuild_world::MINESHAFT;
+        let my = i32::from(rebuild_world::MINESHAFT_FLOOR);
+        let (cx, cz) = rebuild_world::MINESHAFT_CHEST;
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: mx,
+                    y: my,
+                    z: mz,
+                    block: Block::new("rail", 0),
+                },
+                CellChange {
+                    x: cx,
+                    y: my,
+                    z: cz,
+                    block: Block::new("chest", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(mx, mz);
+        self.found_mine = true;
+        self.found_rails = true;
+        self.found_dungeon = true;
+        self.found_mineshaft = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("an abandoned mineshaft");
+
+        // Stand mid-spur looking east along the timbered rail toward the chest.
+        let focus = glam::Vec3::new(cx as f32 + 0.5, my as f32 + 0.7, mz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            mx as f32 + 0.5,
+            my as f32 + 0.2 + body::EYE_HEIGHT,
+            mz as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("torch");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(mx + dx * 8, mz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Underground cobble dungeon under the mine — chest, spawner, zombie.
@@ -27825,6 +27909,11 @@ fn dungeon_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::DUNGEON_CHEST
 }
 
+/// The abandoned mineshaft spur chest.
+fn mineshaft_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::MINESHAFT_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -28466,6 +28555,28 @@ fn fresh_dungeon(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String>
     dungeon_loot(x, z, omen)
 }
 
+/// One drop from the abandoned mineshaft chest, read from the data pack.
+fn mineshaft_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !mineshaft_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_mineshaft_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the abandoned mineshaft chest.
+fn fresh_mineshaft(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    mineshaft_loot(x, z, omen)
+}
+
 /// One drop from this chest, read from the data pack. The same cell always
 /// yields the same item. `omen` uses the richer list. `None` means the file
 /// could not be read.
@@ -29026,6 +29137,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_dungeon(true, x, z, false).is_none());
         assert!(super::fresh_dungeon(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_mineshaft_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::MINESHAFT_CHEST;
+        assert!(super::mineshaft_cell(x, z));
+        assert!(!super::mineshaft_cell(
+            rebuild_world::MINESHAFT.0,
+            rebuild_world::MINESHAFT.1
+        ));
+        assert!(!super::mine_cell(x, z));
+        assert!(!super::dungeon_cell(x, z));
+        let table = crate::loot::load_mineshaft_chest().unwrap();
+        let paid = super::fresh_mineshaft(false, x, z, false).unwrap();
+        let rich = super::fresh_mineshaft(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_mineshaft(true, x, z, false).is_none());
+        assert!(super::fresh_mineshaft(false, 0, 0, false).is_none());
     }
 
     #[test]
