@@ -70,6 +70,7 @@ pub fn compound_host(id: &str) -> bool {
             | "wire"
             | "pump"
             | "tank"
+            | "battery"
             | "fence"
             | "fence_gate"
             | "slab"
@@ -121,9 +122,19 @@ pub fn is_pump(id: &str) -> bool {
     id == "pump"
 }
 
-/// True when `id` is a compound tank / buffer reservoir.
+/// True when `id` is a compound tank / fluid buffer.
 pub fn is_tank(id: &str) -> bool {
     id == "tank"
+}
+
+/// True when `id` is an ember battery / charge buffer.
+pub fn is_battery(id: &str) -> bool {
+    id == "battery"
+}
+
+/// True when `id` is a leveled compound buffer (tank or battery).
+pub fn is_buffer(id: &str) -> bool {
+    is_tank(id) || is_battery(id)
 }
 
 /// Max stored units in a tank (metadata `1..=TANK_MAX` while filled).
@@ -131,6 +142,12 @@ pub const TANK_MAX: u8 = 8;
 
 /// Units added by one bucket / charge into a tank.
 pub const TANK_BUCKET: u8 = 4;
+
+/// Max stored ember units in a battery (same capacity as a tank).
+pub const BATTERY_MAX: u8 = TANK_MAX;
+
+/// Units added by one ember charge into a battery.
+pub const BATTERY_CHARGE: u8 = TANK_BUCKET;
 
 /// Stored level for a tank cell. Empty tanks are `0`.
 pub fn tank_level(block: Block) -> u8 {
@@ -141,10 +158,43 @@ pub fn tank_level(block: Block) -> u8 {
     level.clamp(1, TANK_MAX)
 }
 
+/// Stored level for a battery cell. Empty batteries are `0`.
+pub fn battery_level(block: Block) -> u8 {
+    if !is_battery(block.id) || block.fill != FILL_EMBER {
+        return 0;
+    }
+    let level = block.metadata & 0x0F;
+    level.clamp(1, BATTERY_MAX)
+}
+
+/// Level for any leveled buffer (tank or battery).
+pub fn buffer_level(block: Block) -> u8 {
+    if is_battery(block.id) {
+        battery_level(block)
+    } else {
+        tank_level(block)
+    }
+}
+
+/// Capacity for a leveled buffer id.
+pub fn buffer_max(id: &str) -> u8 {
+    if is_battery(id) {
+        BATTERY_MAX
+    } else {
+        TANK_MAX
+    }
+}
+
 /// Tank block carrying `fill` at `level` units (`1..=TANK_MAX`).
 pub fn tank_at(fill: u8, level: u8) -> Block {
     let level = level.clamp(1, TANK_MAX);
     Block::new("tank", level).with_fill(fill)
+}
+
+/// Battery block carrying ember at `level` units (`1..=BATTERY_MAX`).
+pub fn battery_at(level: u8) -> Block {
+    let level = level.clamp(1, BATTERY_MAX);
+    Block::new("battery", level).with_fill(FILL_EMBER)
 }
 
 /// Pump facing from metadata bits `0..=5`: +X -X +Y -Y +Z -Z.
@@ -185,30 +235,32 @@ pub fn compound_accepts_meta(id: &str, metadata: u8, fill: u8) -> bool {
     match id {
         "pipe" => fill == FILL_WATER,
         "wire" => fill == FILL_EMBER,
+        "battery" => fill == FILL_EMBER,
         "pump" => pump_on(metadata) && (fill == FILL_WATER || fill == FILL_EMBER),
         _ => fill == FILL_WATER || fill == FILL_EMBER,
     }
 }
 
-/// Neighbor link for pipe/wire/pump/tank mesh arms.
+/// Neighbor link for pipe/wire/pump/tank/battery mesh arms.
 ///
-/// Pipes join pipes/pumps/tanks and non-wire hosts; wires join wires/pumps/tanks
-/// and non-pipe hosts; pumps and tanks join any compound host.
+/// Pipes join pipes/pumps/tanks (not batteries); wires join wires/pumps/batteries
+/// and tanks; pumps/tanks/batteries join any compound host.
 pub fn conduit_links(a: &str, b: &str) -> bool {
     match a {
         "pipe" => {
             b == "pipe"
                 || b == "pump"
                 || b == "tank"
-                || (compound_host(b) && b != "wire")
+                || (compound_host(b) && b != "wire" && b != "battery")
         }
         "wire" => {
             b == "wire"
                 || b == "pump"
+                || b == "battery"
                 || b == "tank"
                 || (compound_host(b) && b != "pipe")
         }
-        "pump" | "tank" => compound_host(b),
+        "pump" | "tank" | "battery" => compound_host(b),
         _ => false,
     }
 }

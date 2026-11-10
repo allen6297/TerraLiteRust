@@ -51,9 +51,11 @@ pub use changes::{
     write_player,
 };
 pub use chunk::{
-    Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, TANK_BUCKET, TANK_MAX, compound_accepts,
-    compound_accepts_meta, compound_host, conduit_links, fill_kind, fill_name, is_pipe, is_pump,
-    is_tank, is_wire, pump_dir, pump_meta, pump_on, tank_at, tank_level,
+    BATTERY_CHARGE, BATTERY_MAX, Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, TANK_BUCKET,
+    TANK_MAX, battery_at, battery_level, buffer_level, buffer_max, compound_accepts,
+    compound_accepts_meta, compound_host, conduit_links, fill_kind, fill_name, is_battery,
+    is_buffer, is_pipe, is_pump, is_tank, is_wire, pump_dir, pump_meta, pump_on, tank_at,
+    tank_level,
 };
 pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};

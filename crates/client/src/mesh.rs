@@ -41,8 +41,8 @@ use std::collections::{HashMap, HashSet};
 
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
-    Plane, Shape, TANK_MAX, compound_accepts, conduit_edge_tube, conduit_fill_span, conduit_links,
-    conduit_shell_boxes, conduit_span, shape_of, tank_level,
+    Plane, Shape, buffer_level, buffer_max, compound_accepts, conduit_edge_tube, conduit_fill_span,
+    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, shape_of,
 };
 
 use crate::daylight;
@@ -1562,7 +1562,7 @@ fn mesh_partial_shapes(
                     }
                     continue;
                 }
-                if block.id == "tank" {
+                if is_buffer(block.id) {
                     let shape = shape_of(block);
                     if !shape.is_empty() {
                         mesh_cell(block, shape, cell, sample, light, sun, mesh);
@@ -1570,7 +1570,7 @@ fn mesh_partial_shapes(
                             mesh_faces(block, shape, cell, sample, light, sun, mesh);
                         }
                     }
-                    if let Some((fill, boxes)) = tank_fill_boxes(block) {
+                    if let Some((fill, boxes)) = buffer_fill_boxes(block) {
                         let fill_shape = Shape::from_boxes(&boxes);
                         mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
                     }
@@ -1658,9 +1658,9 @@ fn conduit_fill_boxes(block: Block, links: u8) -> Option<(Block, Vec<CellBox>)> 
     Some((fill, conduit_shell_boxes(lo, hi, links, false)))
 }
 
-/// Reservoir fill rises with tank level inside the glass shell.
-fn tank_fill_boxes(block: Block) -> Option<(Block, Vec<CellBox>)> {
-    let level = tank_level(block);
+/// Reservoir / battery fill rises with buffer level inside the shell.
+fn buffer_fill_boxes(block: Block) -> Option<(Block, Vec<CellBox>)> {
+    let level = buffer_level(block);
     if level == 0 {
         return None;
     }
@@ -1669,8 +1669,9 @@ fn tank_fill_boxes(block: Block) -> Option<(Block, Vec<CellBox>)> {
         FILL_EMBER => Block::new("magma", 0),
         _ => return None,
     };
+    let max = buffer_max(block.id).max(1);
     // Interior 4..12 wide; height from floor (2) up toward lid (14).
-    let height = 2 + ((12u16 * u16::from(level)) / u16::from(TANK_MAX)) as u8;
+    let height = 2 + ((12u16 * u16::from(level)) / u16::from(max)) as u8;
     let top = height.max(3).min(14);
     Some((
         fill,

@@ -159,20 +159,20 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
     // Same host: empty↔fill only (drain or place; no kind swap without drain).
     // Pipes take water; wires take ember; other hosts take either.
     // Tanks may also change metadata when the fill kind stays (level up/down).
-    let tank = crate::chunk::is_tank(current.id);
+    let buffer = crate::chunk::is_buffer(current.id);
     let fill_update = compound_host(current.id)
         && current.id == block.id
-        && (current.metadata == block.metadata || tank)
+        && (current.metadata == block.metadata || buffer)
         && current.fill != block.fill
         && (current.fill == 0 || block.fill == 0)
         && (block.fill == 0
             || crate::chunk::compound_accepts_meta(current.id, current.metadata, block.fill));
-    let tank_level = tank
+    let buffer_level = buffer
         && current.id == block.id
         && current.fill != 0
         && current.fill == block.fill
         && current.metadata != block.metadata;
-    if !current.is_air() && !swing && !fill_update && !tank_level {
+    if !current.is_air() && !swing && !fill_update && !buffer_level {
         return false;
     }
     if fill_update {

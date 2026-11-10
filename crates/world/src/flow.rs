@@ -8,8 +8,9 @@ use std::collections::HashSet;
 
 use crate::changes::CellChange;
 use crate::chunk::{
-    FILL_EMBER, FILL_NONE, TANK_MAX, compound_accepts_meta, is_pipe, is_pump, is_tank, is_wire,
-    pump_dir, pump_on, tank_at, tank_level,
+    BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, battery_at, buffer_level, buffer_max,
+    compound_accepts_meta, is_battery, is_buffer, is_pipe, is_pump, is_tank, is_wire, pump_dir,
+    pump_on, tank_at,
 };
 use crate::cluster::Cluster;
 
@@ -47,7 +48,7 @@ fn accepts(block: crate::chunk::Block, fill: u8) -> bool {
     compound_accepts_meta(block.id, block.metadata, fill)
 }
 
-/// True when `dest` can take a unit of `src.fill` (empty host or underfilled tank).
+/// True when `dest` can take a unit of `src.fill` (empty host or underfilled buffer).
 fn can_receive(dest: crate::chunk::Block, fill: u8) -> bool {
     if !accepts(dest, fill) {
         return false;
@@ -55,28 +56,43 @@ fn can_receive(dest: crate::chunk::Block, fill: u8) -> bool {
     if dest.fill == FILL_NONE {
         return true;
     }
-    is_tank(dest.id) && dest.fill == fill && tank_level(dest) < TANK_MAX
+    is_buffer(dest.id) && dest.fill == fill && buffer_level(dest) < buffer_max(dest.id)
 }
 
 /// Next dest block after receiving one unit of `fill`.
 fn receive_fill(dest: crate::chunk::Block, fill: u8) -> crate::chunk::Block {
+    if is_battery(dest.id) {
+        let level = if dest.fill == FILL_NONE {
+            1
+        } else {
+            buffer_level(dest).saturating_add(1).min(BATTERY_MAX)
+        };
+        return battery_at(level);
+    }
     if is_tank(dest.id) {
         let level = if dest.fill == FILL_NONE {
             1
         } else {
-            tank_level(dest).saturating_add(1).min(TANK_MAX)
+            buffer_level(dest).saturating_add(1).min(buffer_max(dest.id))
         };
         return tank_at(fill, level);
     }
     dest.with_fill(fill)
 }
 
-/// Drawdown after a tank sources one unit. `None` when the source is not a tank.
-fn tank_after_source(src: crate::chunk::Block) -> Option<crate::chunk::Block> {
-    if !is_tank(src.id) {
+/// Drawdown after a leveled buffer sources one unit. `None` when not a buffer.
+fn buffer_after_source(src: crate::chunk::Block) -> Option<crate::chunk::Block> {
+    if !is_buffer(src.id) {
         return None;
     }
-    let level = tank_level(src);
+    let level = buffer_level(src);
+    if is_battery(src.id) {
+        return if level <= 1 {
+            Some(crate::chunk::Block::new("battery", 0))
+        } else {
+            Some(battery_at(level - 1))
+        };
+    }
     if level <= 1 {
         Some(crate::chunk::Block::new("tank", 0))
     } else {
@@ -149,13 +165,15 @@ pub fn plan_compound_seeps(
                 {
                     return;
                 }
-                let prefer =
-                    is_pipe(block.id) || is_wire(block.id) || is_pump(block.id) || is_tank(block.id);
+                let prefer = is_pipe(block.id)
+                    || is_wire(block.id)
+                    || is_pump(block.id)
+                    || is_buffer(block.id);
                 sources.push((x, y, z, block, prefer));
             });
         }
     }
-    // Tanks / pumps / conduits first, then lower cells so water drains through runs.
+    // Buffers / pumps / conduits first, then lower cells so water drains through runs.
     sources.sort_by_key(|&(x, y, z, _, prefer)| {
         (
             !prefer,
@@ -185,13 +203,26 @@ pub fn plan_compound_seeps(
             if !seep_allowed(src, dest, *dx, *dy, *dz) {
                 continue;
             }
-            let prefer =
-                is_pipe(dest.id) || is_wire(dest.id) || is_pump(dest.id) || is_tank(dest.id);
-            candidates.push((prefer, is_tank(dest.id), nx, ny, nz, dest));
+            let prefer = is_pipe(dest.id)
+                || is_wire(dest.id)
+                || is_pump(dest.id)
+                || is_buffer(dest.id);
+            // Ember prefers batteries; water prefers tanks; then other conduits.
+            let rank = if src.fill == FILL_EMBER && is_battery(dest.id) {
+                0u8
+            } else if src.fill == FILL_WATER && is_tank(dest.id) {
+                0
+            } else if is_buffer(dest.id) {
+                1
+            } else if prefer {
+                2
+            } else {
+                3
+            };
+            candidates.push((rank, nx, ny, nz, dest));
         }
-        // Prefer tanks (buffers), then other conduits.
-        candidates.sort_by_key(|&(prefer, tank, ..)| (!tank, !prefer));
-        for (_prefer, _tank, nx, ny, nz, dest) in candidates {
+        candidates.sort_by_key(|&(rank, ..)| rank);
+        for (_rank, nx, ny, nz, dest) in candidates {
             if dests >= max_spreads {
                 break;
             }
@@ -205,14 +236,14 @@ pub fn plan_compound_seeps(
                 block: receive_fill(dest, src.fill),
             });
             dests += 1;
-            if let Some(after) = tank_after_source(src) {
+            if let Some(after) = buffer_after_source(src) {
                 out.push(CellChange {
                     x,
                     y,
                     z,
                     block: after,
                 });
-                // One unit out of a tank per pulse.
+                // One unit out of a buffer per pulse.
                 break;
             }
         }
@@ -294,7 +325,7 @@ pub fn plan_pump_pushes(
             z: oz,
             block: receive_fill(output, input.fill),
         });
-        if let Some(after) = tank_after_source(input) {
+        if let Some(after) = buffer_after_source(input) {
             out.push(CellChange {
                 x: ix,
                 y: iy,
@@ -567,5 +598,48 @@ mod tests {
         assert_eq!((planned[0].x, planned[0].z), (2, 3));
         assert_eq!(planned[0].block.fill, FILL_WATER);
         let _ = tank_at;
+    }
+
+    #[test]
+    fn ember_seep_prefers_battery_over_wire() {
+        use crate::chunk::{battery_at, battery_level};
+        let mut cluster = world(&[
+            (2, 1, 2, Block::new("glass", 0).with_fill(FILL_EMBER)),
+            (3, 1, 2, Block::new("wire", 0)),
+            (2, 1, 3, Block::new("battery", 0)),
+        ]);
+        let planned = plan_compound_seeps(&cluster, [2, 1, 2], 8, 1);
+        assert_eq!(planned.len(), 1);
+        assert_eq!((planned[0].x, planned[0].z), (2, 3));
+        assert_eq!(planned[0].block.fill, FILL_EMBER);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 2], 8, 1), 1);
+        assert_eq!(battery_level(cluster.block_at(2, 1, 3)), 1);
+        let _ = battery_at;
+    }
+
+    #[test]
+    fn battery_drawdown_feeds_wire() {
+        use crate::chunk::{battery_at, battery_level};
+        let mut cluster = world(&[
+            (2, 1, 2, battery_at(3)),
+            (3, 1, 2, Block::new("wire", 0)),
+        ]);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 2], 8, 1), 2);
+        assert_eq!(cluster.block_at(3, 1, 2).fill, FILL_EMBER);
+        assert_eq!(battery_level(cluster.block_at(2, 1, 2)), 2);
+    }
+
+    #[test]
+    fn battery_rejects_water() {
+        use crate::chunk::compound_accepts;
+        assert!(compound_accepts("battery", FILL_EMBER));
+        assert!(!compound_accepts("battery", FILL_WATER));
+        let cluster = world(&[
+            (2, 1, 2, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (3, 1, 2, Block::new("battery", 0)),
+        ]);
+        assert!(plan_compound_seeps(&cluster, [2, 1, 2], 8, 1)
+            .iter()
+            .all(|c| c.x != 3));
     }
 }

@@ -11,12 +11,13 @@ use std::time::{Duration, Instant};
 
 use bytemuck::bytes_of;
 use rebuild_world::{
-    BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
-    PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, TANK_BUCKET, TANK_MAX, apply_changes,
-    apply_compound_seeps, apply_pump_pushes, compound_accepts_meta, compound_host, encode_bag,
-    encode_break, encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind,
-    fill_name, held_light_of, is_pipe, is_pump, is_tank, is_wire, load_dir, plan_compound_seeps,
-    plan_pump_pushes, pump_meta, pump_on, shape_of, tank_at, tank_level,
+    BAG_SLOTS, BATTERY_CHARGE, BATTERY_MAX, Block, CellChange, Cluster, Emitter, FILL_EMBER,
+    FILL_NONE, FILL_WATER, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, TANK_BUCKET,
+    TANK_MAX, apply_changes, apply_compound_seeps, apply_pump_pushes, battery_at, battery_level,
+    buffer_level, buffer_max, compound_accepts_meta, compound_host, encode_bag, encode_break,
+    encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind, fill_name,
+    held_light_of, is_battery, is_buffer, is_pipe, is_pump, is_tank, is_wire, load_dir,
+    plan_compound_seeps, plan_pump_pushes, pump_meta, pump_on, shape_of, tank_at, tank_level,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -4973,7 +4974,18 @@ impl State {
         let host = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        let next = if is_tank(host.id) {
+        let next = if is_battery(host.id) {
+            if fill != FILL_EMBER || !compound_accepts_meta(host.id, host.metadata, fill) {
+                return false;
+            }
+            if host.fill == FILL_NONE {
+                battery_at(BATTERY_CHARGE)
+            } else if host.fill == FILL_EMBER && battery_level(host) < BATTERY_MAX {
+                battery_at((battery_level(host) + BATTERY_CHARGE).min(BATTERY_MAX))
+            } else {
+                return false;
+            }
+        } else if is_tank(host.id) {
             if !compound_accepts_meta(host.id, host.metadata, fill) {
                 return false;
             }
@@ -5025,7 +5037,9 @@ impl State {
         if !compound_host(host.id) || host.fill == FILL_NONE {
             return true;
         }
-        let next = if is_tank(host.id) {
+        let next = if is_battery(host.id) {
+            Block::new("battery", 0)
+        } else if is_tank(host.id) {
             Block::new("tank", 0)
         } else {
             host.with_fill(FILL_NONE)
@@ -5048,8 +5062,8 @@ impl State {
 
     /// Empty hand: move fill from the looked-at host into the host past that face.
     ///
-    /// Tanks move units (all into another tank, one into a conduit). Underfilled
-    /// same-kind tanks accept a top-up transfer.
+    /// Buffers move units (all into another same-kind buffer, one into a conduit).
+    /// Underfilled same-kind buffers accept a top-up transfer.
     fn try_compound_transfer(&mut self) -> bool {
         if self.hotbar.slot(self.hotbar.selected()).is_some() {
             return false;
@@ -5070,7 +5084,9 @@ impl State {
             return false;
         }
         if dest.fill != FILL_NONE
-            && !(is_tank(dest.id) && dest.fill == src.fill && tank_level(dest) < TANK_MAX)
+            && !(is_buffer(dest.id)
+                && dest.fill == src.fill
+                && buffer_level(dest) < buffer_max(dest.id))
         {
             return false;
         }
@@ -5078,38 +5094,52 @@ impl State {
             return false;
         }
         let fill = src.fill;
-        let src_units = if is_tank(src.id) {
-            tank_level(src).max(1)
+        let src_units = if is_buffer(src.id) {
+            buffer_level(src).max(1)
         } else {
             1
         };
-        let (src_next, dest_next) = if is_tank(dest.id) {
-            let room = if dest.fill == FILL_NONE {
-                TANK_MAX
+        let clear_buffer = |id: &str| {
+            if is_battery(id) {
+                Block::new("battery", 0)
             } else {
-                TANK_MAX.saturating_sub(tank_level(dest))
+                Block::new("tank", 0)
+            }
+        };
+        let with_level = |id: &str, fill: u8, level: u8| {
+            if is_battery(id) {
+                battery_at(level)
+            } else {
+                tank_at(fill, level)
+            }
+        };
+        let (src_next, dest_next) = if is_buffer(dest.id) {
+            let room = if dest.fill == FILL_NONE {
+                buffer_max(dest.id)
+            } else {
+                buffer_max(dest.id).saturating_sub(buffer_level(dest))
             };
             let moved = src_units.min(room).max(1);
             let dest_level = if dest.fill == FILL_NONE {
                 moved
             } else {
-                tank_level(dest) + moved
+                buffer_level(dest) + moved
             };
             let src_left = src_units.saturating_sub(moved);
-            let src_next = if !is_tank(src.id) {
+            let src_next = if !is_buffer(src.id) {
                 src.with_fill(FILL_NONE)
             } else if src_left == 0 {
-                Block::new("tank", 0)
+                clear_buffer(src.id)
             } else {
-                tank_at(fill, src_left)
+                with_level(src.id, fill, src_left)
             };
-            (src_next, tank_at(fill, dest_level))
-        } else if is_tank(src.id) {
-            // One unit into a conduit; leave the rest in the tank.
+            (src_next, with_level(dest.id, fill, dest_level))
+        } else if is_buffer(src.id) {
+            // One unit into a conduit; leave the rest in the buffer.
             let src_next = if src_units <= 1 {
-                Block::new("tank", 0)
+                clear_buffer(src.id)
             } else {
-                tank_at(fill, src_units - 1)
+                with_level(src.id, fill, src_units - 1)
             };
             (src_next, dest.with_fill(fill))
         } else {
@@ -5449,6 +5479,15 @@ impl State {
             .block_at(target.block[0], target.block[1], target.block[2]);
         if block.id != id {
             return None;
+        }
+        if is_battery(block.id) {
+            let level = battery_level(block);
+            let kind = if block.fill == FILL_EMBER {
+                "ember"
+            } else {
+                "empty"
+            };
+            return Some(format!("Battery  {kind} {level}/{BATTERY_MAX}"));
         }
         if is_tank(block.id) {
             let level = tank_level(block);
@@ -6048,19 +6087,19 @@ impl State {
                 }
             }
             if let Some(slot) = pending.and_then(|edit| edit.slot) {
-                let tank_level_changed = is_tank(cell.block.id)
+                let buffer_level_changed = is_buffer(cell.block.id)
                     && before.id == cell.block.id
-                    && tank_level(before) != tank_level(cell.block);
+                    && buffer_level(before) != buffer_level(cell.block);
                 let fill_changed = before.id == cell.block.id
                     && before.fill != cell.block.fill
                     && compound_host(cell.block.id);
-                if fill_changed || tank_level_changed {
-                    let rose = tank_level(cell.block) > tank_level(before)
+                if fill_changed || buffer_level_changed {
+                    let rose = buffer_level(cell.block) > buffer_level(before)
                         || (before.fill == FILL_NONE && cell.block.fill != FILL_NONE);
-                    let fell = tank_level(cell.block) < tank_level(before)
+                    let fell = buffer_level(cell.block) < buffer_level(before)
                         || (before.fill != FILL_NONE && cell.block.fill == FILL_NONE);
                     if rose {
-                        // Filled / topped up a host (including tank level++).
+                        // Filled / topped up a host (including buffer level++).
                         if self.hotbar.slot(slot) == Some("water_bucket") {
                             if self.exchange_bucket(slot, "water_bucket", "bucket") {
                                 self.gui.push_chat(if is_tank(cell.block.id) {
@@ -6074,7 +6113,9 @@ impl State {
                         } else {
                             self.hotbar.consume_at(slot);
                             self.hotbar_dirty = true;
-                            if let Some(name) = fill_name(cell.block.fill) {
+                            if is_battery(cell.block.id) {
+                                self.gui.push_chat("battery");
+                            } else if let Some(name) = fill_name(cell.block.fill) {
                                 self.gui.push_chat(name);
                             }
                         }
@@ -6098,7 +6139,11 @@ impl State {
                             if !refund.is_empty() && self.hotbar.collect(refund) {
                                 self.hotbar_dirty = true;
                             }
-                            self.gui.push_chat("drained");
+                            self.gui.push_chat(if is_battery(before.id) {
+                                "discharged"
+                            } else {
+                                "drained"
+                            });
                         }
                     }
                 } else if cell.block.id == "water" && self.hotbar.slot(slot) == Some("water_bucket") {
@@ -6939,7 +6984,9 @@ impl State {
         let pipes = name.contains("pipe") || name.contains("wire");
         let connected = name.contains("connected");
         let pump_shot = name.contains("pump") || name.contains("valve");
-        let tank_shot = name.contains("tank") || name.contains("buffer");
+        let battery_shot = name.contains("battery") || name.contains("charge");
+        let tank_shot =
+            !battery_shot && (name.contains("tank") || name.contains("buffer"));
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6951,8 +6998,8 @@ impl State {
         self.guests.clear();
         self.rebuild_zombie();
         self.rebuild_guests();
-        // Ember / wire / pump shots at night so fill light reads; water stays day.
-        self.clock.set_time_of_day(if ember || pipes || pump_shot {
+        // Ember / wire / pump / battery shots at night so fill light reads; water stays day.
+        self.clock.set_time_of_day(if ember || pipes || pump_shot || battery_shot {
             0.88
         } else {
             0.42
@@ -6983,7 +7030,52 @@ impl State {
                 }
             }
         }
-        if tank_shot {
+        if battery_shot {
+            // Ember glass → wire → mid battery → outlet wire run.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("glass", 0).with_fill(FILL_EMBER),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("wire", 0).with_fill(FILL_EMBER),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: battery_at(5),
+            });
+            changes.push(CellChange {
+                x: gx + 3,
+                y: gy,
+                z: gz,
+                block: Block::new("wire", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 4,
+                y: gy,
+                z: gz,
+                block: Block::new("wire", 0),
+            });
+            // Side spur wire tee into a second battery.
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz + 1,
+                block: Block::new("wire", 0).with_fill(FILL_EMBER),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz + 2,
+                block: battery_at(3),
+            });
+        } else if tank_shot {
             // Source grate → pipe → mid tank → outlet pipe run.
             changes.push(CellChange {
                 x: gx,
@@ -7238,7 +7330,11 @@ impl State {
             });
         }
         apply_changes(&mut self.world, &changes);
-        if tank_shot {
+        if battery_shot {
+            for _ in 0..2 {
+                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
+            }
+        } else if tank_shot {
             for _ in 0..2 {
                 let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
             }
@@ -7274,7 +7370,18 @@ impl State {
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
         self.chunk_bake.touch(gx + 2, gz - 2);
-        let (eye, focus) = if tank_shot {
+        let (eye, focus) = if battery_shot {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("ember_charge");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 2.2 + body::EYE_HEIGHT,
+                    gz as f32 - 2.8,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.7, gz as f32 + 0.5),
+            )
+        } else if tank_shot {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("water_bucket");
             (

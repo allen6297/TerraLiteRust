@@ -2025,8 +2025,8 @@ fn answer(
                 return Ok(Answer::Int(0));
             }
             let block = world.block_at(x, y, z);
-            let level = if crate::chunk::is_tank(block.id) {
-                i64::from(crate::chunk::tank_level(block))
+            let level = if crate::chunk::is_buffer(block.id) {
+                i64::from(crate::chunk::buffer_level(block))
             } else if block.fill != crate::chunk::FILL_NONE {
                 1
             } else {
@@ -2055,11 +2055,24 @@ fn answer(
             {
                 return Ok(Answer::Bool(false));
             }
-            if current.fill == fill && !crate::chunk::is_tank(current.id) {
+            if current.fill == fill && !crate::chunk::is_buffer(current.id) {
                 return Ok(Answer::Bool(true));
             }
             let before = current.fill;
-            let block = if crate::chunk::is_tank(current.id) {
+            let block = if crate::chunk::is_battery(current.id) {
+                if fill == crate::chunk::FILL_NONE {
+                    crate::chunk::Block::new("battery", 0)
+                } else if fill != crate::chunk::FILL_EMBER {
+                    return Ok(Answer::Bool(false));
+                } else if current.fill == fill {
+                    crate::chunk::battery_at(
+                        (crate::chunk::battery_level(current) + crate::chunk::BATTERY_CHARGE)
+                            .min(crate::chunk::BATTERY_MAX),
+                    )
+                } else {
+                    crate::chunk::battery_at(crate::chunk::BATTERY_CHARGE)
+                }
+            } else if crate::chunk::is_tank(current.id) {
                 if fill == crate::chunk::FILL_NONE {
                     crate::chunk::Block::new("tank", 0)
                 } else if current.fill == fill {
