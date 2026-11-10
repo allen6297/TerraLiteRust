@@ -85,6 +85,8 @@ pub enum Sound {
     Pop,
     /// A soft anvil repair clang.
     Ring,
+    /// Soft brewing-stand bubble tick.
+    Bubble,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -293,6 +295,8 @@ pub struct Audio {
     patter_left: f32,
     /// Seconds until the next bee buzz.
     buzz_left: f32,
+    /// Seconds until the next brew bubble.
+    bubble_left: f32,
     /// Seconds until the next lantern hiss.
     hiss_left: f32,
     /// Seconds until the next dawn shore gull.
@@ -328,6 +332,7 @@ impl Audio {
             rustle_left: 0.0,
             patter_left: 0.0,
             buzz_left: 0.0,
+            bubble_left: 0.0,
             hiss_left: 0.0,
             gull_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
@@ -565,6 +570,24 @@ impl Audio {
         Some(0.11 + mix * 0.24)
     }
 
+    /// Loudness for the next brew bubble, or `None` this frame.
+    ///
+    /// `mix` is proximity to a brewing stand (`0` far → `1` at the stand).
+    pub fn bubble_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.08 {
+            self.bubble_left = 0.0;
+            return None;
+        }
+        self.bubble_left -= dt;
+        if self.bubble_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edge (~1.9s); busier at the stand (~0.7s).
+        self.bubble_left = 1.9 - mix * 1.2;
+        Some(0.12 + mix * 0.22)
+    }
+
     /// Loudness for the next lantern / torch hiss, or `None` this frame.
     ///
     /// `mix` is proximity (`0` far → `1` at the light).
@@ -664,6 +687,7 @@ impl Audio {
             Sound::Scrape => chest_scrape(),
             Sound::Pop => torch_pop(),
             Sound::Ring => anvil_clang(),
+            Sound::Bubble => brew_bubble(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -912,6 +936,25 @@ fn iron_ring() -> Vec<i16> {
         let ring = (t * 880.0 * std::f32::consts::TAU).sin() * (-t * 14.0).exp();
         let mixed = (click * 0.8 + ring * 0.55).clamp(-1.0, 1.0);
         samples.push((mixed * 30_000.0) as i16);
+    }
+    samples
+}
+
+/// Soft brew bubble. Wet pop, quieter than a shore lap.
+fn brew_bubble() -> Vec<i16> {
+    let seconds = 0.12;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 223u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let pop = (t * 1_650.0 * std::f32::consts::TAU).sin() * 0.4
+            + (t * 2_900.0 * std::f32::consts::TAU).sin() * 0.12;
+        let wet = (t * 220.0 * std::f32::consts::TAU).sin() * 0.14;
+        let env = (t / 0.008).min(1.0) * (1.0 - t / seconds).max(0.0).powf(1.5);
+        samples.push(((n * 0.18 + pop + wet) * 0.11 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1545,6 +1588,22 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn brew_bubble_waits_for_stand_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.bubble_ready(0.1, 0.0).is_none());
+        let level = audio
+            .bubble_ready(0.1, 1.0)
+            .expect("at the stand bubbles on the first beat");
+        assert!(level > 0.3 && level <= 0.4);
+        assert!(audio.bubble_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Bubble, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Bubble]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Bubble, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Bubble]);
     }
 
     #[test]

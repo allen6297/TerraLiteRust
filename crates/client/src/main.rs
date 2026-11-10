@@ -1344,7 +1344,7 @@ where
                     .ok_or_else(|| "missing value for --shot-grind".to_string())?;
                 parsed.shot_grind = Some(std::path::PathBuf::from(value));
             }
-            "--shot-brew" | "--shot-brewing" => {
+            "--shot-brew" | "--shot-brewing" | "--shot-bubble" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-brew".to_string())?;

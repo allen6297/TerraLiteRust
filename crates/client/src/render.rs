@@ -1172,6 +1172,12 @@ pub struct State {
     found_buzz: bool,
     /// Once: repaired on an anvil and heard the clang.
     found_clang: bool,
+    /// Eased brewing-stand proximity, `0` far through `1` at the stand.
+    bubble_mix: f32,
+    /// World position of the brewing stand feeding `bubble_mix`, when nearby.
+    bubble_at: Option<[f32; 3]>,
+    /// Once: stood by a brewing stand and heard the bubbles.
+    found_bubble: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2221,6 +2227,9 @@ impl State {
             buzz_at: None,
             found_buzz: false,
             found_clang: false,
+            bubble_mix: 0.0,
+            bubble_at: None,
+            found_bubble: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -11772,12 +11781,16 @@ impl State {
         self.note_shot_pitch = 8;
         self.note_shot_book = false;
         self.note_shot_brew = true;
+        self.bubble_at = Some(bubble_at);
+        self.bubble_mix = 1.0;
+        self.found_bubble = true;
         self.drops.brew_bubbles(bubble_at);
         self.rebuild_drops();
-        self.play_world(crate::audio::Sound::Note(8), bubble_at);
+        self.play_world(crate::audio::Sound::Bubble, bubble_at);
         let _ = self.gui.open_brewing([bx, by, bz]);
         self.gui.note_brew("brewed");
         self.gui.push_chat("brewed");
+        self.gui.push_chat("bubble");
         self.found_shrine = true;
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("water_bucket");
@@ -16333,9 +16346,13 @@ impl State {
         if word == "brewed" {
             if let Some(at) = self.gui.brew_at() {
                 let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
-                self.play_world(crate::audio::Sound::Note(8), source);
+                self.play_world(crate::audio::Sound::Bubble, source);
                 self.drops.brew_bubbles(source);
                 self.rebuild_drops();
+                if !self.found_bubble {
+                    self.found_bubble = true;
+                    self.gui.push_chat("bubble");
+                }
             }
         }
     }
@@ -18176,6 +18193,13 @@ impl State {
             self.found_buzz = true;
             self.gui.push_chat("buzz");
         }
+        let (brew_mix, brew_at) = nearest_brewing(&self.world, eye);
+        self.bubble_mix += (brew_mix - self.bubble_mix) * (dt * 2.1).min(1.0);
+        self.bubble_at = brew_at;
+        if brew_mix > 0.35 && !self.found_bubble {
+            self.found_bubble = true;
+            self.gui.push_chat("bubble");
+        }
         let (lamp_mix, lamp_at) = nearest_lantern(&self.world, eye);
         self.hiss_mix += (lamp_mix - self.hiss_mix) * (dt * 2.2).min(1.0);
         self.hiss_at = lamp_at;
@@ -18394,6 +18418,16 @@ impl State {
                     );
                 }
             }
+            if let Some(level) = self.audio.bubble_ready(dt, self.bubble_mix) {
+                if let Some(source) = self.bubble_at {
+                    self.play_world_soft(crate::audio::Sound::Bubble, source, level);
+                } else {
+                    self.audio.play_heard(
+                        crate::audio::Sound::Bubble,
+                        crate::audio::Hearing::even(level),
+                    );
+                }
+            }
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
@@ -18407,6 +18441,7 @@ impl State {
             let _ = self.audio.gull_ready(dt, 0.0);
             let _ = self.audio.patter_ready(dt, 0.0);
             let _ = self.audio.buzz_ready(dt, 0.0);
+            let _ = self.audio.bubble_ready(dt, 0.0);
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
@@ -20812,6 +20847,40 @@ fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
     }
 }
 
+/// Soft proximity to a brewing stand. Mix is `0` outside ~9 blocks, rising to
+/// `1` at the stand. Returns the stand center for spatial bubbles.
+fn nearest_brewing(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 8;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 3)..=(cy + 3) {
+                if world.block_at(x, y, z).id != "brewing_stand" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.55, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 9.0 => {
+            let t = ((9.0 - dist) / 9.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// Soft proximity to a beehive. Mix is `0` outside ~9 blocks, rising to `1`
 /// at the hive. Returns the hive center for spatial buzz.
 fn nearest_beehive(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -21441,6 +21510,25 @@ mod tests {
             }],
         );
         assert!(!super::open_sky(&cluster, eye));
+    }
+
+    #[test]
+    fn brew_bubble_mix_rises_beside_a_stand() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        let eye = [0.5, 2.5, 0.5];
+        assert_eq!(super::nearest_brewing(&cluster, eye).0, 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[rebuild_world::CellChange {
+                x: 1,
+                y: 2,
+                z: 0,
+                block: rebuild_world::Block::new("brewing_stand", 0),
+            }],
+        );
+        let (mix, at) = super::nearest_brewing(&cluster, eye);
+        assert!(mix > 0.3, "brew mix {mix}");
+        assert!(at.is_some());
     }
 
     #[test]
