@@ -9,11 +9,16 @@ use crate::mesh::Vertex;
 
 /// Seconds to reach a full draw.
 pub const DRAW_TIME: f32 = 0.85;
+/// Seconds to fully load a crossbow (spend arrow, stay cocked).
+pub const CROSSBOW_LOAD_TIME: f32 = 1.05;
 /// Minimum charge before a release fires.
 pub const MIN_CHARGE: f32 = 0.22;
 /// Top flight speed at full charge (blocks / second).
 pub const MAX_SPEED: f32 = 28.0;
+/// Crossbow bolt speed — faster and flatter than a full bow draw.
+pub const BOLT_SPEED: f32 = 42.0;
 const GRAVITY: f32 = 14.0;
+const BOLT_GRAVITY: f32 = 8.0;
 const FLY_LIFE: f32 = 6.0;
 const STUCK_LIFE: f32 = 2.8;
 /// Hearts dealt on a mob hit.
@@ -21,12 +26,16 @@ pub const HIT_HEARTS: i32 = 2;
 const HALF: f32 = 0.06;
 const COLOR: [f32; 3] = [0.72, 0.58, 0.32];
 const GLOW: [f32; 3] = [0.35, 0.28, 0.18];
+const BOLT_COLOR: [f32; 3] = [0.55, 0.62, 0.72];
+const BOLT_GLOW: [f32; 3] = [0.22, 0.28, 0.36];
 
 struct Flight {
     center: [f32; 3],
     velocity: [f32; 3],
     life: f32,
     stuck: bool,
+    /// Crossbow bolts use lighter gravity.
+    bolt: bool,
 }
 
 #[derive(Default)]
@@ -63,16 +72,46 @@ impl Arrows {
             velocity: [dir[0] * speed, dir[1] * speed, dir[2] * speed],
             life: FLY_LIFE,
             stuck: false,
+            bolt: false,
+        });
+    }
+
+    /// Fire a loaded crossbow bolt — full speed, flatter arc.
+    pub fn fire_bolt(&mut self, eye: [f32; 3], forward: [f32; 3]) {
+        let len = (forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2])
+            .sqrt()
+            .max(1.0e-4);
+        let dir = [forward[0] / len, forward[1] / len, forward[2] / len];
+        self.flights.push(Flight {
+            center: [
+                eye[0] + dir[0] * 0.5,
+                eye[1] + dir[1] * 0.5,
+                eye[2] + dir[2] * 0.5,
+            ],
+            velocity: [dir[0] * BOLT_SPEED, dir[1] * BOLT_SPEED, dir[2] * BOLT_SPEED],
+            life: FLY_LIFE,
+            stuck: false,
+            bolt: true,
         });
     }
 
     /// Pin a mid-flight arrow for still shots.
     pub fn pin(&mut self, center: [f32; 3], velocity: [f32; 3]) {
+        self.pin_kind(center, velocity, false);
+    }
+
+    /// Pin a mid-flight crossbow bolt for still shots.
+    pub fn pin_bolt(&mut self, center: [f32; 3], velocity: [f32; 3]) {
+        self.pin_kind(center, velocity, true);
+    }
+
+    fn pin_kind(&mut self, center: [f32; 3], velocity: [f32; 3], bolt: bool) {
         self.flights.push(Flight {
             center,
             velocity,
             life: FLY_LIFE,
             stuck: false,
+            bolt,
         });
     }
 
@@ -94,7 +133,8 @@ impl Arrows {
             if flight.stuck {
                 return true;
             }
-            flight.velocity[1] -= GRAVITY * step;
+            let gravity = if flight.bolt { BOLT_GRAVITY } else { GRAVITY };
+            flight.velocity[1] -= gravity * step;
             let next = [
                 flight.center[0] + flight.velocity[0] * step,
                 flight.center[1] + flight.velocity[1] * step,
@@ -149,8 +189,19 @@ impl Arrows {
     pub fn vertices(&self) -> Vec<Vertex> {
         let mut out = Vec::with_capacity(self.flights.len() * 36);
         for flight in &self.flights {
-            let half = if flight.stuck { HALF * 0.85 } else { HALF };
-            push_box(&mut out, flight.center, half, COLOR, GLOW);
+            let half = if flight.stuck {
+                HALF * 0.85
+            } else if flight.bolt {
+                HALF * 1.15
+            } else {
+                HALF
+            };
+            let (color, glow) = if flight.bolt {
+                (BOLT_COLOR, BOLT_GLOW)
+            } else {
+                (COLOR, GLOW)
+            };
+            push_box(&mut out, flight.center, half, color, glow);
         }
         out
     }
@@ -240,5 +291,20 @@ mod tests {
         assert!(arrows.take_near([8.1, 2.0, 10.1], 0.5));
         assert_eq!(arrows.count(), 0);
         assert!(!arrows.take_near([8.0, 2.0, 10.0], 0.5));
+    }
+
+    #[test]
+    fn crossbow_bolt_is_faster_than_a_full_bow_draw() {
+        let mut arrows = Arrows::new();
+        arrows.fire([0.0, 2.0, 0.0], [0.0, 0.0, 1.0], 1.0);
+        let bow_speed = arrows.flights[0].velocity[2];
+        arrows = Arrows::new();
+        arrows.fire_bolt([0.0, 2.0, 0.0], [0.0, 0.0, 1.0]);
+        let bolt_speed = arrows.flights[0].velocity[2];
+        assert!(
+            bolt_speed > bow_speed + 5.0,
+            "bolt {bolt_speed} should outrun bow {bow_speed}"
+        );
+        assert!(arrows.flights[0].bolt);
     }
 }

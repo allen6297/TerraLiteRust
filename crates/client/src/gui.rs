@@ -4081,6 +4081,10 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         "glide — jump again mid-air".to_string()
     } else if pack.is_firework(id) {
         "boost while gliding".to_string()
+    } else if pack.is_crossbow(id) {
+        "hold to load, click to fire".to_string()
+    } else if pack.is_bow(id) {
+        "hold to draw, release to fire".to_string()
     } else if pack.armor_of(id).is_some() {
         "soaks heart damage".to_string()
     } else if max_uses > 0 {
@@ -4118,6 +4122,10 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     }
     if pack.is_firework(id) {
         stats.push("Elytra boost".to_string());
+    }
+    if pack.is_crossbow(id) {
+        stats.push("Load then fire".to_string());
+        stats.push("Faster bolt".to_string());
     }
     if max_uses > 0 {
         let left = count.unwrap_or(max_uses).min(max_uses);
@@ -5668,6 +5676,11 @@ pub fn bow_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "draw")
 }
 
+/// Plate while cocking a crossbow (`load`) or holding a cocked one (`ready`).
+pub fn crossbow_quads(width: f32, height: f32, amount: f32, label: &str) -> Vec<Quad> {
+    status_plate(width, height, amount, label)
+}
+
 /// A small plate above the hotbar while Ctrl-sprint is held.
 pub fn sprint_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "sprint")
@@ -6508,6 +6521,11 @@ fn catalog() -> Vec<String> {
         }
     }
     for id in pack.bow_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
+    for id in pack.crossbow_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
         }

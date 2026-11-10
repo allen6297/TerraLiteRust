@@ -1236,6 +1236,12 @@ pub struct State {
     shield_show: f32,
     /// Right mouse is held on a bow — drawing a shot.
     bow_drawing: bool,
+    /// Holding use to cock a crossbow (arrow spent at full charge).
+    crossbow_loading: bool,
+    /// Crossbow load progress `0..1`.
+    crossbow_charge: f32,
+    /// HUD plate while loading / ready.
+    crossbow_show: f32,
     /// Draw charge `0`..`1` while holding a bow.
     bow_charge: f32,
     /// HUD plate amount for the bow draw cue, `0`..`1`.
@@ -2434,6 +2440,9 @@ impl State {
             bow_drawing: false,
             bow_charge: 0.0,
             bow_show: 0.0,
+            crossbow_loading: false,
+            crossbow_charge: 0.0,
+            crossbow_show: 0.0,
             ctrl_mod: false,
             place_click_at: None,
             compound_flow_wait: 0.35,
@@ -3469,6 +3478,101 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Crossbow cocked + bolt mid-flight, tip `bolt` / plate `ready`.
+    pub fn arm_crossbow_fire_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([8.5, 1.0, 9.2]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("crossbow");
+        self.hotbar.set_crossbow_loaded(true);
+        self.hotbar.select_digit(2);
+        let _ = self.hotbar.give_stack("arrow");
+        self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("bolt");
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        self.third_person = false;
+        let eye = glam::Vec3::new(8.5, 1.55 + crate::body::EYE_HEIGHT, 13.2);
+        let focus = glam::Vec3::new(8.5, 1.6, 9.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.bow_drawing = false;
+        self.bow_charge = 0.0;
+        self.bow_show = 0.0;
+        self.crossbow_loading = false;
+        self.crossbow_charge = 1.0;
+        self.crossbow_show = 1.0;
+        self.shield_raised = false;
+        self.shield_show = 0.0;
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        // Faster bolt mid-flight toward the zombie.
+        self.arrows.pin_bolt([8.5, 2.4, 11.0], [0.0, 0.1, -22.0]);
+        self.player.tick(0.0, 0.0, -1.0, false, false, true);
+        self.rebuild_player();
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
     /// Elytra mid-glide: wings open, dive FOV whoosh, tip `glide`.
     pub fn arm_elytra_glide_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -4268,6 +4372,7 @@ impl State {
             self.release_spyglass();
             self.release_shield();
             self.release_bow();
+            self.release_crossbow_load();
             return;
         }
         if self.is_dead() || self.screen_open() || self.menu_open() {
@@ -5078,6 +5183,12 @@ impl State {
             .is_some_and(|id| Pack::builtin().is_bow(id))
     }
 
+    fn holding_crossbow(&self) -> bool {
+        self.hotbar
+            .slot(self.hotbar.selected())
+            .is_some_and(|id| Pack::builtin().is_crossbow(id))
+    }
+
     fn has_arrow(&self) -> bool {
         if self.menu.creative() {
             return true;
@@ -5130,6 +5241,37 @@ impl State {
         self.gui.push_chat("shot");
         self.hit_kick = self.hit_kick.max(0.25);
         self.rebuild_drops();
+    }
+
+    /// Cancel an incomplete crossbow load (release before cock).
+    fn release_crossbow_load(&mut self) {
+        if !self.crossbow_loading {
+            return;
+        }
+        self.crossbow_loading = false;
+        if self.crossbow_charge < 1.0 && !self.hotbar.crossbow_loaded() {
+            self.crossbow_charge = 0.0;
+            self.gui.push_chat("load");
+        }
+    }
+
+    /// Fire a cocked crossbow bolt. Arrow was already spent on load.
+    fn fire_crossbow(&mut self) -> bool {
+        if !self.holding_crossbow() || !self.hotbar.crossbow_loaded() {
+            return false;
+        }
+        self.hotbar.set_crossbow_loaded(false);
+        self.crossbow_loading = false;
+        self.crossbow_charge = 0.0;
+        let eye = self.camera.eye.to_array();
+        let forward = self.camera.forward().to_array();
+        self.arrows.fire_bolt(eye, forward);
+        self.play_world(crate::audio::Sound::Gust, eye);
+        self.gui.push_chat("bolt");
+        self.hit_kick = self.hit_kick.max(0.35);
+        self.slot_punch = self.slot_punch.max(0.7);
+        self.rebuild_drops();
+        true
     }
 
     /// Clip flying arrows against nearby mobs. Returns true when one hit.
@@ -9277,6 +9419,16 @@ impl State {
         }
         if self.holding_shield() {
             self.shield_raised = true;
+            return;
+        }
+        if self.holding_crossbow() {
+            if self.hotbar.crossbow_loaded() {
+                let _ = self.fire_crossbow();
+            } else if self.has_arrow() {
+                self.crossbow_loading = true;
+            } else {
+                self.gui.push_chat("no arrow");
+            }
             return;
         }
         if self.holding_bow() {
@@ -23118,7 +23270,9 @@ impl State {
         {
             let look = self.camera.walk_axes().0;
             let blocking = (self.shield_raised && self.holding_shield())
-                || (self.bow_drawing && self.holding_bow());
+                || (self.bow_drawing && self.holding_bow())
+                || (self.crossbow_loading && self.holding_crossbow())
+                || (self.hotbar.crossbow_loaded() && self.holding_crossbow());
             self.player.tick(
                 dt,
                 look.x,
@@ -23145,12 +23299,47 @@ impl State {
             if !self.holding_bow() {
                 self.bow_drawing = false;
             }
+            if self.crossbow_loading && self.holding_crossbow() && !self.hotbar.crossbow_loaded()
+            {
+                self.crossbow_charge = (self.crossbow_charge
+                    + dt / crate::arrows::CROSSBOW_LOAD_TIME)
+                    .min(1.0);
+                if self.crossbow_charge >= 1.0 {
+                    if self.spend_arrow() {
+                        self.hotbar.set_crossbow_loaded(true);
+                        self.crossbow_loading = false;
+                        self.play_world(
+                            crate::audio::Sound::Thunk,
+                            self.camera.eye.to_array(),
+                        );
+                        self.gui.push_chat("loaded");
+                        self.slot_punch = self.slot_punch.max(0.55);
+                    } else {
+                        self.crossbow_loading = false;
+                        self.crossbow_charge = 0.0;
+                        self.gui.push_chat("no arrow");
+                    }
+                }
+            } else if !self.crossbow_loading && !self.hotbar.crossbow_loaded() {
+                self.crossbow_charge = (self.crossbow_charge - dt * 2.5).max(0.0);
+            }
+            if !self.holding_crossbow() {
+                self.crossbow_loading = false;
+            }
             let bow_goal = if self.bow_drawing && self.holding_bow() {
                 1.0
             } else {
                 0.0
             };
             self.bow_show += (bow_goal - self.bow_show) * (dt * 14.0).min(1.0);
+            let cross_goal = if (self.crossbow_loading || self.hotbar.crossbow_loaded())
+                && self.holding_crossbow()
+            {
+                1.0
+            } else {
+                0.0
+            };
+            self.crossbow_show += (cross_goal - self.crossbow_show) * (dt * 14.0).min(1.0);
         }
         match self.hunger.tick(
             dt,
@@ -23662,7 +23851,12 @@ impl State {
         let place = self.slot_punch * crate::camera::PLACE_FOV * bob_scale;
         let swap = self.swap_kick * crate::camera::SWAP_FOV * bob_scale;
         let broken = self.break_kick * crate::camera::BREAK_FOV * bob_scale;
-        let bow = self.bow_charge * crate::camera::BOW_FOV * bob_scale;
+        let bow = self.bow_charge.max(if self.crossbow_loading {
+            self.crossbow_charge
+        } else {
+            0.0
+        }) * crate::camera::BOW_FOV
+            * bob_scale;
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
@@ -24265,6 +24459,14 @@ impl State {
         }
         if self.bow_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::bow_quads(gui_w, gui_h, self.bow_show));
+        }
+        if self.crossbow_show > 0.02 && !self.menu.is_open() && !self.dead {
+            let label = if self.hotbar.crossbow_loaded() && self.holding_crossbow() {
+                "ready"
+            } else {
+                "load"
+            };
+            quads.extend(gui::crossbow_quads(gui_w, gui_h, self.crossbow_show, label));
         }
         if self.sprint_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sprint_quads(gui_w, gui_h, self.sprint_show));

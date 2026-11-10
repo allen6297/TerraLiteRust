@@ -499,6 +499,11 @@ struct BowDef {
     icon: String,
 }
 
+struct CrossbowDef {
+    id: String,
+    icon: String,
+}
+
 struct TotemDef {
     id: String,
     icon: String,
@@ -615,6 +620,8 @@ pub struct Pack {
     arrows: Vec<ArrowDef>,
     /// Bows from the data pack. Hold use to draw, release to fire an arrow.
     bows: Vec<BowDef>,
+    /// Crossbows — hold use to load (spend an arrow), click again to fire a bolt.
+    crossbows: Vec<CrossbowDef>,
     /// Totems from the data pack. Holding one blocks a lethal hit once.
     totems: Vec<TotemDef>,
     /// Firework rockets — boost while gliding with an elytra.
@@ -692,6 +699,7 @@ impl Pack {
             fertilizers: Vec::new(),
             arrows: Vec::new(),
             bows: Vec::new(),
+            crossbows: Vec::new(),
             totems: Vec::new(),
             fireworks: Vec::new(),
             splashes: Vec::new(),
@@ -2472,6 +2480,12 @@ impl Pack {
                     .map(|bow| bow.icon.as_str())
             })
             .or_else(|| {
+                self.crossbows
+                    .iter()
+                    .find(|bow| bow.id == id)
+                    .map(|bow| bow.icon.as_str())
+            })
+            .or_else(|| {
                 self.totems
                     .iter()
                     .find(|totem| totem.id == id)
@@ -2665,6 +2679,16 @@ impl Pack {
     /// Bow ids, in data-pack order.
     pub fn bow_ids(&self) -> Vec<String> {
         self.bows.iter().map(|bow| bow.id.clone()).collect()
+    }
+
+    /// True when `id` is a crossbow.
+    pub fn is_crossbow(&self, id: &str) -> bool {
+        self.crossbows.iter().any(|bow| bow.id == id)
+    }
+
+    /// Crossbow ids, in data-pack order.
+    pub fn crossbow_ids(&self) -> Vec<String> {
+        self.crossbows.iter().map(|bow| bow.id.clone()).collect()
     }
 
     /// True when `id` is a totem of undying.
@@ -3122,6 +3146,7 @@ impl Pack {
         let mut fertilizers = Vec::new();
         let mut arrows = Vec::new();
         let mut bows = Vec::new();
+        let mut crossbows = Vec::new();
         let mut totems = Vec::new();
         let mut fireworks = Vec::new();
         let mut splashes = Vec::new();
@@ -3169,6 +3194,9 @@ impl Pack {
                 || fertilizers.iter().any(|meal: &FertilizerDef| meal.id == id)
                 || arrows.iter().any(|arrow: &ArrowDef| arrow.id == id)
                 || bows.iter().any(|bow: &BowDef| bow.id == id)
+                || crossbows
+                    .iter()
+                    .any(|bow: &CrossbowDef| bow.id == id)
                 || totems.iter().any(|totem: &TotemDef| totem.id == id)
                 || fireworks
                     .iter()
@@ -3214,6 +3242,7 @@ impl Pack {
                 PackItem::Fertilizer(meal) => fertilizers.push(meal),
                 PackItem::Arrow(arrow) => arrows.push(arrow),
                 PackItem::Bow(bow) => bows.push(bow),
+                PackItem::Crossbow(bow) => crossbows.push(bow),
                 PackItem::Totem(totem) => totems.push(totem),
                 PackItem::Firework(rocket) => fireworks.push(rocket),
                 PackItem::Splash(splash) => splashes.push(splash),
@@ -3252,6 +3281,7 @@ impl Pack {
         self.fertilizers = fertilizers;
         self.arrows = arrows;
         self.bows = bows;
+        self.crossbows = crossbows;
         self.totems = totems;
         self.fireworks = fireworks;
         self.splashes = splashes;
@@ -3293,6 +3323,7 @@ enum PackItem {
     Fertilizer(FertilizerDef),
     Arrow(ArrowDef),
     Bow(BowDef),
+    Crossbow(CrossbowDef),
     Totem(TotemDef),
     Firework(FireworkDef),
     Splash(SplashDef),
@@ -3981,6 +4012,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("crossbow") {
+        require_only(obj, &["crossbow", "icon"], &format!("{id}.json"))?;
+        if obj.get("crossbow") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json crossbow must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Crossbow(CrossbowDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
     if obj.contains_key("totem") {
         require_only(obj, &["totem", "icon"], &format!("{id}.json"))?;
         if obj.get("totem") != Some(&Value::Bool(true)) {
@@ -4141,6 +4189,7 @@ impl Pack {
             fertilizers: Vec::new(),
             arrows: Vec::new(),
             bows: Vec::new(),
+            crossbows: Vec::new(),
             totems: Vec::new(),
             fireworks: Vec::new(),
             splashes: Vec::new(),
@@ -7841,6 +7890,12 @@ mod tests {
         assert!(!pack.is_bow("arrow"));
         assert_eq!(pack.tool_icon("bow"), Some("stick"));
         assert!(pack.bow_ids().contains(&"bow".to_string()));
+        assert!(pack.is_crossbow("crossbow"));
+        assert!(!pack.is_crossbow("bow"));
+        assert_eq!(pack.tool_icon("crossbow"), Some("stick"));
+        assert!(pack
+            .crossbow_ids()
+            .contains(&"crossbow".to_string()));
         assert!(pack.is_totem("totem_of_undying"));
         assert!(!pack.is_totem("shield"));
         assert_eq!(pack.tool_icon("totem_of_undying"), Some("glowstone"));

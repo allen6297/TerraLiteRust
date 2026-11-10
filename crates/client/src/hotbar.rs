@@ -300,6 +300,8 @@ pub struct Hotbar {
     selected: usize,
     /// Separate equipment hand — shield, totem, or any stack.
     offhand: Option<Item>,
+    /// Per-slot crossbow cocked state (arrow already spent).
+    crossbow_loaded: [bool; SLOTS],
     /// How far the held map reaches. `0` is one block per cell.
     map_zoom: u8,
     /// `1` after the first campfire Enter. The next Enter finishes the cook.
@@ -324,6 +326,7 @@ impl Hotbar {
             ],
             selected: 0,
             offhand: None,
+            crossbow_loaded: [false; SLOTS],
             map_zoom: 0,
             camp_heat: 0,
         }
@@ -352,6 +355,7 @@ impl Hotbar {
     pub fn install_saved(&mut self, selected: u8, slots: &[rebuild_world::CarriedSlot]) {
         self.slots = [None; SLOTS];
         self.offhand = None;
+        self.crossbow_loaded = [false; SLOTS];
         self.selected = (selected as usize).min(SLOTS - 1);
         for carried in slots {
             if carried.id.is_empty() || carried.count == 0 {
@@ -409,6 +413,10 @@ impl Hotbar {
         if let Some(slot) = self.slots.get_mut(selected) {
             *slot = off;
         }
+        // Cocked state stays with the bar cell; clear so a swapped-in item is not ready.
+        if let Some(flag) = self.crossbow_loaded.get_mut(selected) {
+            *flag = false;
+        }
     }
 
     /// True when the offhand holds a usable shield.
@@ -455,6 +463,24 @@ impl Hotbar {
         }
         self.swap_offhand();
         true
+    }
+
+    /// True when the selected slot is a cocked crossbow.
+    pub fn crossbow_loaded(&self) -> bool {
+        self.crossbow_loaded
+            .get(self.selected)
+            .copied()
+            .unwrap_or(false)
+            && self
+                .slot(self.selected)
+                .is_some_and(|id| Pack::builtin().is_crossbow(id))
+    }
+
+    /// Mark the selected crossbow as loaded (arrow already spent).
+    pub fn set_crossbow_loaded(&mut self, loaded: bool) {
+        if let Some(flag) = self.crossbow_loaded.get_mut(self.selected) {
+            *flag = loaded;
+        }
     }
 
     pub fn slot(&self, index: usize) -> Option<&str> {
@@ -523,6 +549,9 @@ impl Hotbar {
             return false;
         };
         *slot = Some(fresh(id, STACK));
+        if let Some(flag) = self.crossbow_loaded.get_mut(self.selected) {
+            *flag = false;
+        }
         true
     }
 
