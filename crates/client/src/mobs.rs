@@ -1,14 +1,16 @@
-//! A pig, a zombie, a breeze, a copper golem, a wolf, a cat, a parrot, a frog,
-//! an axolotl, a chicken, a bee, a fox, and a goat.
+//! A pig, a horse, a zombie, a breeze, a copper golem, a wolf, a cat, a parrot,
+//! a frog, an axolotl, a chicken, a bee, a fox, and a goat.
 //!
 //! The zombie body is `models/entity/zombie.bbmodel` with `textures/entity/zombie.png`,
 //! playing `idle`, `walk`, and `attack` the same way the chicken and player do.
 //! Night and dark-cave spawns reuse that same mesh and chase/bite AI; the trial
 //! spawner zombie stays a separate demo body.
 //!
-//! The entity tick runs `"pig"`, `"zombie"`, `"breeze"`, `"golem"`, `"wolf"`,
-//! `"cat"`, `"parrot"`, `"frog"`, `"bee"`, `"fox"`, and `"goat"` every 50 ms,
-//! the same way it runs `"sheep"`. The pig walks a square. The zombie bites.
+//! The entity tick runs `"pig"`, `"horse"`, `"zombie"`, `"breeze"`, `"golem"`,
+//! `"wolf"`, `"cat"`, `"parrot"`, `"frog"`, `"bee"`, `"fox"`, and `"goat"` every
+//! 50 ms, the same way it runs `"sheep"`. The pig walks a square. The horse
+//! paces the east meadow until wheat and a saddle put you on its back. The
+//! zombie bites.
 //! The breeze fires a gust. The golem wakes on a copper bulb. The wolf sits or
 //! follows, bites, and turns to face the step. The cat sits or follows, hisses,
 //! and turns with the step. The parrot echoes a note, perches, or follows, and
@@ -27,9 +29,14 @@ use rebuild_world::Cluster;
 use crate::body::EYE_HEIGHT;
 use crate::mesh::Vertex;
 
-/// Horizontal speed while riding, in blocks per second.
+/// Horizontal speed while riding a pig, in blocks per second.
 pub const RIDE_SPEED: f32 = 6.0;
+/// Horizontal speed while riding a horse, in blocks per second.
+pub const HORSE_SPEED: f32 = 9.0;
 const BOARD: f32 = 2.5;
+
+/// East meadow where the horse paces. Walk east from the stairs.
+pub const HORSE_PAD: (i32, i32) = (20, 6);
 
 const LEG: f32 = 2.0;
 const STEPS_PER_LEG: u32 = 8;
@@ -388,6 +395,238 @@ impl Pig {
         yaw_mesh(&mut out, self.origin, self.yaw);
         out
     }
+}
+
+/// Wheat tames it; a saddle then lets you mount and gallop.
+pub struct Horse {
+    steps: u32,
+    origin: [f32; 3],
+    yaw: f32,
+    tamed: bool,
+    saddled: bool,
+    ridden: bool,
+    loose: u32,
+}
+
+impl Horse {
+    pub fn new() -> Self {
+        Self {
+            steps: 0,
+            origin: horse_point(0),
+            yaw: 0.0,
+            tamed: false,
+            saddled: false,
+            ridden: false,
+            loose: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn tamed(&self) -> bool {
+        self.tamed
+    }
+
+    pub fn saddled(&self) -> bool {
+        self.saddled
+    }
+
+    pub fn ridden(&self) -> bool {
+        self.ridden
+    }
+
+    pub fn shove(&mut self, burst: [f32; 3]) -> bool {
+        let Some(gust) = crate::body::wind_push(burst, self.origin) else {
+            return false;
+        };
+        self.origin[0] += gust.dx;
+        self.origin[2] += gust.dz;
+        self.loose = 40;
+        true
+    }
+
+    pub fn bump(&mut self, from: [f32; 3]) -> bool {
+        bump_origin(&mut self.origin, &mut self.loose, from)
+    }
+
+    /// Feed wheat. True when this bite tames a wild horse.
+    pub fn feed(&mut self) -> bool {
+        if self.tamed {
+            return false;
+        }
+        self.tamed = true;
+        true
+    }
+
+    /// Put a saddle on a tamed horse. False when wild or already saddled.
+    pub fn saddle(&mut self) -> bool {
+        if !self.tamed || self.saddled {
+            return false;
+        }
+        self.saddled = true;
+        true
+    }
+
+    pub fn mount(&mut self) -> bool {
+        if !self.saddled {
+            return false;
+        }
+        self.ridden = true;
+        true
+    }
+
+    pub fn dismount(&mut self) {
+        self.ridden = false;
+    }
+
+    pub fn near(&self, eye: [f32; 3]) -> bool {
+        let [x, y, z] = self.origin;
+        let dx = eye[0] - x;
+        let dy = eye[1] - (y + 0.9);
+        let dz = eye[2] - z;
+        dx * dx + dy * dy + dz * dz < BOARD * BOARD
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.85, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=6.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 1.0
+    }
+
+    pub fn seat(&self) -> Option<[f32; 3]> {
+        if !self.ridden {
+            return None;
+        }
+        let [x, y, z] = self.origin;
+        Some([x, y + 1.15 + EYE_HEIGHT, z])
+    }
+
+    pub fn steer(&mut self, dt: f32, vx: f32, vz: f32, world: &Cluster) -> bool {
+        if !self.ridden || dt <= 0.0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let mut next = self.origin;
+        let nx = x + vx * dt;
+        if pig_ground(world, nx, z, y) {
+            next[0] = nx;
+        }
+        let nz = z + vz * dt;
+        if pig_ground(world, next[0], nz, y) {
+            next[2] = nz;
+        }
+        let moved = next != self.origin;
+        face_box(&mut self.yaw, next[0] - x, next[2] - z);
+        self.origin = next;
+        moved
+    }
+
+    /// Pace the meadow until tamed or saddled.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 2], world: &Cluster) {
+        if self.loose > 0 {
+            self.loose = self.loose.saturating_sub(count);
+            return;
+        }
+        if self.saddled || self.ridden {
+            return;
+        }
+        let from_x = self.origin[0];
+        let from_z = self.origin[2];
+        self.steps = self.steps.wrapping_add(count);
+        let [x, y, z] = horse_point(self.steps);
+        let dx = x - player[0];
+        let dz = z - player[1];
+        let dist = (dx * dx + dz * dz).sqrt();
+        let goal = if dist < AVOID {
+            let (ux, uz) = if dist > 1.0e-4 {
+                (dx / dist, dz / dist)
+            } else {
+                (1.0, 0.0)
+            };
+            let push = AVOID - dist;
+            [x + ux * push, y, z + uz * push]
+        } else {
+            [x, y, z]
+        };
+        slide_land(&mut self.origin, goal, world, 2);
+        face_box(
+            &mut self.yaw,
+            self.origin[0] - from_x,
+            self.origin[2] - from_z,
+        );
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let [x, y, z] = self.origin;
+        ([x - 0.48, y, z - 0.28], [x + 0.48, y + 1.55, z + 0.28])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let [x, y, z] = self.origin;
+        let mut out = Vec::new();
+        let coat = if self.tamed {
+            [0.62, 0.42, 0.28]
+        } else {
+            [0.55, 0.38, 0.24]
+        };
+        push_box(&mut out, [x, y + 0.85, z], [0.48, 0.32, 0.26], coat);
+        push_box(
+            &mut out,
+            [x + 0.42, y + 1.15, z],
+            [0.18, 0.16, 0.14],
+            coat,
+        );
+        push_box(
+            &mut out,
+            [x + 0.55, y + 1.05, z],
+            [0.1, 0.06, 0.06],
+            [0.35, 0.22, 0.16],
+        );
+        // Legs
+        for &(dx, dz) in &[
+            (0.28f32, 0.16f32),
+            (0.28, -0.16),
+            (-0.28, 0.16),
+            (-0.28, -0.16),
+        ] {
+            push_box(
+                &mut out,
+                [x + dx, y + 0.32, z + dz],
+                [0.08, 0.32, 0.08],
+                [0.4, 0.28, 0.18],
+            );
+        }
+        if self.saddled {
+            push_box(
+                &mut out,
+                [x, y + 1.12, z],
+                [0.3, 0.07, 0.2],
+                [0.42, 0.26, 0.14],
+            );
+        }
+        yaw_mesh(&mut out, self.origin, self.yaw);
+        out
+    }
+}
+
+/// True when `id` tames a wild horse.
+pub fn horse_food(id: &str) -> bool {
+    id == "wheat"
 }
 
 const ZOMBIE_HEARTS: i32 = 4;
@@ -4180,6 +4419,19 @@ fn pig_point(steps: u32) -> [f32; 3] {
     [x, 1.0, z]
 }
 
+fn horse_point(steps: u32) -> [f32; 3] {
+    let leg = (steps / STEPS_PER_LEG) % 4;
+    let along = (steps % STEPS_PER_LEG) as f32 / STEPS_PER_LEG as f32 * LEG;
+    let (hx, hz) = (HORSE_PAD.0 as f32, HORSE_PAD.1 as f32);
+    let (x, z) = match leg {
+        0 => (hx - 1.0 + along, hz - 1.0),
+        1 => (hx + 1.0, hz - 1.0 + along),
+        2 => (hx + 1.0 - along, hz + 1.0),
+        _ => (hx - 1.0, hz + 1.0 - along),
+    };
+    [x, 1.0, z]
+}
+
 fn push_box(out: &mut Vec<Vertex>, center: [f32; 3], half: [f32; 3], color: [f32; 3]) {
     let min = [
         center[0] - half[0],
@@ -5455,5 +5707,39 @@ mod tests {
             "stepped around the stairs, z {}",
             zombie.origin[2]
         );
+    }
+
+    #[test]
+    fn a_horse_tames_saddles_and_gallops() {
+        let mut blocks = Vec::new();
+        for z in 4..10u8 {
+            for x in 2..10u8 {
+                blocks.push((x, 0, z, Block::new("grass", 0)));
+            }
+        }
+        let world =
+            Cluster::try_from_chunks(1, 0, [Chunk::from_blocks(1, 0, blocks).unwrap()]).unwrap();
+        let mut horse = Horse::new();
+        assert!(!horse.tamed());
+        assert!(horse_food("wheat"));
+        assert!(!horse_food("apple"));
+        assert!(horse.feed());
+        assert!(horse.tamed());
+        assert!(!horse.feed());
+        assert!(!horse.mount());
+        assert!(horse.saddle());
+        assert!(horse.saddled());
+        assert!(!horse.saddle());
+        assert!(horse.mount());
+        assert!(horse.ridden());
+        assert_eq!(horse.origin()[0].floor() as i32, HORSE_PAD.0 - 1);
+        assert!(horse.steer(0.2, HORSE_SPEED, 0.0, &world));
+        let before = horse.origin()[0];
+        assert!(horse.steer(0.2, HORSE_SPEED, 0.0, &world));
+        assert!(horse.origin()[0] > before);
+        assert!(horse.seat().is_some());
+        horse.dismount();
+        assert!(!horse.ridden());
+        assert!(horse.vertices().len() > 100);
     }
 }

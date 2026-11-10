@@ -987,6 +987,19 @@ pub struct State {
     cart_kick: f32,
     /// HUD plate amount for the ride cue, `0`..`1`.
     cart_show: f32,
+    /// `1` while galloping a horse (eases). Widens the view.
+    horse_kick: f32,
+    /// HUD plate amount for the gallop cue, `0`..`1`.
+    horse_show: f32,
+    horse_stroke: f32,
+    /// One-shot idle horse vs gallop FOV stitch, then quit.
+    horse_shot_path: Option<std::path::PathBuf>,
+    horse_shot_frames: u32,
+    horse_shot_phase: HorseShotPhase,
+    horse_shot_idle: Option<CapturedRgba>,
+    horse_shot_eye: glam::Vec3,
+    horse_shot_yaw: f32,
+    horse_shot_pitch: f32,
     /// Seconds until the next paddle stroke while rowing.
     boat_stroke: f32,
     cart_stroke: f32,
@@ -1066,6 +1079,7 @@ pub struct State {
     found_cat: bool,
     /// Once: walked up to the pad parrot.
     found_parrot: bool,
+    found_horse: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -1179,6 +1193,9 @@ pub struct State {
     pig: crate::mobs::Pig,
     pig_buf: Option<wgpu::Buffer>,
     pig_count: u32,
+    horse: crate::mobs::Horse,
+    horse_buf: Option<wgpu::Buffer>,
+    horse_count: u32,
     zombie: crate::mobs::Zombie,
     /// Natural night/cave Blockbench zombies (capped). Trial zombie stays above.
     night: crate::mobs::NightHorde,
@@ -2033,6 +2050,16 @@ impl State {
             cart_kick: 0.0,
             cart_show: 0.0,
             cart_stroke: 0.0,
+            horse_kick: 0.0,
+            horse_show: 0.0,
+            horse_stroke: 0.0,
+            horse_shot_path: None,
+            horse_shot_frames: 0,
+            horse_shot_phase: HorseShotPhase::Idle,
+            horse_shot_idle: None,
+            horse_shot_eye: glam::Vec3::ZERO,
+            horse_shot_yaw: 0.0,
+            horse_shot_pitch: 0.0,
             hit_kick: 0.0,
             hurt_flash: 0.0,
             sip: 0.0,
@@ -2074,6 +2101,7 @@ impl State {
             found_wolf: false,
             found_cat: false,
             found_parrot: false,
+            found_horse: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -2145,6 +2173,9 @@ impl State {
             pig: crate::mobs::Pig::new(),
             pig_buf: None,
             pig_count: 0,
+            horse: crate::mobs::Horse::new(),
+            horse_buf: None,
+            horse_count: 0,
             zombie: crate::mobs::Zombie::new(),
             night: crate::mobs::NightHorde::new(),
             zombie_buf: None,
@@ -2242,6 +2273,7 @@ impl State {
         state.bake_spawn();
         state.rebuild_sheep();
         state.rebuild_pig();
+        state.rebuild_horse();
         state.rebuild_zombie();
         state.rebuild_breeze();
         state.rebuild_golem();
@@ -2723,6 +2755,24 @@ impl State {
                 }),
         );
         self.pig_count = vertices.len() as u32;
+    }
+
+    fn rebuild_horse(&mut self) {
+        let vertices = self.horse.vertices();
+        if vertices.is_empty() {
+            self.horse_buf = None;
+            self.horse_count = 0;
+            return;
+        }
+        self.horse_buf = Some(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("horse"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+        );
+        self.horse_count = vertices.len() as u32;
     }
 
     fn rebuild_zombie(&mut self) {
@@ -3852,6 +3902,10 @@ impl State {
             self.found_parrot = true;
             self.gui.push_chat("a parrot");
         }
+        if !self.found_horse && near(crate::mobs::HORSE_PAD.0, crate::mobs::HORSE_PAD.1) {
+            self.found_horse = true;
+            self.gui.push_chat("a horse");
+        }
     }
 
     /// Step the demo zombie back when it wanders near the camp scarecrow.
@@ -4778,6 +4832,7 @@ impl State {
         }
         self.sheep.bump(from);
         self.pig.bump(from);
+        self.horse.bump(from);
         self.zombie.bump(from);
         self.breeze.bump(from);
         self.golem.bump(from);
@@ -4862,6 +4917,7 @@ impl State {
             || self.fox.shove(burst)
             || self.goat.shove(burst)
             || self.pig.shove(burst)
+            || self.horse.shove(burst)
             || self.sheep.shove(burst);
         if shoved {
             self.rebuild_zombie();
@@ -4877,6 +4933,7 @@ impl State {
             self.rebuild_fox();
             self.rebuild_goat();
             self.rebuild_pig();
+            self.rebuild_horse();
             self.rebuild_sheep();
         }
         self.play_world(crate::audio::Sound::Gust, burst);
@@ -5565,7 +5622,32 @@ impl State {
         true
     }
 
-    /// Put the held saddle on the pig when the look ray hits it.
+    /// Feed the horse wheat to tame it.
+    fn try_horse(&mut self) -> bool {
+        let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+        let forward = self.camera.forward();
+        let forward = [forward.x, forward.y, forward.z];
+        if !self.horse.aimed(eye, forward) {
+            return false;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !crate::mobs::horse_food(id) {
+            return false;
+        }
+        if self.horse.feed() {
+            self.hotbar.consume_selected();
+            self.hotbar_dirty = true;
+            self.rebuild_horse();
+            self.gui.push_chat("tamed");
+        } else {
+            self.gui.push_chat("already tame");
+        }
+        true
+    }
+
+    /// Put the held saddle on the horse or pig when the look ray hits it.
     fn try_saddle(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -5576,6 +5658,21 @@ impl State {
         let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
         let forward = self.camera.forward();
         let forward = [forward.x, forward.y, forward.z];
+        if self.horse.aimed(eye, forward) {
+            if !self.horse.tamed() {
+                self.gui.push_chat("tame first");
+                return true;
+            }
+            if self.horse.saddle() {
+                self.hotbar.consume_selected();
+                self.hotbar_dirty = true;
+                self.rebuild_horse();
+                self.gui.push_chat("saddled");
+            } else {
+                self.gui.push_chat("already saddled");
+            }
+            return true;
+        }
         if !self.pig.aimed(eye, forward) {
             return true;
         }
@@ -6260,6 +6357,63 @@ impl State {
         }
     }
 
+    fn steer_horse(&mut self, dt: f32) {
+        if self.horse_shot_path.is_some() {
+            if let Some(seat) = self.horse.seat() {
+                self.camera.eye = glam::Vec3::from(seat);
+                self.camera.velocity_y = 0.0;
+                self.camera.on_ground = true;
+            }
+            return;
+        }
+        let (forward, right) = self.camera.walk_axes();
+        let mut wish = glam::Vec3::ZERO;
+        if self.input.forward {
+            wish += forward;
+        }
+        if self.input.back {
+            wish -= forward;
+        }
+        if self.input.right {
+            wish += right;
+        }
+        if self.input.left {
+            wish -= right;
+        }
+        let galloping = wish.length_squared() > 0.0;
+        if galloping {
+            wish = wish.normalize() * crate::mobs::HORSE_SPEED;
+        }
+        let moved = self.horse.steer(dt, wish.x, wish.z, &self.world);
+        if moved {
+            self.rebuild_horse();
+        }
+        let goal = if moved || galloping { 1.0 } else { 0.0 };
+        self.horse_kick += (goal - self.horse_kick) * (dt * 8.0).min(1.0);
+        self.horse_show += (goal - self.horse_show) * (dt * 10.0).min(1.0);
+        if moved {
+            self.horse_stroke -= dt;
+            if self.horse_stroke <= 0.0 {
+                self.horse_stroke = 0.28;
+                self.play_world(crate::audio::Sound::Step, self.horse.origin());
+            }
+            self.bob_amount = (self.bob_amount + dt * 4.5).min(0.6);
+        } else {
+            self.horse_stroke = 0.0;
+        }
+        if let Some(seat) = self.horse.seat() {
+            self.camera.eye = glam::Vec3::from(seat);
+            self.camera.velocity_y = 0.0;
+            self.camera.on_ground = true;
+        }
+    }
+
+    fn clear_horse_feel(&mut self) {
+        self.horse_kick = 0.0;
+        self.horse_show = 0.0;
+        self.horse_stroke = 0.0;
+    }
+
     /// A right click asks `events.use_entity`, then `events.use_block`, then `events.use_item`.
     ///
     /// False from any hook consumes the click, so the built-in eat, place, feed,
@@ -6461,6 +6615,7 @@ impl State {
         let bodies = [
             ("sheep", self.sheep.bounds()),
             ("pig", self.pig.bounds()),
+            ("horse", self.horse.bounds()),
             ("zombie", self.zombie.bounds()),
             ("breeze", self.breeze.bounds()),
             ("copper_golem", self.golem.bounds()),
@@ -6703,6 +6858,7 @@ impl State {
             || self.try_parrot()
             || self.try_cat()
             || self.try_wolf()
+            || self.try_horse()
             || self.try_cook_heat()
             || self.try_blast_heat()
             || self.try_furnace_heat()
@@ -7718,6 +7874,100 @@ impl State {
             }
         }
         let _ = self.window.focus_window();
+    }
+
+    /// Idle aboard then gallop FOV on the east meadow horse, stitched side by side.
+    pub fn arm_horse_shot(&mut self, path: std::path::PathBuf) {
+        self.horse_shot_path = Some(path);
+        self.horse_shot_frames = 0;
+        self.horse_shot_phase = HorseShotPhase::WaitingIdle;
+        self.horse_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.horse = crate::mobs::Horse::new();
+        assert!(self.horse.feed());
+        assert!(self.horse.saddle());
+        assert!(self.horse.mount());
+        self.rebuild_horse();
+        let seat = self
+            .horse
+            .seat()
+            .map(glam::Vec3::from)
+            .expect("horse seat");
+        let (hx, hz) = crate::mobs::HORSE_PAD;
+        let target = glam::Vec3::new(hx as f32 + 3.0, 1.6, hz as f32 + 0.5);
+        self.camera = Camera::looking_at(seat, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.input.forward = false;
+        self.input.fast = false;
+        self.clear_horse_feel();
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.horse_shot_eye = seat;
+        self.horse_shot_yaw = yaw;
+        self.horse_shot_pitch = pitch;
+        self.posed_eye = seat;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.found_horse = true;
+        self.gui.push_chat("gallop");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("wheat");
+        let _ = self.hotbar.give_stack("saddle");
+        self.hotbar_dirty = true;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(hx + dx * 8, hz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_horse_shot_camera(&mut self) {
+        if self.horse_shot_path.is_none() {
+            return;
+        }
+        if !self.horse.ridden() {
+            let _ = self.horse.mount();
+        }
+        self.camera.restore(
+            self.horse_shot_eye,
+            self.horse_shot_yaw,
+            self.horse_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.horse_shot_eye;
+        self.posed_yaw = self.horse_shot_yaw;
+        self.posed_pitch = self.horse_shot_pitch;
+        self.pose_dirty = true;
+        match self.horse_shot_phase {
+            HorseShotPhase::WaitingIdle | HorseShotPhase::Idle => {
+                self.input.forward = false;
+                self.input.back = false;
+                self.input.left = false;
+                self.input.right = false;
+                self.horse_kick = 0.0;
+                self.horse_show = 0.0;
+                self.horse_stroke = 0.0;
+            }
+            HorseShotPhase::WaitingRide => {
+                self.input.forward = true;
+                self.horse_kick = 1.0;
+                self.horse_show = 1.0;
+                self.horse_stroke = 0.2;
+                self.bob_amount = 0.5;
+            }
+        }
     }
 
     /// Idle aboard then riding FOV on the shaft rail spur, stitched side by side.
@@ -12375,6 +12625,75 @@ impl State {
         }
     }
 
+    fn poll_horse_shot(&mut self) {
+        let Some(path) = self.horse_shot_path.clone() else {
+            return;
+        };
+        self.pin_horse_shot_camera();
+        self.horse_shot_frames = self.horse_shot_frames.saturating_add(1);
+        if self.horse_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.horse_shot_frames > 600 {
+                eprintln!("horse shot timed out");
+                self.horse_shot_path = None;
+                self.horse_shot_phase = HorseShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.horse_shot_phase {
+            HorseShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.horse_shot_idle = Some(idle);
+                    self.horse_shot_frames = 0;
+                    self.horse_shot_phase = HorseShotPhase::WaitingRide;
+                }
+                Err(err) => {
+                    eprintln!("horse idle capture failed: {err}");
+                    if self.horse_shot_frames > 400 {
+                        self.horse_shot_path = None;
+                        self.horse_shot_phase = HorseShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            HorseShotPhase::WaitingRide => {
+                let Some(idle) = self.horse_shot_idle.take() else {
+                    self.horse_shot_path = None;
+                    self.horse_shot_phase = HorseShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(ride) => match stitch_held_light_proof(&idle, &ride, &path) {
+                        Ok(()) => {
+                            eprintln!("horse shot wrote {}", path.display());
+                            self.horse_shot_path = None;
+                            self.horse_shot_phase = HorseShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("horse stitch failed: {err}");
+                            self.horse_shot_path = None;
+                            self.horse_shot_phase = HorseShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("horse ride capture failed: {err}");
+                        self.horse_shot_idle = Some(idle);
+                        if self.horse_shot_frames > 400 {
+                            self.horse_shot_path = None;
+                            self.horse_shot_phase = HorseShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            HorseShotPhase::Idle => {}
+        }
+    }
+
     fn poll_attack_shot(&mut self) {
         let Some(path) = self.attack_shot_path.clone() else {
             return;
@@ -13601,6 +13920,12 @@ impl State {
                         self.play_world(crate::audio::Sound::Step, pos);
                     }
                     self.gui.push_chat("off cart");
+                } else if self.horse.ridden() {
+                    self.horse.dismount();
+                    self.clear_horse_feel();
+                    let right = self.camera.walk_axes().1;
+                    self.camera.eye += right * 1.0;
+                    self.gui.push_chat("dismounted");
                 } else if self.pig.ridden() {
                     self.pig.dismount();
                     let right = self.camera.walk_axes().1;
@@ -13643,6 +13968,21 @@ impl State {
                     }
                     self.clear_cart_feel();
                     self.gui.push_chat("aboard cart");
+                } else if self.horse.saddled()
+                    && self
+                        .horse
+                        .near([self.camera.eye.x, self.camera.eye.y, self.camera.eye.z])
+                    && !self.looking_at_use()
+                {
+                    self.horse.mount();
+                    if let Some(seat) = self.horse.seat() {
+                        self.camera.eye = glam::Vec3::from(seat);
+                        self.camera.velocity_y = 0.0;
+                        self.camera.on_ground = true;
+                        self.play_world(crate::audio::Sound::Step, seat);
+                    }
+                    self.clear_horse_feel();
+                    self.gui.push_chat("mounted");
                 } else if self.pig.saddled()
                     && self
                         .pig
@@ -15601,6 +15941,7 @@ impl State {
         self.air_peak = self.camera.eye.y;
         self.boat.dismount();
         self.pig.dismount();
+        self.horse.dismount();
         self.release_plate();
         self.pose_dirty = true;
         self.pose_left = 0.0;
@@ -15614,6 +15955,7 @@ impl State {
         self.break_kick = 0.0;
         self.clear_boat_feel();
         self.clear_cart_feel();
+        self.clear_horse_feel();
         self.sync_pointer();
     }
 
@@ -15867,6 +16209,11 @@ impl State {
             self.cart_show = (self.cart_show - dt * 5.0).max(0.0);
             self.cart_stroke = 0.0;
         }
+        if !self.horse.ridden() {
+            self.horse_kick = (self.horse_kick - dt * 6.0).max(0.0);
+            self.horse_show = (self.horse_show - dt * 5.0).max(0.0);
+            self.horse_stroke = 0.0;
+        }
         self.bob_amount = (self.bob_amount - dt * 2.5).max(0.0);
         let crouch_goal = if self.input.crouch { 1.0 } else { 0.0 };
         self.crouch += (crouch_goal - self.crouch) * (dt * 10.0).min(1.0);
@@ -15903,6 +16250,7 @@ impl State {
         self.pin_swim_shot_camera();
         self.pin_boat_shot_camera();
         self.pin_cart_shot_camera();
+        self.pin_horse_shot_camera();
         self.pin_attack_shot_camera();
         self.pin_hunger_shot_camera();
         self.pin_eat_shot_camera();
@@ -15925,6 +16273,7 @@ impl State {
         let mut obstacles = vec![
             self.sheep.bounds(),
             self.pig.bounds(),
+            self.horse.bounds(),
             self.zombie.bounds(),
             self.breeze.bounds(),
             self.golem.bounds(),
@@ -15951,6 +16300,12 @@ impl State {
             self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
         } else if self.cart.aboard() {
             self.steer_minecart(dt);
+            self.sprint_asked = false;
+            self.sprint_blocked = false;
+            self.sprint_run = 0.0;
+            self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
+        } else if self.horse.ridden() {
+            self.steer_horse(dt);
             self.sprint_asked = false;
             self.sprint_blocked = false;
             self.sprint_run = 0.0;
@@ -16071,7 +16426,10 @@ impl State {
         let submerged = body::eye_in_water(self.camera.eye, &self.world);
         let water_goal = if submerged { 1.0 } else { 0.0 };
         self.water_sub += (water_goal - self.water_sub) * (dt * 8.0).min(1.0);
-        let aboard = self.boat.aboard() || self.cart.aboard() || self.pig.ridden();
+        let aboard = self.boat.aboard()
+            || self.cart.aboard()
+            || self.horse.ridden()
+            || self.pig.ridden();
         let feet = [
             self.camera.eye.x,
             self.camera.eye.y - body::EYE_HEIGHT,
@@ -16125,6 +16483,8 @@ impl State {
             self.rebuild_sheep();
             self.pig.tick_near(steps, feet, &self.world);
             self.rebuild_pig();
+            self.horse.tick_near(steps, feet, &self.world);
+            self.rebuild_horse();
             let (zmin, zmax) = self.zombie.bounds();
             let from = [
                 (zmin[0] + zmax[0]) * 0.5,
@@ -16489,7 +16849,10 @@ impl State {
             self.sprint_kick * bob_scale,
             self.hit_kick * bob_scale,
             water_fov,
-            self.boat_kick.max(self.cart_kick) * bob_scale,
+            self.boat_kick
+                .max(self.cart_kick)
+                .max(self.horse_kick)
+                * bob_scale,
         ) + chew
             + jump
             + swap
@@ -16814,6 +17177,14 @@ impl State {
                     pass.draw(0..self.pig_count, 0..1);
                 }
             }
+            if let Some(horse) = &self.horse_buf {
+                if self.horse_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, horse.slice(..));
+                    pass.draw(0..self.horse_count, 0..1);
+                }
+            }
             if let Some(zombie) = &self.zombie_buf {
                 if self.zombie_count >= 3 {
                     pass.set_pipeline(&self.pipeline);
@@ -17008,6 +17379,9 @@ impl State {
         }
         if self.cart_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::cart_quads(gui_w, gui_h, self.cart_show));
+        }
+        if self.horse_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::horse_quads(gui_w, gui_h, self.horse_show));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));
@@ -17231,6 +17605,7 @@ impl State {
         self.poll_swim_shot();
         self.poll_boat_shot();
         self.poll_cart_shot();
+        self.poll_horse_shot();
         self.poll_attack_shot();
         self.poll_hunger_shot();
         self.poll_eat_shot();
@@ -17275,6 +17650,13 @@ enum BoatShotPhase {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CartShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingRide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HorseShotPhase {
     Idle,
     WaitingIdle,
     WaitingRide,
