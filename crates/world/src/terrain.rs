@@ -152,6 +152,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     }
     stamp_camp(&mut blocks, chunk_x, chunk_z);
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
+    stamp_dungeon(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
@@ -393,6 +394,18 @@ pub const SHAFT_LODESTONE: (i32, i32) = (SHAFT_MOUTH.0 - 1, SHAFT_MOUTH.1 + 2);
 
 /// Demo emerald ore west of the lodestone — rare hills ore for village trades.
 pub const EMERALD_ORE: (i32, i32) = (SHAFT_LODESTONE.0 - 1, SHAFT_LODESTONE.1);
+
+/// Underground cobble dungeon west of the mine pit — chest + trial spawner.
+pub const DUNGEON: (i32, i32) = (SHAFT_MOUTH.0 - 5, SHAFT_MOUTH.1 - 4);
+
+/// Loot chest on the west wall of the dungeon.
+pub const DUNGEON_CHEST: (i32, i32) = (DUNGEON.0 - 1, DUNGEON.1);
+
+/// Trial spawner in the dungeon center.
+pub const DUNGEON_SPAWNER: (i32, i32) = DUNGEON;
+
+/// Standing floor of the demo dungeon (cobble underfoot is one below).
+pub const DUNGEON_FLOOR: u16 = 2;
 
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
@@ -1067,6 +1080,78 @@ fn stamp_clay_bank(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             blocks.push((lx, floor, lz, clay));
         }
     }
+}
+
+/// Cobble dungeon under the mine apron — mossy room, chest, trial spawner.
+/// Only the shaft chunk gets the guaranteed demo.
+fn stamp_dungeon(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != SHAFT_CHUNK {
+        return;
+    }
+    let (cx, cz) = DUNGEON;
+    let floor = DUNGEON_FLOOR;
+    let cobble = Block::new("cobblestone", 0);
+    let mossy = Block::new("mossy_cobblestone", 0);
+    // Hollow 5×5×3 room centered on DUNGEON, floor underfoot at `floor`.
+    for dz in -2i32..=2 {
+        for dx in -2i32..=2 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            let edge = dx.abs() == 2 || dz.abs() == 2;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 2)
+            });
+            // Floor slab underfoot.
+            blocks.push((
+                lx,
+                floor - 1,
+                lz,
+                if (dx + dz).rem_euclid(2) == 0 {
+                    mossy
+                } else {
+                    cobble
+                },
+            ));
+            if edge {
+                for dy in 0..3u16 {
+                    let wall = if (dx + dy as i32 + dz).rem_euclid(3) == 0 {
+                        mossy
+                    } else {
+                        cobble
+                    };
+                    blocks.push((lx, floor + dy, lz, wall));
+                }
+            } else {
+                // Clear interior + ceiling so the room reads underground.
+                blocks.push((lx, floor + 2, lz, cobble));
+            }
+        }
+    }
+    // East door into the mine pit corridor.
+    let door_x = (cx + 2 - chunk_x * 16) as u8;
+    let door_z = (cz - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == door_x && *z == door_z && *y >= floor && *y <= floor + 1));
+    // Short hall toward the pit (local x grows toward the mouth).
+    for step in 1..=2 {
+        let hx = (cx + 2 + step - chunk_x * 16) as u8;
+        let hz = door_z;
+        blocks.retain(|(x, y, z, _)| {
+            !(*x == hx && *z == hz && *y >= floor.saturating_sub(1) && *y <= floor + 2)
+        });
+        blocks.push((hx, floor - 1, hz, cobble));
+        blocks.push((hx, floor + 2, hz, cobble));
+    }
+    // Chest on the west wall, spawner in the center.
+    let chest_x = (DUNGEON_CHEST.0 - chunk_x * 16) as u8;
+    let chest_z = (DUNGEON_CHEST.1 - chunk_z * 16) as u8;
+    blocks.push((chest_x, floor, chest_z, Block::new("chest", 0)));
+    let spawn_x = (DUNGEON_SPAWNER.0 - chunk_x * 16) as u8;
+    let spawn_z = (DUNGEON_SPAWNER.1 - chunk_z * 16) as u8;
+    blocks.push((spawn_x, floor, spawn_z, Block::new("trial_spawner", 0)));
+    // Mossy torch corner so the room isn't pitch black in a still.
+    let torch_x = (cx + 1 - chunk_x * 16) as u8;
+    let torch_z = (cz - 1 - chunk_z * 16) as u8;
+    blocks.push((torch_x, floor, torch_z, Block::new("torch", 0)));
 }
 
 /// A timbered hole. Only the shaft chunk gets one.
@@ -1954,6 +2039,27 @@ mod tests {
                 2 * 16 + (EMERALD_ORE.1 - 2 * 16)
             ),
             EMERALD_ORE
+        );
+        let dungeon_lx = (DUNGEON.0 - (-2 * 16)) as u8;
+        let dungeon_lz = (DUNGEON.1 - 2 * 16) as u8;
+        assert_eq!(
+            shaft.block(dungeon_lx, DUNGEON_FLOOR, dungeon_lz).id,
+            "trial_spawner",
+            "dungeon spawner at room center"
+        );
+        let chest_lx = (DUNGEON_CHEST.0 - (-2 * 16)) as u8;
+        let chest_lz = (DUNGEON_CHEST.1 - 2 * 16) as u8;
+        assert_eq!(
+            shaft.block(chest_lx, DUNGEON_FLOOR, chest_lz).id,
+            "chest",
+            "dungeon chest on the west wall"
+        );
+        let floor_id = shaft
+            .block(dungeon_lx, DUNGEON_FLOOR - 1, dungeon_lz)
+            .id;
+        assert!(
+            floor_id == "cobblestone" || floor_id == "mossy_cobblestone",
+            "dungeon floor is cobble/mossy, got {floor_id}"
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;

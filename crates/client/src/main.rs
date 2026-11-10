@@ -280,6 +280,8 @@ struct Args {
     shot_trader: Option<std::path::PathBuf>,
     /// Demo emerald ore vein at the mine, then quit.
     shot_emerald: Option<std::path::PathBuf>,
+    /// Underground dungeon under the mine, then quit.
+    shot_dungeon: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
     /// Axolotl companion swim, then quit.
@@ -550,6 +552,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_village: args.shot_village,
         shot_trader: args.shot_trader,
         shot_emerald: args.shot_emerald,
+        shot_dungeon: args.shot_dungeon,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
         shot_frog: args.shot_frog,
@@ -705,6 +708,7 @@ struct App {
     shot_village: Option<std::path::PathBuf>,
     shot_trader: Option<std::path::PathBuf>,
     shot_emerald: Option<std::path::PathBuf>,
+    shot_dungeon: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
     shot_frog: Option<std::path::PathBuf>,
@@ -1042,6 +1046,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_emerald.take() {
                     state.arm_emerald_ore_shot(path);
+                }
+                if let Some(path) = self.shot_dungeon.take() {
+                    state.arm_dungeon_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -1416,6 +1423,7 @@ where
         shot_village: None,
         shot_trader: None,
         shot_emerald: None,
+        shot_dungeon: None,
         shot_keybinds: None,
         shot_axolotl: None,
         shot_frog: None,
@@ -1984,6 +1992,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-emerald".to_string())?;
                 parsed.shot_emerald = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-dungeon" | "--shot-dungeon-room" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-dungeon".to_string())?;
+                parsed.shot_dungeon = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter
