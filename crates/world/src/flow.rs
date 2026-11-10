@@ -10,7 +10,7 @@ use crate::changes::CellChange;
 use crate::chunk::{
     BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, battery_at, battery_level, buffer_level,
     buffer_max, compound_accepts_meta, ember_conducts, is_battery, is_buffer, is_lamp, is_pipe,
-    is_pump, is_tank, is_wire, lamp_at, lamp_on, pump_dir, pump_on, tank_at,
+    is_pump, is_spout, is_tank, is_wire, lamp_at, lamp_on, pump_dir, pump_on, tank_at, tank_level,
 };
 use crate::cluster::Cluster;
 
@@ -510,6 +510,155 @@ pub fn apply_ember_lamps(
     count
 }
 
+/// True when `src` can feed a spout (water tank with level, or water-filled host).
+fn spout_source(block: crate::chunk::Block) -> Option<(u8, crate::chunk::Block)> {
+    if is_tank(block.id) && block.fill == FILL_WATER {
+        let level = tank_level(block);
+        if level == 0 {
+            return None;
+        }
+        let after = if level <= 1 {
+            crate::chunk::Block::new("tank", 0)
+        } else {
+            tank_at(FILL_WATER, level - 1)
+        };
+        return Some((level, after));
+    }
+    if block.fill == FILL_WATER
+        && (is_pipe(block.id)
+            || is_pump(block.id)
+            || (compound_accepts_meta(block.id, block.metadata, FILL_WATER)
+                && !is_spout(block.id)
+                && !is_lamp(block.id)
+                && !is_battery(block.id)))
+    {
+        return Some((1, block.with_fill(FILL_NONE)));
+    }
+    None
+}
+
+/// Plan spout drains: open spouts dump water into air ahead of facing.
+///
+/// Intake is the opposite face (pipe / tank). Tank level `> 0` is pressurized —
+/// the spout sprays one extra cell along facing when the first outlet is free
+/// or already water. Each pulse draws one unit from the intake source.
+pub fn plan_water_spouts(
+    world: &Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_spouts: usize,
+) -> Vec<CellChange> {
+    if max_spouts == 0 || radius < 0 {
+        return Vec::new();
+    }
+    let mut spouts = Vec::new();
+    let min_cx = (focus[0] - radius).div_euclid(16);
+    let max_cx = (focus[0] + radius).div_euclid(16);
+    let min_cz = (focus[2] - radius).div_euclid(16);
+    let max_cz = (focus[2] + radius).div_euclid(16);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let Some(chunk) = world.get(cx, cz) else {
+                continue;
+            };
+            chunk.for_each_block(|x, y, z, block| {
+                if !is_spout(block.id) || !pump_on(block.metadata) {
+                    return;
+                }
+                if (x - focus[0]).abs() > radius
+                    || (y - focus[1]).abs() > radius
+                    || (z - focus[2]).abs() > radius
+                {
+                    return;
+                }
+                spouts.push((x, y, z, block.metadata));
+            });
+        }
+    }
+    spouts.sort_by_key(|&(x, y, z, _)| {
+        (
+            (x - focus[0]).abs() + (z - focus[2]).abs(),
+            y,
+            x,
+            z,
+        )
+    });
+
+    let mut claimed = HashSet::new();
+    let mut out = Vec::new();
+    let mut drained = 0usize;
+    for (x, y, z, meta) in spouts {
+        if drained >= max_spouts {
+            break;
+        }
+        let dir = pump_dir(meta);
+        let ix = x - dir[0];
+        let iy = y - dir[1];
+        let iz = z - dir[2];
+        let ox = x + dir[0];
+        let oy = y + dir[1];
+        let oz = z + dir[2];
+        let intake = world.block_at(ix, iy, iz);
+        let Some((pressure, after_src)) = spout_source(intake) else {
+            continue;
+        };
+        let outlet = world.block_at(ox, oy, oz);
+        let mut placed = false;
+        if outlet.is_air() && claimed.insert((ox, oy, oz)) {
+            out.push(CellChange {
+                x: ox,
+                y: oy,
+                z: oz,
+                block: crate::chunk::Block::new("water", 0),
+            });
+            placed = true;
+        }
+        // Pressurized tank spray: one more cell along facing.
+        if pressure > 1 {
+            let sx = ox + dir[0];
+            let sy = oy + dir[1];
+            let sz = oz + dir[2];
+            let spray = world.block_at(sx, sy, sz);
+            let first_ok = outlet.is_air() || outlet.id == "water";
+            if first_ok && spray.is_air() && claimed.insert((sx, sy, sz)) {
+                out.push(CellChange {
+                    x: sx,
+                    y: sy,
+                    z: sz,
+                    block: crate::chunk::Block::new("water", 0),
+                });
+                placed = true;
+            }
+        }
+        if !placed {
+            continue;
+        }
+        out.push(CellChange {
+            x: ix,
+            y: iy,
+            z: iz,
+            block: after_src,
+        });
+        drained += 1;
+    }
+    out
+}
+
+/// Apply [`plan_water_spouts`] into `world`. Returns how many cells changed.
+pub fn apply_water_spouts(
+    world: &mut Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_spouts: usize,
+) -> usize {
+    let planned = plan_water_spouts(world, focus, radius, max_spouts);
+    let count = planned.len();
+    for cell in planned {
+        world.set_block(cell.x, cell.y, cell.z, cell.block);
+    }
+    count
+}
+
 /// Apply [`plan_compound_seeps`] into `world`. Returns how many cells filled.
 pub fn apply_compound_seeps(
     world: &mut Cluster,
@@ -864,5 +1013,60 @@ mod tests {
         let planned = plan_ember_lamps(&cluster, [2, 1, 1], 8, 4, false);
         assert_eq!(planned.len(), 1);
         assert!(!lamp_on(planned[0].block.metadata));
+    }
+
+    #[test]
+    fn spout_drains_pipe_water_into_air() {
+        use crate::chunk::pump_meta;
+        let mut cluster = world(&[
+            (1, 1, 1, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (2, 1, 1, Block::new("spout", pump_meta(0, true))),
+        ]);
+        let planned = plan_water_spouts(&cluster, [2, 1, 1], 8, 2);
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 3 && c.block.id == "water"),
+            "water dumps ahead of spout"
+        );
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 1 && c.block.fill == FILL_NONE),
+            "pipe empties"
+        );
+        assert_eq!(apply_water_spouts(&mut cluster, [2, 1, 1], 8, 2), 2);
+        assert_eq!(cluster.block_at(3, 1, 1).id, "water");
+        assert_eq!(cluster.block_at(1, 1, 1).fill, FILL_NONE);
+    }
+
+    #[test]
+    fn pressurized_tank_spout_sprays_two_cells() {
+        use crate::chunk::{pump_meta, tank_at, tank_level};
+        let mut cluster = world(&[
+            (1, 1, 1, tank_at(FILL_WATER, 4)),
+            (2, 1, 1, Block::new("spout", pump_meta(0, true))),
+        ]);
+        let planned = plan_water_spouts(&cluster, [2, 1, 1], 8, 2);
+        assert!(planned.iter().any(|c| c.x == 3 && c.block.id == "water"));
+        assert!(
+            planned.iter().any(|c| c.x == 4 && c.block.id == "water"),
+            "pressure sprays one cell farther"
+        );
+        assert!(planned.iter().any(|c| c.x == 1 && tank_level(c.block) == 3));
+        assert_eq!(apply_water_spouts(&mut cluster, [2, 1, 1], 8, 2), 3);
+        assert_eq!(cluster.block_at(3, 1, 1).id, "water");
+        assert_eq!(cluster.block_at(4, 1, 1).id, "water");
+        assert_eq!(tank_level(cluster.block_at(1, 1, 1)), 3);
+    }
+
+    #[test]
+    fn closed_spout_holds_water() {
+        use crate::chunk::pump_meta;
+        let cluster = world(&[
+            (1, 1, 1, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (2, 1, 1, Block::new("spout", pump_meta(0, false))),
+        ]);
+        assert!(plan_water_spouts(&cluster, [2, 1, 1], 8, 2).is_empty());
     }
 }

@@ -54,8 +54,8 @@ pub use chunk::{
     BATTERY_CHARGE, BATTERY_MAX, Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, TANK_BUCKET,
     TANK_MAX, battery_at, battery_level, buffer_level, buffer_max, compound_accepts,
     compound_accepts_meta, compound_host, conduit_links, ember_conducts, fill_kind, fill_name,
-    is_battery, is_buffer, is_lamp, is_pipe, is_pump, is_tank, is_wire, lamp_at, lamp_on,
-    pump_dir, pump_meta, pump_on, tank_at, tank_level,
+    is_battery, is_buffer, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire, lamp_at,
+    lamp_on, pump_dir, pump_meta, pump_on, tank_at, tank_level,
 };
 pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};
@@ -66,8 +66,8 @@ pub use conduit::{
     shell_boxes as conduit_shell_boxes, span as conduit_span,
 };
 pub use flow::{
-    apply_compound_seeps, apply_ember_lamps, apply_pump_pushes, plan_compound_seeps,
-    plan_ember_lamps, plan_pump_pushes,
+    apply_compound_seeps, apply_ember_lamps, apply_pump_pushes, apply_water_spouts,
+    plan_compound_seeps, plan_ember_lamps, plan_pump_pushes, plan_water_spouts,
 };
 pub use hooks::{
     AfterBreak, AfterPlace, BeforeBreak, BeforePlace, BreakVerdict, EntityClock, Hooks,

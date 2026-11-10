@@ -137,6 +137,7 @@ fn swings(id: &str) -> bool {
             | "trial_spawner"
             | "copper_bulb"
             | "lamp"
+            | "spout"
             | "pump"
             | "decorated_pot"
             | "shelf"

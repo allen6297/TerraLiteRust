@@ -72,6 +72,7 @@ pub fn compound_host(id: &str) -> bool {
             | "tank"
             | "battery"
             | "lamp"
+            | "spout"
             | "fence"
             | "fence_gate"
             | "slab"
@@ -136,6 +137,11 @@ pub fn is_battery(id: &str) -> bool {
 /// True when `id` is an ember lamp (wire-powered light).
 pub fn is_lamp(id: &str) -> bool {
     id == "lamp"
+}
+
+/// True when `id` is a water spout / faucet.
+pub fn is_spout(id: &str) -> bool {
+    id == "spout"
 }
 
 /// True when `id` is a leveled compound buffer (tank or battery).
@@ -252,23 +258,24 @@ pub fn compound_accepts_meta(id: &str, metadata: u8, fill: u8) -> bool {
         "pipe" => fill == FILL_WATER,
         "wire" => fill == FILL_EMBER,
         "battery" => fill == FILL_EMBER,
-        // Lamps are wire-powered consumers; they do not hold fill themselves.
-        "lamp" => false,
+        // Lamps / spouts are consumers; they do not hold fill themselves.
+        "lamp" | "spout" => false,
         "pump" => pump_on(metadata) && (fill == FILL_WATER || fill == FILL_EMBER),
         _ => fill == FILL_WATER || fill == FILL_EMBER,
     }
 }
 
-/// Neighbor link for pipe/wire/pump/tank/battery/lamp mesh arms.
+/// Neighbor link for pipe/wire/pump/tank/battery/lamp/spout mesh arms.
 ///
-/// Pipes join pipes/pumps/tanks (not batteries/lamps); wires join wires/pumps/
-/// batteries/lamps and tanks; pumps/tanks/batteries/lamps join energy hosts.
+/// Pipes join pipes/pumps/tanks/spouts (not batteries/lamps); wires join wires/
+/// pumps/batteries/lamps and tanks; pumps/tanks/batteries/lamps/spouts join hosts.
 pub fn conduit_links(a: &str, b: &str) -> bool {
     match a {
         "pipe" => {
             b == "pipe"
                 || b == "pump"
                 || b == "tank"
+                || b == "spout"
                 || (compound_host(b) && b != "wire" && b != "battery" && b != "lamp")
         }
         "wire" => {
@@ -277,14 +284,21 @@ pub fn conduit_links(a: &str, b: &str) -> bool {
                 || b == "battery"
                 || b == "lamp"
                 || b == "tank"
-                || (compound_host(b) && b != "pipe")
+                || (compound_host(b) && b != "pipe" && b != "spout")
         }
         "lamp" => {
             b == "wire"
                 || b == "battery"
                 || b == "pump"
                 || b == "lamp"
-                || (compound_host(b) && b != "pipe" && b != "tank")
+                || (compound_host(b) && b != "pipe" && b != "tank" && b != "spout")
+        }
+        "spout" => {
+            b == "pipe"
+                || b == "tank"
+                || b == "pump"
+                || b == "spout"
+                || (compound_host(b) && b != "wire" && b != "battery" && b != "lamp")
         }
         "pump" | "tank" | "battery" => compound_host(b),
         _ => false,
