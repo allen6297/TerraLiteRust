@@ -67,6 +67,8 @@ pub enum Sound {
     Drip,
     /// Soft leaf rustle in forest under open sky.
     Rustle,
+    /// A short jukebox disc melody.
+    Disc,
 }
 
 /// Seconds before the same horn can sound again.
@@ -549,6 +551,7 @@ impl Audio {
             Sound::Lap => water_lap(),
             Sound::Drip => cave_drip(),
             Sound::Rustle => leaf_rustle(),
+            Sound::Disc => disc_melody(),
         }
     }
 }
@@ -729,6 +732,16 @@ fn horn_call() -> Vec<i16> {
     let mut call = thud(196.0, 0.28, 0.4);
     call.extend(thud(294.0, 0.42, 0.36));
     call
+}
+
+/// A short rising phrase for a music disc in a jukebox.
+fn disc_melody() -> Vec<i16> {
+    let mut song = thud(note_hz(0), 0.18, 0.32);
+    song.extend(thud(note_hz(4), 0.16, 0.3));
+    song.extend(thud(note_hz(7), 0.18, 0.34));
+    song.extend(thud(note_hz(11), 0.22, 0.3));
+    song.extend(thud(note_hz(12), 0.28, 0.36));
+    song
 }
 
 /// A noisy snap, then a low body. Louder at the start than a plain tone.
@@ -1528,6 +1541,9 @@ mod tests {
         assert_eq!(audio.played.last(), Some(&Sound::Mace));
         let tap = thud(note_hz(0), 0.22, 0.34);
         assert!(horn_call().len() > tap.len());
+        assert!(disc_melody().len() > horn_call().len());
+        audio.play(Sound::Disc);
+        assert_eq!(audio.played.last(), Some(&Sound::Disc));
         assert_eq!(horn_blow(0.0), Some(HORN_WAIT));
         assert_eq!(horn_blow(0.4), None);
         assert_eq!(horn_cool(HORN_WAIT, 0.5), 1.5);

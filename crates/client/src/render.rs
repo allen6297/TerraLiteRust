@@ -3276,6 +3276,7 @@ impl State {
                 | "button"
                 | "lever"
                 | "note_block"
+                | "jukebox"
                 | "flower_pot"
                 | "end_portal_frame"
                 | "dragon_egg"
@@ -3358,6 +3359,10 @@ impl State {
         }
         if block.id == "note_block" {
             self.play_note_block(hit.block, block.metadata);
+            return;
+        }
+        if block.id == "jukebox" {
+            self.use_jukebox(hit.block, block.metadata);
             return;
         }
         if block.id == "item_frame" {
@@ -6413,6 +6418,12 @@ impl State {
             if before.id == "lectern" && before.metadata & 1 == 1 && self.hotbar.collect("book") {
                 self.hotbar_dirty = true;
             }
+            if before.id == "jukebox"
+                && before.metadata & 1 == 1
+                && self.hotbar.collect("music_disc")
+            {
+                self.hotbar_dirty = true;
+            }
             if before.id == "chiseled_bookshelf" {
                 let stored = before.metadata.min(6);
                 for _ in 0..stored {
@@ -8592,6 +8603,87 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Insert a disc into the camp jukebox mid-melody mote, then quit with a PNG.
+    pub fn arm_jukebox_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (jx, jz) = rebuild_world::CAMP_JUKEBOX;
+        let mut jy = 4;
+        for y in 0..80 {
+            if self.world.block_at(jx, y, jz).id == "jukebox" {
+                jy = y;
+                break;
+            }
+        }
+        let mut changes = vec![CellChange {
+            x: jx,
+            y: jy,
+            z: jz,
+            block: Block::new("jukebox", 1),
+        }];
+        // Clear a south look-corridor so the mote reads above the box.
+        for z in (jz + 1)..=(jz + 4) {
+            for y in jy..=(jy + 3) {
+                changes.push(CellChange {
+                    x: jx,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        let focus = glam::Vec3::new(jx as f32 + 0.5, jy as f32 + 1.15, jz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            jx as f32 + 0.5,
+            jy as f32 + 1.4 + body::EYE_HEIGHT,
+            jz as f32 + 3.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote_at = [jx as f32 + 0.5, jy as f32 + 1.05, jz as f32 + 0.5];
+        self.note_shot_at = Some(mote_at);
+        self.note_shot_pitch = 12;
+        self.drops.note(mote_at, 12);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Disc, mote_at);
+        self.gui.push_chat("playing");
+        self.found_camp = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("music_disc");
+        self.hotbar_dirty = true;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(jx + dx * 8, jz + dz * 8);
+            }
+        }
         let _ = self.window.focus_window();
     }
 
@@ -12702,6 +12794,77 @@ impl State {
         if self.pending.is_empty() {
             self.retune(at, crate::audio::next_pitch(pitch));
         }
+    }
+
+    /// Insert a music disc to play, empty-hand eject, or replay while filled.
+    fn use_jukebox(&mut self, at: [i32; 3], metadata: u8) {
+        let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+        let mote = [source[0], at[1] as f32 + 1.05, source[2]];
+        let holding_disc = self.hotbar.slot(self.hotbar.selected()) == Some("music_disc");
+        let filled = metadata & 1 == 1;
+        if filled {
+            if holding_disc {
+                self.play_jukebox(source, mote);
+                return;
+            }
+            if self.hotbar.slot(self.hotbar.selected()).is_some() {
+                self.gui.push_chat("playing");
+                return;
+            }
+            if !self.pending.is_empty() {
+                return;
+            }
+            if !self.hotbar.room_for("music_disc") && !self.bag.room_for("music_disc") {
+                self.gui.push_chat("no room");
+                return;
+            }
+            let (min, max) = body::player_box_bounds(self.camera.eye);
+            self.send_edit(
+                encode_place(
+                    at[0],
+                    at[1],
+                    at[2],
+                    Block::new("jukebox", 0),
+                    PlayerBox { min, max },
+                ),
+                TAG_PLACE,
+                None,
+            );
+            if !self.hotbar.collect("music_disc") {
+                self.bag.collect("music_disc");
+            }
+            self.hotbar_dirty = true;
+            self.gui.push_chat("ejected");
+            return;
+        }
+        if !holding_disc {
+            self.gui.push_chat("need a disc");
+            return;
+        }
+        if !self.pending.is_empty() {
+            return;
+        }
+        let slot = self.hotbar.selected();
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                at[0],
+                at[1],
+                at[2],
+                Block::new("jukebox", 1),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            Some(slot),
+        );
+        self.play_jukebox(source, mote);
+    }
+
+    fn play_jukebox(&mut self, source: [f32; 3], mote: [f32; 3]) {
+        self.play_world(crate::audio::Sound::Disc, source);
+        self.drops.note(mote, 12);
+        self.rebuild_drops();
+        self.gui.push_chat("playing");
     }
 
     /// Put a book on the aimed lectern, or read the page it already holds.

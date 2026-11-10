@@ -1,4 +1,4 @@
 {
-  "drops": ["raw", "apple", "wool", "torch"],
+  "drops": ["raw", "apple", "wool", "torch", "music_disc"],
   "omen": ["healing_potion", "iron_pickaxe", "compass", "map"]
 }
