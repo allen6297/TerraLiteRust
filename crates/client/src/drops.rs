@@ -26,8 +26,14 @@ pub struct Drop {
 struct Mote {
     center: [f32; 3],
     velocity: [f32; 3],
+    /// Lit color (ambient + block). Sparks use the same value for both.
     color: [f32; 3],
+    /// Block-light channel. Smoke keeps a soft ambient (`color - block`).
+    block: [f32; 3],
     life: f32,
+    /// Soft campfire smoke floats up instead of falling.
+    rise: bool,
+    half: f32,
 }
 
 #[derive(Default)]
@@ -61,7 +67,10 @@ impl Drops {
                 center: origin,
                 velocity: dir,
                 color,
+                block: color,
                 life: 0.35,
+                rise: false,
+                half: 0.04,
             });
         }
     }
@@ -81,8 +90,68 @@ impl Drops {
                 center: origin,
                 velocity: dir,
                 color,
+                block: color,
                 life: 0.7,
+                rise: false,
+                half: 0.04,
             });
+        }
+    }
+
+    /// Soft gray puffs that float up from a campfire. Cheap and capped.
+    pub fn smoke(&mut self, origin: [f32; 3]) {
+        const MAX_SMOKE: usize = 28;
+        let mut smoke_n = self.motes.iter().filter(|mote| mote.rise).count();
+        if smoke_n >= MAX_SMOKE {
+            return;
+        }
+        // `color` is lit ambient+block; keep a soft ambient (`color - block`)
+        // so sun shade does not wash the puff away.
+        const PUFFS: [([f32; 3], [f32; 3], [f32; 3], f32); 4] = [
+            (
+                [0.08, 0.55, 0.03],
+                [0.78, 0.78, 0.82],
+                [0.28, 0.28, 0.30],
+                1.8,
+            ),
+            (
+                [-0.06, 0.42, -0.05],
+                [0.70, 0.70, 0.74],
+                [0.22, 0.22, 0.24],
+                1.55,
+            ),
+            (
+                [0.03, 0.62, -0.08],
+                [0.86, 0.86, 0.90],
+                [0.32, 0.32, 0.34],
+                2.0,
+            ),
+            (
+                [-0.04, 0.48, 0.07],
+                [0.64, 0.64, 0.68],
+                [0.18, 0.18, 0.20],
+                1.45,
+            ),
+        ];
+        for (i, (vel, color, block, life)) in PUFFS.into_iter().enumerate() {
+            if smoke_n >= MAX_SMOKE {
+                break;
+            }
+            let wobble = (i as f32) * 0.04;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.05,
+                    origin[1],
+                    origin[2] - wobble * 0.5,
+                ],
+                velocity: vel,
+                color,
+                block,
+                life,
+                rise: true,
+                half: 0.12,
+            });
+            smoke_n += 1;
         }
     }
 
@@ -97,7 +166,15 @@ impl Drops {
             mote.center[0] += mote.velocity[0] * step;
             mote.center[1] += mote.velocity[1] * step;
             mote.center[2] += mote.velocity[2] * step;
-            mote.velocity[1] -= 2.4 * step;
+            if mote.rise {
+                mote.velocity[1] += 0.28 * step;
+                let damp = (1.0 - 1.1 * step).max(0.0);
+                mote.velocity[0] *= damp;
+                mote.velocity[2] *= damp;
+                mote.half = (mote.half + 0.02 * step).min(0.14);
+            } else {
+                mote.velocity[1] -= 2.4 * step;
+            }
         }
         self.motes.retain(|mote| mote.life > 0.0);
         true
@@ -238,7 +315,7 @@ impl Drops {
             push_billboard(&mut vertices, drop.center, HALF, drop.id, right, up);
         }
         for mote in &self.motes {
-            push_box(&mut vertices, mote.center, 0.04, mote.color);
+            push_box(&mut vertices, mote.center, mote.half, mote.color, mote.block);
         }
         vertices
     }
@@ -251,7 +328,7 @@ impl Drops {
             push_billboard(&mut vertices, drop.center, HALF, drop.id, right, up);
         }
         for mote in &self.motes {
-            push_box(&mut vertices, mote.center, 0.04, mote.color);
+            push_box(&mut vertices, mote.center, mote.half, mote.color, mote.block);
         }
         vertices
     }
@@ -308,7 +385,13 @@ fn overlaps(center: [f32; 3], min: [f32; 3], max: [f32; 3]) -> bool {
     (0..3).all(|axis| center[axis] + HALF > min[axis] && center[axis] - HALF < max[axis])
 }
 
-fn push_box(out: &mut Vec<Vertex>, center: [f32; 3], half: f32, color: [f32; 3]) {
+fn push_box(
+    out: &mut Vec<Vertex>,
+    center: [f32; 3],
+    half: f32,
+    color: [f32; 3],
+    block: [f32; 3],
+) {
     let min = [center[0] - half, center[1] - half, center[2] - half];
     let max = [center[0] + half, center[1] + half, center[2] + half];
     let corner = [
@@ -346,7 +429,7 @@ fn push_box(out: &mut Vec<Vertex>, center: [f32; 3], half: f32, color: [f32; 3])
                 normal,
                 uv: [0.0, 0.0],
                 textured: 0.0,
-                block: color,
+                block,
                 bounce: [0.0, 0.0, 0.0],
                 ao: 1.0,
             });
@@ -576,6 +659,24 @@ mod tests {
         assert!(drops.tick_motes(0.1));
         assert!(drops.tick_motes(0.4));
         assert!(drops.vertices().is_empty());
+    }
+
+    #[test]
+    fn campfire_smoke_rises_and_stays_capped() {
+        let mut drops = Drops::new();
+        let start_y = 2.0;
+        drops.smoke([8.0, start_y, 8.0]);
+        assert_eq!(drops.motes.len(), 4);
+        assert!(drops.motes.iter().all(|mote| mote.rise));
+        let before = drops.motes[0].center[1];
+        assert!(drops.tick_motes(0.2));
+        assert!(drops.motes[0].center[1] > before);
+        for _ in 0..20 {
+            drops.smoke([8.0, start_y, 8.0]);
+        }
+        assert!(drops.motes.iter().filter(|mote| mote.rise).count() <= 28);
+        assert!(drops.tick_motes(3.0));
+        assert!(drops.motes.iter().all(|mote| !mote.rise));
     }
 
     #[test]

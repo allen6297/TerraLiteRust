@@ -1018,6 +1018,14 @@ pub struct State {
     crackle_mix: f32,
     /// World position of the campfire feeding `crackle_mix`, when nearby.
     crackle_at: Option<[f32; 3]>,
+    /// Seconds until the next campfire smoke puff.
+    smoke_wait: f32,
+    /// One-shot campfire smoke proof PNG, then quit.
+    campfire_smoke_shot_path: Option<std::path::PathBuf>,
+    campfire_smoke_shot_frames: u32,
+    campfire_smoke_shot_eye: glam::Vec3,
+    campfire_smoke_shot_yaw: f32,
+    campfire_smoke_shot_pitch: f32,
     /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
     wind_mix: f32,
     /// Eased water-edge proximity, `0` far through `1` at the surface.
@@ -1924,6 +1932,12 @@ impl State {
             bird_mix: 0.0,
             crackle_mix: 0.0,
             crackle_at: None,
+            smoke_wait: 0.0,
+            campfire_smoke_shot_path: None,
+            campfire_smoke_shot_frames: 0,
+            campfire_smoke_shot_eye: glam::Vec3::ZERO,
+            campfire_smoke_shot_yaw: 0.0,
+            campfire_smoke_shot_pitch: 0.0,
             wind_mix: 0.0,
             lap_mix: 0.0,
             lap_at: None,
@@ -5770,6 +5784,131 @@ impl State {
     }
 
     /// Idle FOV then break FOV from the stairs overlook, stitched side by side.
+    /// Look at a lit campfire with rising smoke puffs, then quit with a PNG.
+    pub fn arm_campfire_smoke_shot(&mut self, path: std::path::PathBuf) {
+        self.campfire_smoke_shot_path = Some(path);
+        self.campfire_smoke_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.45);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        // Clear pad + campfire on the demo stairs overlook so the shot is stable.
+        let fx = 8;
+        let fy = 2;
+        let fz = 10;
+        let mut changes = Vec::new();
+        for z in 8..=12 {
+            for x in 6..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: fx,
+            y: fy,
+            z: fz,
+            block: Block::new("campfire", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let fire = glam::Vec3::new(fx as f32 + 0.5, fy as f32 + 0.85, fz as f32 + 0.5);
+        // Stand back and a bit low so the rising column reads against the sky.
+        let eye = glam::Vec3::new(
+            fx as f32 + 0.5,
+            fy as f32 + 1.15 + body::EYE_HEIGHT,
+            fz as f32 - 4.2,
+        );
+        let look = glam::Vec3::new(fire.x, fire.y + 1.4, fire.z);
+        self.camera = Camera::looking_at(eye, look);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.campfire_smoke_shot_eye = eye;
+        self.campfire_smoke_shot_yaw = yaw;
+        self.campfire_smoke_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.crackle_at = Some([fire.x, fire.y, fire.z]);
+        for _ in 0..8 {
+            self.drops.smoke([fire.x, fire.y + 0.2, fire.z]);
+        }
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_campfire_smoke_shot_camera(&mut self) {
+        if self.campfire_smoke_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.campfire_smoke_shot_eye,
+            self.campfire_smoke_shot_yaw,
+            self.campfire_smoke_shot_pitch,
+        );
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.campfire_smoke_shot_eye;
+        self.posed_yaw = self.campfire_smoke_shot_yaw;
+        self.posed_pitch = self.campfire_smoke_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+    }
+
+    fn poll_campfire_smoke_shot(&mut self) {
+        let Some(path) = self.campfire_smoke_shot_path.clone() else {
+            return;
+        };
+        self.pin_campfire_smoke_shot_camera();
+        self.campfire_smoke_shot_frames = self.campfire_smoke_shot_frames.saturating_add(1);
+        if self.campfire_smoke_shot_frames % 4 == 0 {
+            self.drops.smoke([8.5, 2.95, 10.5]);
+            self.drops.smoke([8.55, 3.05, 10.45]);
+            self.rebuild_drops();
+        }
+        if self.campfire_smoke_shot_frames < 120 || !self.chunk_bake.is_idle() {
+            if self.campfire_smoke_shot_frames > 600 {
+                eprintln!("campfire smoke shot timed out");
+                self.campfire_smoke_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("campfire smoke shot wrote {}", path.display());
+                self.campfire_smoke_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("campfire smoke shot failed: {err}");
+                if self.campfire_smoke_shot_frames > 250 {
+                    self.campfire_smoke_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     pub fn arm_break_shot(&mut self, path: std::path::PathBuf) {
         self.break_shot_path = Some(path);
         self.break_shot_frames = 0;
@@ -9673,6 +9812,16 @@ impl State {
         let (fire_mix, fire_at) = nearest_campfire(&self.world, eye);
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
+        self.smoke_wait = (self.smoke_wait - dt).max(0.0);
+        if self.playing && !self.menu.is_open() && !self.dead {
+            if let Some(source) = self.crackle_at {
+                if self.smoke_wait <= 0.0 {
+                    self.smoke_wait = 0.32;
+                    self.drops.smoke([source[0], source[1] + 0.35, source[2]]);
+                    self.rebuild_drops();
+                }
+            }
+        }
         let (shore_mix, shore_at) = nearest_water_edge(&self.world, eye);
         self.lap_mix += (shore_mix - self.lap_mix) * (dt * 2.2).min(1.0);
         self.lap_at = shore_at;
@@ -11080,6 +11229,7 @@ impl State {
         self.poll_eat_shot();
         self.poll_jump_shot();
         self.poll_place_shot();
+        self.poll_campfire_smoke_shot();
         self.poll_swap_shot();
         self.poll_break_shot();
     }
