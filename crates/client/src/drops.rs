@@ -311,6 +311,52 @@ impl Drops {
             .count()
     }
 
+    /// How many wheat chaff motes are still drifting.
+    pub fn chaff_count(&self) -> usize {
+        self.motes
+            .iter()
+            .filter(|mote| {
+                mote.hover && mote.color[1] >= mote.color[0] && mote.color[2] < 0.4
+            })
+            .count()
+    }
+
+    /// Soft gold-green husks that lift off wheat tops in a breeze.
+    pub fn chaff(&mut self, origin: [f32; 3]) {
+        const MAX_CHAFF: usize = 30;
+        if self.chaff_count() >= MAX_CHAFF {
+            return;
+        }
+        const HUSKS: [([f32; 3], [f32; 3], f32); 5] = [
+            ([0.28, 0.35, 0.06], [0.78, 0.86, 0.28], 1.45),
+            ([-0.18, 0.42, 0.12], [0.7, 0.82, 0.22], 1.25),
+            ([0.36, 0.28, -0.1], [0.84, 0.9, 0.32], 1.6),
+            ([-0.24, 0.38, -0.08], [0.66, 0.78, 0.2], 1.15),
+            ([0.12, 0.48, 0.14], [0.74, 0.88, 0.26], 1.35),
+        ];
+        let seed = ((origin[0] * 1.9 + origin[2] * 2.3).abs() as usize) % HUSKS.len();
+        for (i, (vel, color, life)) in HUSKS.into_iter().enumerate() {
+            if self.chaff_count() >= MAX_CHAFF {
+                break;
+            }
+            let wobble = ((seed + i) as f32) * 0.04;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.08,
+                    origin[1] + 0.1 + (i as f32) * 0.06,
+                    origin[2] - wobble * 0.35,
+                ],
+                velocity: vel,
+                color,
+                block: color,
+                life,
+                rise: false,
+                hover: true,
+                half: 0.05,
+            });
+        }
+    }
+
     /// Pale hay flecks that blow past the camp scarecrow on the breeze.
     pub fn straw(&mut self, origin: [f32; 3]) {
         const MAX_STRAW: usize = 28;
@@ -1106,6 +1152,22 @@ mod tests {
         assert!(drops.straw_count() <= 28);
         assert!(drops.tick_motes(3.0));
         assert_eq!(drops.straw_count(), 0);
+    }
+
+    #[test]
+    fn chaff_lifts_gold_green_and_caps() {
+        let mut drops = Drops::new();
+        drops.chaff([12.0, 2.5, 18.0]);
+        assert!(drops.chaff_count() >= 4);
+        assert_eq!(drops.straw_count(), 0);
+        assert!(drops.motes.iter().all(|mote| mote.hover));
+        assert!(drops.motes.iter().all(|mote| mote.color[1] >= mote.color[0]));
+        for _ in 0..20 {
+            drops.chaff([12.0, 2.5, 18.0]);
+        }
+        assert!(drops.chaff_count() <= 30);
+        assert!(drops.tick_motes(3.0));
+        assert_eq!(drops.chaff_count(), 0);
     }
 
     #[test]

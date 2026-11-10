@@ -1152,6 +1152,10 @@ pub struct State {
     found_sway: bool,
     /// Seconds until the next scarecrow straw fleck.
     sway_wait: f32,
+    /// Once: stood in the wheat plot and heard/saw the crop rustle.
+    found_rustle: bool,
+    /// Seconds until the next wheat chaff burst.
+    rustle_wait: f32,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
     /// One-shot campfire smoke proof PNG, then quit.
@@ -2173,6 +2177,8 @@ impl State {
             lantern_phase: 0.0,
             found_sway: false,
             sway_wait: 0.0,
+            found_rustle: false,
+            rustle_wait: 0.0,
             firefly_wait: 0.0,
             campfire_smoke_shot_path: None,
             campfire_smoke_shot_frames: 0,
@@ -10223,6 +10229,132 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Ripe wheat with chaff lifting in the breeze, then quit with a PNG.
+    pub fn arm_wheat_rustle_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Midday breeze so rustle audio and chaff read together.
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 10;
+        let cz = 18;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 1)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::AIR,
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 3,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        // Same three-stalk plate as harvest, so the crosses stay readable.
+        changes.push(CellChange {
+            x: cx,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 3),
+        });
+        changes.push(CellChange {
+            x: cx - 1,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 2),
+        });
+        changes.push(CellChange {
+            x: cx + 1,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 1),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, 2.7, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(cx as f32 - 2.4, 2.05 + body::EYE_HEIGHT, cz as f32 + 2.6);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.drops = crate::drops::Drops::new();
+        let head = [cx as f32 + 0.5, 2.95, cz as f32 + 0.5];
+        // A light chaff veil — keep plants readable under the flecks.
+        for offset in [[0.0, 0.05, 0.0], [0.45, 0.1, -0.25], [-0.4, 0.08, 0.35]] {
+            self.drops.chaff([
+                head[0] + offset[0],
+                head[1] + offset[1],
+                head[2] + offset[2],
+            ]);
+        }
+        let _ = self.drops.tick_motes(0.12);
+        self.rebuild_drops();
+        self.note_shot_at = Some(head);
+        self.note_shot_pitch = 0;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.rustle_mix = 1.0;
+        self.wind_mix = 0.85;
+        self.found_farm = true;
+        self.found_rustle = true;
+        self.found_sway = false;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("rustle");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Camp east fence plot with wheat, then quit with a PNG.
     pub fn arm_farm_plot_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12157,7 +12289,9 @@ impl State {
         self.cook_shot_frames = self.cook_shot_frames.saturating_add(1);
         if self.cook_shot_frames % 5 == 0 {
             if let Some(at) = self.note_shot_at {
-                if self.note_shot_book {
+                if self.found_rustle {
+                    self.drops.chaff(at);
+                } else if self.note_shot_book {
                     self.drops.book_swirl(at);
                 } else if self.note_shot_brew {
                     self.drops.brew_bubbles(at);
@@ -16891,7 +17025,14 @@ impl State {
         } else {
             0.0
         };
-        self.rustle_mix += (woods - self.rustle_mix) * (dt * 1.0).min(1.0);
+        let (wheat_mix, wheat_at) = nearest_wheat(&self.world, eye);
+        let crop = if sky_open {
+            (wheat_mix * (1.0 - wet * 0.4) * open.max(0.35)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let want_rustle = woods.max(crop);
+        self.rustle_mix += (want_rustle - self.rustle_mix) * (dt * 1.0).min(1.0);
         if self.rain_mix < 0.15 {
             self.rain_told = false;
         }
@@ -16901,6 +17042,7 @@ impl State {
         self.smoke_wait = (self.smoke_wait - dt).max(0.0);
         self.ember_wait = (self.ember_wait - dt).max(0.0);
         self.sway_wait = (self.sway_wait - dt).max(0.0);
+        self.rustle_wait = (self.rustle_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
             if let Some(source) = self.crackle_at {
@@ -16945,6 +17087,20 @@ impl State {
                         if !self.found_sway {
                             self.found_sway = true;
                             self.gui.push_chat("sway");
+                        }
+                    }
+                }
+            }
+            // Wheat chaff lifts off the farm plot when the breeze catches the crop.
+            if crop > 0.25 {
+                if let Some(at) = wheat_at {
+                    if self.rustle_wait <= 0.0 {
+                        self.rustle_wait = 0.26 + (1.0 - crop) * 0.4;
+                        self.drops.chaff([at[0], at[1] + 0.55, at[2]]);
+                        self.rebuild_drops();
+                        if !self.found_rustle {
+                            self.found_rustle = true;
+                            self.gui.push_chat("rustle");
                         }
                     }
                 }
@@ -19317,6 +19473,40 @@ fn nearest_water_edge(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>)
     }
 }
 
+/// Soft proximity to nearby wheat. Mix is `0` outside ~8 blocks, rising to `1`
+/// when standing in the crop. Returns a wheat cell center for chaff.
+fn nearest_wheat(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 7;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 3)..=(cy + 2) {
+                if world.block_at(x, y, z).id != "wheat_crop" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.35, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 8.0 => {
+            let t = ((8.0 - dist) / 8.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// Soft proximity to the nearest campfire. Mix is `0` outside ~12 blocks,
 /// rising to `1` when standing over the flame. Returns the fire's center too.
 fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -19970,6 +20160,29 @@ mod tests {
         assert!(src.is_some());
         let far = [fx as f32 + 20.0, fy as f32 + 1.6, fz as f32 + 20.0];
         let (away, none) = super::nearest_campfire(&cluster, far);
+        assert_eq!(away, 0.0);
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn wheat_rustle_mix_rises_in_the_camp_plot() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        rebuild_world::seed_terrain_ring(&mut cluster);
+        let (fx, fz) = rebuild_world::CAMP_FARM;
+        let mut fy = None;
+        for y in 0..80 {
+            if cluster.block_at(fx, y, fz).id == "wheat_crop" {
+                fy = Some(y);
+                break;
+            }
+        }
+        let fy = fy.expect("camp wheat");
+        let at = [fx as f32 + 0.5, fy as f32 + 1.4, fz as f32 + 0.5];
+        let (close, src) = super::nearest_wheat(&cluster, at);
+        assert!(close > 0.7, "standing in the wheat: {close}");
+        assert!(src.is_some());
+        let far = [fx as f32 + 24.0, fy as f32 + 1.4, fz as f32 + 24.0];
+        let (away, none) = super::nearest_wheat(&cluster, far);
         assert_eq!(away, 0.0);
         assert!(none.is_none());
     }
