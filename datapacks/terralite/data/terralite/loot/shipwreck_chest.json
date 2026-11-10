@@ -1,4 +1,4 @@
 {
-  "drops": ["oak_log", "oak_stairs", "torch", "map", "apple"],
-  "omen": ["compass", "clock", "iron_pickaxe", "healing_potion"]
+  "drops": ["oak_log", "oak_stairs", "torch", "map", "apple", "heart_of_the_sea", "nautilus_shell"],
+  "omen": ["compass", "clock", "iron_pickaxe", "healing_potion", "heart_of_the_sea", "nautilus_shell"]
 }

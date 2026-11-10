@@ -14719,6 +14719,71 @@ impl State {
         }
     }
 
+    /// Shipwreck hold chest paying a heart of the sea, then quit with a PNG.
+    pub fn arm_shipwreck_heart_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 0));
+        self.clock.set_time_of_day(0.34);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_wreck = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a shipwreck");
+        self.gui.push_chat("heart of the sea");
+
+        let (cx, cz) = rebuild_world::SHIPWRECK;
+        let (chest_x, chest_z) = rebuild_world::SHIPWRECK_CHEST;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(chest_x, y, chest_z).id == "chest" {
+                cy = y;
+                break;
+            }
+        }
+        // Prove the pack pays a heart at this cell, then show it in hand.
+        let table = crate::loot::load_shipwreck_chest().expect("shipwreck loot");
+        let paid = crate::loot::pick(&table, chest_x, chest_z, false);
+        debug_assert_eq!(paid, "heart_of_the_sea");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack(paid);
+        let _ = self.hotbar.collect("nautilus_shell");
+        self.hotbar_dirty = true;
+
+        let focus = glam::Vec3::new(chest_x as f32 + 0.5, cy as f32 + 0.6, chest_z as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            chest_x as f32 + 3.8,
+            cy as f32 + 1.5 + body::EYE_HEIGHT * 0.2,
+            chest_z as f32 + 3.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Half-buried oak shipwreck west of the pad, then quit.
     pub fn arm_shipwreck_shot(&mut self, path: std::path::PathBuf) {
         self.wreck_shot_path = Some(path);
@@ -31018,6 +31083,7 @@ mod tests {
         let paid = super::fresh_wreck(false, x, z, false).unwrap();
         let rich = super::fresh_wreck(false, x, z, true).unwrap();
         assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(paid, "heart_of_the_sea");
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_wreck(true, x, z, false).is_none());
         assert!(super::fresh_wreck(false, 0, 0, false).is_none());

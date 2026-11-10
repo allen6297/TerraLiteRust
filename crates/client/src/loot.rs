@@ -294,6 +294,16 @@ mod tests {
     }
 
     #[test]
+    fn the_shipwreck_chest_pays_a_heart_of_the_sea() {
+        let table = load_shipwreck_chest().unwrap();
+        assert!(table.drops.iter().any(|id| id == "heart_of_the_sea"));
+        assert!(table.drops.iter().any(|id| id == "nautilus_shell"));
+        assert!(table.omen.iter().any(|id| id == "heart_of_the_sea"));
+        let (x, z) = rebuild_world::SHIPWRECK_CHEST;
+        assert_eq!(pick(&table, x, z, false), "heart_of_the_sea");
+    }
+
+    #[test]
     fn a_script_chest_loot_overrides_datapack_drops() {
         let pack = rebuild_world::Pack::builtin();
         pack.set_chest_loot("demo_chest", &["torch", "map"], "loot-test")
