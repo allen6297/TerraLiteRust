@@ -198,6 +198,8 @@ struct Args {
     shot_lava_heat_haze: Option<std::path::PathBuf>,
     /// Cold breath frost motes, then quit.
     shot_cold_breath: Option<std::path::PathBuf>,
+    /// Snow footprint trail, then quit.
+    shot_snow_footprints: Option<std::path::PathBuf>,
     /// Drifting cloud ground darken, then quit.
     shot_cloud_shadow: Option<std::path::PathBuf>,
     /// Rain splash motes on open ground, then quit.
@@ -495,6 +497,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_underwater_caustics: args.shot_underwater_caustics,
         shot_lava_heat_haze: args.shot_lava_heat_haze,
         shot_cold_breath: args.shot_cold_breath,
+        shot_snow_footprints: args.shot_snow_footprints,
         shot_cloud_shadow: args.shot_cloud_shadow,
         shot_rain_splash: args.shot_rain_splash,
         shot_grass_wind: args.shot_grass_wind,
@@ -643,6 +646,7 @@ struct App {
     shot_underwater_caustics: Option<std::path::PathBuf>,
     shot_lava_heat_haze: Option<std::path::PathBuf>,
     shot_cold_breath: Option<std::path::PathBuf>,
+    shot_snow_footprints: Option<std::path::PathBuf>,
     shot_cloud_shadow: Option<std::path::PathBuf>,
     shot_rain_splash: Option<std::path::PathBuf>,
     shot_grass_wind: Option<std::path::PathBuf>,
@@ -890,6 +894,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_cold_breath.take() {
                     state.arm_cold_breath_shot(path);
+                }
+                if let Some(path) = self.shot_snow_footprints.take() {
+                    state.arm_snow_footprints_shot(path);
                 }
                 if let Some(path) = self.shot_cloud_shadow.take() {
                     state.arm_cloud_shadow_shot(path);
@@ -1326,6 +1333,7 @@ where
         shot_underwater_caustics: None,
         shot_lava_heat_haze: None,
         shot_cold_breath: None,
+        shot_snow_footprints: None,
         shot_cloud_shadow: None,
         shot_rain_splash: None,
         shot_grass_wind: None,
@@ -1679,6 +1687,15 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-cold-breath".to_string())?;
                 parsed.shot_cold_breath = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-snow-footprints"
+            | "--shot-snow-prints"
+            | "--shot-footprints"
+            | "--shot-tracks" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-snow-footprints".to_string())?;
+                parsed.shot_snow_footprints = Some(std::path::PathBuf::from(value));
             }
             "--shot-cloud-shadow" | "--shot-cloud-ground" | "--shot-clouds" => {
                 let value = iter
@@ -2571,6 +2588,17 @@ mod tests {
         assert_eq!(
             args.shot_cold_breath.as_deref(),
             Some(std::path::Path::new("cold-breath.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-snow-footprints".into(),
+            "snow-footprints.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_snow_footprints.as_deref(),
+            Some(std::path::Path::new("snow-footprints.png"))
         );
     }
 }

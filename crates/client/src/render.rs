@@ -1479,6 +1479,8 @@ pub struct State {
     breath_wait: f32,
     /// Once: exhaled frost motes in the cold.
     found_frost_breath: bool,
+    /// Once: left footprints in snow.
+    found_snow_prints: bool,
     /// Seconds until the next canopy leaf can tumble.
     leaf_wait: f32,
     /// Seconds until the next rain splash mote near the player.
@@ -2622,6 +2624,7 @@ impl State {
             firefly_wait: 0.0,
             breath_wait: 0.0,
             found_frost_breath: false,
+            found_snow_prints: false,
             leaf_wait: 0.0,
             splash_wait: 0.0,
             found_splashes: false,
@@ -14056,6 +14059,143 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Snow pad with a fading footprint trail, then quit with a PNG.
+    pub fn arm_snow_footprints_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.pig = crate::mobs::Pig::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.cat = crate::mobs::Cat::new();
+        self.wolf = crate::mobs::Wolf::new();
+        self.bee = crate::mobs::Bee::new();
+        self.axolotl = crate::mobs::Axolotl::new();
+        self.parrot = crate::mobs::Parrot::new();
+        self.frog = crate::mobs::Frog::new();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Bright winter day so dark prints read on white snow.
+        self.clock = crate::daylight::Clock::at(
+            crate::daylight::DAY_SECONDS * 3.0 + crate::daylight::DAY_SECONDS * 0.48,
+        );
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.wind_mix = 0.1;
+        self.dusk_show = 0.0;
+        self.found_snow_prints = true;
+        self.found_frost_breath = false;
+        self.found_fireflies = false;
+        self.found_embers = false;
+        self.found_sway = false;
+        self.found_rustle = false;
+        self.found_falling_leaves = false;
+        self.found_flight = false;
+
+        let mut changes = Vec::new();
+        for z in 4..=16 {
+            for x in 3..=13 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("snow", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        // Camera overlooking a walk line on the snow (low angle, not FP mouth).
+        let eye = glam::Vec3::new(5.2, 2.55 + body::EYE_HEIGHT, 14.5);
+        let focus = glam::Vec3::new(8.2, 1.2, 9.2);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.breath_wait = 99.0;
+
+        self.drops = crate::drops::Drops::new();
+        // Alternating L/R prints along a walk line across the pad.
+        let snow_top = 1.0 + 1.0 / 16.0 + 0.03;
+        for i in 0..14 {
+            let t = i as f32;
+            let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+            let at = [
+                8.0 + side * 0.18,
+                snow_top,
+                13.4 - t * 0.38,
+            ];
+            self.drops.snow_print(at);
+        }
+        // Age older prints so the fade gradient reads in the still.
+        let _ = self.drops.tick_motes(1.8);
+        self.rebuild_drops();
+
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.cat_buf = None;
+        self.cat_count = 0;
+        self.wolf_buf = None;
+        self.wolf_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.axolotl_buf = None;
+        self.axolotl_count = 0;
+        self.parrot_buf = None;
+        self.parrot_count = 0;
+        self.frog_buf = None;
+        self.frog_count = 0;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("tracks");
+        self.note_shot_at = None;
+
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Autumn canopy with tumbling leaf motes, then quit with a PNG.
     pub fn arm_falling_leaves_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17978,6 +18118,9 @@ impl State {
                     self.drops.frost_breath_burst(mouth, forward.to_array());
                 }
                 let _ = self.drops.tick_motes(0.05);
+            } else if self.found_snow_prints {
+                // Footprints last long enough for the PNG; just tick the fade.
+                let _ = self.drops.tick_motes(0.04);
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
                 if self.found_embers {
@@ -24142,6 +24285,7 @@ impl State {
             && !self.menu.is_open()
             && !self.dead
             && cold > 0.28
+            && !self.found_snow_prints
             && self.shadows_shot_path.is_none()
             && self.bounce_shot_path.is_none()
             && self.water_shot_path.is_none()
@@ -24792,6 +24936,29 @@ impl State {
                 self.play_world_soft(crate::audio::step_for(ground), feet, 0.35);
             } else {
                 self.play_world(crate::audio::step_for(ground), feet);
+            }
+            // Snow layer under the soles: leave a short-lived footprint trail.
+            if let Some(at) = snow_print_origin(
+                &self.world,
+                self.camera.eye,
+                self.camera.forward(),
+                self.bob_phase,
+            ) {
+                self.drops.snow_print(at);
+                // Sprint plants a second print a half-step ahead so the trail densifies.
+                if self.sprint_asked && !self.sprint_blocked {
+                    let ahead = [
+                        at[0] + self.camera.forward().x * 0.18,
+                        at[1],
+                        at[2] + self.camera.forward().z * 0.18,
+                    ];
+                    self.drops.snow_print(ahead);
+                }
+                self.rebuild_drops();
+                if !self.found_snow_prints {
+                    self.found_snow_prints = true;
+                    self.gui.push_chat("tracks");
+                }
             }
         }
         if self.audio.stroke(wet && moving && !aboard && !splashed, dt) {
@@ -27084,6 +27251,47 @@ fn nearest_wheat(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
 /// Mouth offset just below the eye along look — first-person breath origin.
 fn breath_mouth(eye: glam::Vec3, forward: glam::Vec3) -> [f32; 3] {
     (eye + forward * 0.22 + glam::Vec3::new(0.0, -0.12, 0.0)).to_array()
+}
+
+/// World point for a snow footprint just above the snow layer under the soles,
+/// with a left/right offset from walk bob. `None` when not standing on snow.
+fn snow_print_origin(
+    world: &Cluster,
+    eye: glam::Vec3,
+    forward: glam::Vec3,
+    bob_phase: f32,
+) -> Option<[f32; 3]> {
+    let feet = body::feet_y(eye.y);
+    let xi = eye.x.floor() as i32;
+    let zi = eye.z.floor() as i32;
+    let sole = (feet - 0.02).floor() as i32;
+    let mut snow_y: Option<i32> = None;
+    for y in [sole, sole - 1, sole + 1] {
+        if world.block_at(xi, y, zi).id == "snow" {
+            snow_y = Some(y);
+            break;
+        }
+    }
+    let y = snow_y?;
+    // Snow mesh is one pixel (1/16) tall; sit a hair above to avoid Z-fight.
+    let top = y as f32 + 1.0 / 16.0 + 0.03;
+    let flat = glam::Vec3::new(forward.x, 0.0, forward.z);
+    let ahead = if flat.length_squared() > 1.0e-4 {
+        flat.normalize()
+    } else {
+        glam::Vec3::Z
+    };
+    let right = glam::Vec3::Y.cross(ahead).normalize_or_zero();
+    let side = if (bob_phase * 0.5).sin() >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    Some([
+        eye.x + right.x * side * 0.14,
+        top,
+        eye.z + right.z * side * 0.14,
+    ])
 }
 
 /// Soft cold air mood: winter, hills, or nearby snow/ice, stronger at night
