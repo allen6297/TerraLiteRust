@@ -271,6 +271,9 @@ pub const SHAFT_BLAST: (i32, i32) = (SHAFT_CHEST.0, SHAFT_CHEST.1 + 1);
 /// Grindstone on the apron, one block north of the chest.
 pub const SHAFT_GRIND: (i32, i32) = (SHAFT_CHEST.0, SHAFT_CHEST.1 - 1);
 
+/// Smithing table on the apron, one block east of the chest.
+pub const SHAFT_SMITH: (i32, i32) = (SHAFT_CHEST.0 + 1, SHAFT_CHEST.1);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Broken stone-brick shrine, southeast of the demo pad.
@@ -508,6 +511,12 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     let grind_x = (SHAFT_GRIND.0 - chunk_x * 16) as u8;
     let grind_z = (SHAFT_GRIND.1 - chunk_z * 16) as u8;
     blocks.push((grind_x, floor, grind_z, Block::new("grindstone", 0)));
+    // East of the chest: spend iron ore to upgrade a pick.
+    let smith_x = (SHAFT_SMITH.0 - chunk_x * 16) as u8;
+    let smith_z = (SHAFT_SMITH.1 - chunk_z * 16) as u8;
+    blocks.push((smith_x, floor, smith_z, Block::new("smithing_table", 0)));
+    // Iron ore beside it so the upgrade loop is findable without creative give.
+    blocks.push((smith_x, floor, smith_z + 1, Block::new("iron_ore", 0)));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1016,6 +1025,12 @@ mod tests {
             (-2 * 16 + 10, 2 * 16 + i32::from(local_z - 1)),
             SHAFT_GRIND
         );
+        assert_eq!(shaft.block(11, post, local_z).id, "smithing_table");
+        assert_eq!(
+            (-2 * 16 + 11, 2 * 16 + i32::from(local_z)),
+            SHAFT_SMITH
+        );
+        assert_eq!(shaft.block(11, post, local_z + 1).id, "iron_ore");
         let camp = generate_chunk(2, -2);
         let mut campfire = false;
         for lz in 0..16u8 {

@@ -3420,7 +3420,7 @@ impl State {
             "enchanting_table" => self.gui.open_enchanting(hit.block),
             "brewing_stand" => self.gui.open_brewing(hit.block),
             "grindstone" => self.gui.open_grind(hit.block),
-            "smithing_table" => self.gui.open_smith(),
+            "smithing_table" => self.gui.open_smith(hit.block),
             "loom" => self.gui.open_loom(),
             "cartography_table" => self.gui.open_chart(),
             "lectern" => self.gui.open_lectern(hit.block, block.metadata & 1 == 1),
@@ -8676,6 +8676,74 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shaft smith panel mid-spark after an iron upgrade, then quit with a PNG.
+    pub fn arm_smith_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (sx, sz) = rebuild_world::SHAFT_SMITH;
+        let mut sy = 4;
+        for y in 0..80 {
+            if self.world.block_at(sx, y, sz).id == "smithing_table" {
+                sy = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(sx, sz);
+        let focus = glam::Vec3::new(sx as f32 + 0.5, sy as f32 + 0.85, sz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            sx as f32 - 2.8,
+            sy as f32 + 1.35 + body::EYE_HEIGHT,
+            sz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let spark_at = [sx as f32 + 0.5, sy as f32 + 0.95, sz as f32 + 0.5];
+        self.note_shot_at = Some(spark_at);
+        self.note_shot_pitch = 4;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(spark_at, [0.86, 0.58, 0.36]);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(4), spark_at);
+        let _ = self.gui.open_smith([sx, sy, sz]);
+        self.gui.note_smith("iron");
+        self.gui.push_chat("iron");
+        self.found_mine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("stone_pickaxe");
+        let _ = self.hotbar.collect("iron_ore");
+        let _ = self.hotbar.smith_pick();
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(sx + dx * 8, sz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shrine brew panel mid-bubble with a healing potion, then quit with a PNG.
     pub fn arm_brew_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12378,6 +12446,15 @@ impl State {
         self.gui.note_smith(word);
         self.gui.push_chat(word);
         self.hotbar_dirty = true;
+        if matches!(word, "iron" | "diamond" | "heavy") {
+            if let Some(at) = self.gui.smith_at() {
+                let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                let pitch = if word == "diamond" { 11 } else { 4 };
+                self.play_world(crate::audio::Sound::Note(pitch), source);
+                self.drops.puff(source, [0.86, 0.58, 0.36]);
+                self.rebuild_drops();
+            }
+        }
     }
 
     /// False from `events.smith` keeps the iron ore or the heavy core. A

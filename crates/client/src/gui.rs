@@ -705,6 +705,8 @@ pub struct Gui {
     smith_open: bool,
     /// The line under the smith title. Enter replaces it with the upgrade word.
     smith_note: String,
+    /// The smithing table the panel is upgrading at.
+    smith_at: Option<[i32; 3]>,
     loom_open: bool,
     /// The line under the loom title. Enter replaces it with the weave word.
     loom_note: String,
@@ -862,6 +864,7 @@ impl Gui {
                 grind_at: None,
                 smith_open: false,
                 smith_note: String::new(),
+                smith_at: None,
                 loom_open: false,
                 loom_note: String::new(),
                 chart_open: false,
@@ -978,6 +981,7 @@ impl Gui {
                     grind_at: None,
                     smith_open: false,
                     smith_note: String::new(),
+                    smith_at: None,
                     loom_open: false,
                     loom_note: String::new(),
                     chart_open: false,
@@ -1104,6 +1108,7 @@ impl Gui {
             grind_at: None,
             smith_open: false,
             smith_note: String::new(),
+            smith_at: None,
             loom_open: false,
             loom_note: String::new(),
             chart_open: false,
@@ -1577,6 +1582,7 @@ impl Gui {
         self.grind_open = false;
         self.grind_at = None;
         self.smith_open = false;
+        self.smith_at = None;
         self.loom_open = false;
         self.chart_open = false;
         self.lectern_open = false;
@@ -1945,10 +1951,11 @@ impl Gui {
     }
 
     /// A smith panel. Other screens keep it closed.
-    pub fn open_smith(&mut self) -> bool {
+    pub fn open_smith(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
+        self.smith_at = Some(at);
         self.smith_note = "enter spends one iron ore".to_string();
         self.smith_open = true;
         true
@@ -1956,6 +1963,10 @@ impl Gui {
 
     pub fn smith_open(&self) -> bool {
         self.smith_open
+    }
+
+    pub fn smith_at(&self) -> Option<[i32; 3]> {
+        self.smith_at
     }
 
     /// The word the last upgrade left on the panel.
@@ -3150,6 +3161,7 @@ impl Gui {
     fn on_smith(&mut self, code: KeyCode) -> bool {
         if code == KeyCode::KeyF || code == KeyCode::Escape {
             self.smith_open = false;
+            self.smith_at = None;
             return true;
         }
         code == KeyCode::Enter
@@ -8186,6 +8198,7 @@ mod tests {
             grind_at: None,
             smith_open: false,
             smith_note: String::new(),
+            smith_at: None,
             loom_open: false,
             loom_note: String::new(),
             chart_open: false,
@@ -8745,13 +8758,15 @@ mod tests {
         assert!(!gui.grind_open());
         assert_eq!(gui.grind_at(), None);
 
-        assert!(gui.open_smith());
+        assert!(gui.open_smith([9, 1, 9]));
         assert_eq!(gui.screen_id(), "smithing");
+        assert_eq!(gui.smith_at(), Some([9, 1, 9]));
         assert!(!gui.quads(1280.0, 720.0).is_empty());
         assert!(gui.on_press(KeyCode::Enter));
         assert!(gui.smith_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.smith_open());
+        assert_eq!(gui.smith_at(), None);
 
         assert!(gui.open_loom());
         assert_eq!(gui.screen_id(), "loom");
