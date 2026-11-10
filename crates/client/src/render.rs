@@ -6164,6 +6164,61 @@ impl State {
         self.arm_heat_cook_shot(path, "smoker");
     }
 
+    /// Look at the camp smoker beside the fire, then quit with a PNG.
+    pub fn arm_camp_smoker_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (fx, fz) = rebuild_world::CAMP_FIRE;
+        let (sx, sz) = rebuild_world::CAMP_SMOKER;
+        let mut fy = 4;
+        for y in 0..80 {
+            if self.world.block_at(fx, y, fz).id == "campfire"
+                || self.world.block_at(sx, y, sz).id == "smoker"
+            {
+                fy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(
+            (fx as f32 + sx as f32) * 0.5 + 0.5,
+            fy as f32 + 1.0,
+            fz as f32 + 0.5,
+        );
+        let eye = glam::Vec3::new(
+            fx as f32 + 0.5,
+            fy as f32 + 1.35 + body::EYE_HEIGHT,
+            fz as f32 + 4.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(fx + dx * 8, fz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     fn arm_heat_cook_shot(&mut self, path: std::path::PathBuf, heat: &str) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
