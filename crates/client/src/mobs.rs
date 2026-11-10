@@ -1,5 +1,6 @@
 //! A pig, a horse, a zombie, a breeze, a copper golem, a wolf, a cat, a parrot,
-//! a frog, an axolotl, a chicken, a bee, a fox, a goat, and a village trader.
+//! a frog, an axolotl, a chicken, a bee, a fox, a goat, a village trader,
+//! and an iron golem that guards the village green.
 //!
 //! The zombie body is `models/entity/zombie.bbmodel` with `textures/entity/zombie.png`,
 //! playing `idle`, `walk`, and `attack` the same way the chicken and player do.
@@ -4889,6 +4890,168 @@ impl Trader {
     }
 }
 
+/// Village green iron golem pad — east of the trader on the plaza.
+pub const IRON_GOLEM_PAD: (i32, i32) = (10, -21);
+
+const IRON_HUNT: f32 = 10.0;
+const IRON_REACH: f32 = 1.55;
+const IRON_PUNCH_EVERY: u32 = 28;
+
+/// Slow iron guardian on the village green. Punches nearby zombies.
+pub struct IronGolem {
+    origin: [f32; 3],
+    home: [f32; 3],
+    yaw: f32,
+    pose: f32,
+    swing: u32,
+    roam: Roam,
+    loose: u32,
+}
+
+impl IronGolem {
+    pub fn new() -> Self {
+        let (x, z) = IRON_GOLEM_PAD;
+        let home = [x as f32 + 0.5, 4.0, z as f32 + 0.5];
+        Self {
+            origin: home,
+            home,
+            yaw: std::f32::consts::PI * 0.25,
+            pose: 0.0,
+            swing: 0,
+            roam: Roam::around(home),
+            loose: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    /// Place the body for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.roam = Roam::around(at);
+        self.loose = 0;
+        self.swing = 0;
+    }
+
+    /// Wander the green slowly; chase and punch a nearby zombie.
+    /// True when a punch lands on `foe`.
+    pub fn tick(&mut self, count: u32, foe: Option<[f32; 2]>, world: &Cluster) -> bool {
+        let mut punch = false;
+        for n in 0..count {
+            self.pose += 0.03;
+            if self.loose > 0 {
+                self.loose -= 1;
+                settle_land(&mut self.origin, world);
+                continue;
+            }
+            let hunt = foe.filter(|at| {
+                let dx = at[0] - self.origin[0];
+                let dz = at[1] - self.origin[2];
+                dx * dx + dz * dz < IRON_HUNT * IRON_HUNT
+            });
+            if let Some(at) = hunt {
+                if heel_step(&mut self.origin, &mut self.yaw, at, IRON_REACH, world) {
+                    self.swing = self.swing.wrapping_add(1);
+                    if self.swing % IRON_PUNCH_EVERY == 0 {
+                        punch = true;
+                    }
+                }
+            } else if n % 2 == 0 {
+                // Half-speed roam so the guard reads as heavy.
+                roam_step(
+                    &mut self.origin,
+                    &mut self.yaw,
+                    &mut self.roam,
+                    self.home,
+                    world,
+                );
+            } else {
+                settle_land(&mut self.origin, world);
+            }
+        }
+        punch
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let [x, y, z] = self.origin;
+        ([x - 0.45, y, z - 0.45], [x + 0.45, y + 2.35, z + 0.45])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let [x, y, z] = self.origin;
+        let bob = (self.pose * 1.4).sin() * 0.015;
+        let iron = [0.46, 0.48, 0.52];
+        let dark = [0.22, 0.24, 0.28];
+        let vine = [0.16, 0.58, 0.22];
+        let mut out = Vec::new();
+        // Legs.
+        push_box(
+            &mut out,
+            [x - 0.18, y + 0.48 + bob, z],
+            [0.16, 0.48, 0.16],
+            dark,
+        );
+        push_box(
+            &mut out,
+            [x + 0.18, y + 0.48 + bob, z],
+            [0.16, 0.48, 0.16],
+            dark,
+        );
+        // Wide torso.
+        push_box(
+            &mut out,
+            [x, y + 1.25 + bob, z],
+            [0.48, 0.46, 0.26],
+            iron,
+        );
+        // Long arms.
+        push_box(
+            &mut out,
+            [x - 0.62, y + 1.1 + bob, z],
+            [0.14, 0.52, 0.14],
+            iron,
+        );
+        push_box(
+            &mut out,
+            [x + 0.62, y + 1.1 + bob, z],
+            [0.14, 0.52, 0.14],
+            iron,
+        );
+        // Vine trail on the left arm.
+        push_box(
+            &mut out,
+            [x - 0.62, y + 0.72 + bob, z + 0.12],
+            [0.06, 0.28, 0.06],
+            vine,
+        );
+        // Squared head + nose.
+        push_box(
+            &mut out,
+            [x, y + 2.05 + bob, z],
+            [0.32, 0.32, 0.28],
+            iron,
+        );
+        push_box(
+            &mut out,
+            [x, y + 1.95 + bob, z + 0.3],
+            [0.1, 0.1, 0.1],
+            dark,
+        );
+        // Vine flower tuft.
+        push_box(
+            &mut out,
+            [x + 0.14, y + 2.42 + bob, z],
+            [0.1, 0.1, 0.1],
+            vine,
+        );
+        yaw_mesh(&mut out, self.origin, self.yaw);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5079,6 +5242,42 @@ mod tests {
         assert!(matches!(golem.tick(21, &world), Some(Chore::Press(_))));
         golem.summon([6.2, 1.0, 6.4]);
         assert!(matches!(golem.tick(21, &world), Some(Chore::Open(_))));
+    }
+
+    #[test]
+    fn an_iron_golem_wanders_the_green_and_punches_zombies() {
+        let mut golem = IronGolem::new();
+        let (px, pz) = IRON_GOLEM_PAD;
+        assert_eq!(golem.origin()[0], px as f32 + 0.5);
+        assert_eq!(golem.origin()[2], pz as f32 + 0.5);
+        assert!(!golem.vertices().is_empty());
+        let (min, max) = golem.bounds();
+        assert!(max[1] - min[1] > 2.0, "tall iron body");
+        let ground = air_plot();
+        golem.place_at([4.5, 1.0, 4.5]);
+        let home = golem.origin();
+        assert!(!golem.tick(12, None, &ground));
+        // Slow roam still leaves home eventually.
+        let mut moved = false;
+        for _ in 0..40 {
+            let _ = golem.tick(4, None, &ground);
+            if (golem.origin()[0] - home[0]).abs() > 0.05
+                || (golem.origin()[2] - home[2]).abs() > 0.05
+            {
+                moved = true;
+                break;
+            }
+        }
+        assert!(moved, "golem should wander");
+        golem.place_at([4.5, 1.0, 4.5]);
+        let mut punched = false;
+        for _ in 0..80 {
+            if golem.tick(1, Some([4.7, 4.7]), &ground) {
+                punched = true;
+                break;
+            }
+        }
+        assert!(punched, "golem punches a close zombie");
     }
 
     #[test]

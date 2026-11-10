@@ -1641,6 +1641,9 @@ pub struct State {
     trader: crate::mobs::Trader,
     trader_buf: Option<wgpu::Buffer>,
     trader_count: u32,
+    iron_golem: crate::mobs::IronGolem,
+    iron_golem_buf: Option<wgpu::Buffer>,
+    iron_golem_count: u32,
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
     bee_count: u32,
@@ -2783,6 +2786,9 @@ impl State {
             trader: crate::mobs::Trader::new(),
             trader_buf: None,
             trader_count: 0,
+            iron_golem: crate::mobs::IronGolem::new(),
+            iron_golem_buf: None,
+            iron_golem_count: 0,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
             bee_count: 0,
@@ -2864,6 +2870,7 @@ impl State {
         state.rebuild_axolotl();
         state.rebuild_chicken();
         state.rebuild_trader();
+        state.rebuild_iron_golem();
         state.rebuild_bee();
         state.rebuild_fox();
         state.rebuild_goat();
@@ -4943,6 +4950,23 @@ impl State {
             },
         ));
         self.trader_count = vertices.len() as u32;
+    }
+
+    fn rebuild_iron_golem(&mut self) {
+        let vertices = self.iron_golem.vertices();
+        if vertices.is_empty() {
+            self.iron_golem_buf = None;
+            self.iron_golem_count = 0;
+            return;
+        }
+        self.iron_golem_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("iron_golem"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.iron_golem_count = vertices.len() as u32;
     }
 
     fn rebuild_bee(&mut self) {
@@ -9795,6 +9819,7 @@ impl State {
             ("axolotl", self.axolotl.bounds()),
             ("chicken", self.chicken.bounds()),
             ("trader", self.trader.bounds()),
+            ("iron_golem", self.iron_golem.bounds()),
             ("bee", self.bee.bounds()),
             ("fox", self.fox.bounds()),
             ("goat", self.goat.bounds()),
@@ -13520,6 +13545,74 @@ impl State {
                 }
             }
         }
+    }
+
+    /// Village iron golem guarding the green against a zombie, then quit.
+    pub fn arm_iron_golem_shot(&mut self, path: std::path::PathBuf) {
+        self.village_shot_path = Some(path);
+        self.village_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, -2));
+        self.clock.set_time_of_day(0.32);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_village = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("an iron golem");
+        self.gui.push_chat("guards the green");
+
+        let (gx, gz) = crate::mobs::IRON_GOLEM_PAD;
+        let mut gy = 4;
+        for y in (0..80).rev() {
+            let id = self.world.block_at(gx, y, gz).id;
+            if id == "grass" || id == "gravel" || id == "cobblestone" || id == "dirt" {
+                gy = y + 1;
+                break;
+            }
+        }
+        self.iron_golem
+            .place_at([gx as f32 + 0.5, gy as f32, gz as f32 + 0.5]);
+        // Zombie south of the golem so the still shows a face-off.
+        self.zombie
+            .rouse([gx as f32 + 0.5, gy as f32, gz as f32 + 2.6]);
+        self.zombie.hold();
+        let _ = self.iron_golem.tick(60, self.zombie.feet(), &self.world);
+        self.rebuild_iron_golem();
+        self.rebuild_zombie();
+        self.trader = crate::mobs::Trader::new();
+        self.trader.tick(4, [8.5, -20.0], &self.world);
+        self.rebuild_trader();
+        self.set_capture(false);
+
+        let [ox, oy, oz] = self.iron_golem.origin();
+        let [zx, _, zz] = self.zombie.origin();
+        let focus = glam::Vec3::new((ox + zx) * 0.5, oy + 1.35, (oz + zz) * 0.5);
+        let eye = glam::Vec3::new(ox + 4.0, oy + 1.55 + body::EYE_HEIGHT, oz + 1.2);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.village_shot_eye = eye;
+        self.village_shot_yaw = yaw;
+        self.village_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(
+                    rebuild_world::VILLAGE.0 + dx * 8,
+                    rebuild_world::VILLAGE.1 + dz * 8,
+                );
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Village trader trade panel on the green, then quit.
@@ -26029,6 +26122,23 @@ impl State {
                 self.trader.set_stock(self.gui.trade_stock());
             }
             self.rebuild_trader();
+            if self
+                .iron_golem
+                .tick(steps, self.zombie.feet(), &self.world)
+            {
+                self.play_world(crate::audio::Sound::Step, self.iron_golem.origin());
+                let (min, max) = self.zombie.bounds();
+                let origin = [
+                    (min[0] + max[0]) * 0.5,
+                    min[1],
+                    (min[2] + max[2]) * 0.5,
+                ];
+                let dropped =
+                    self.hurt_mob("zombie", 2, origin, |s, n| s.zombie.hurt(n));
+                self.gui.push_chat(if dropped { "down" } else { "punch" });
+                self.rebuild_zombie();
+            }
+            self.rebuild_iron_golem();
             let feet_at = [
                 self.camera.eye.x,
                 self.camera.eye.y - body::EYE_HEIGHT,
@@ -26745,6 +26855,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, trader.slice(..));
                     pass.draw(0..self.trader_count, 0..1);
+                }
+            }
+            if let Some(iron_golem) = &self.iron_golem_buf {
+                if self.iron_golem_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, iron_golem.slice(..));
+                    pass.draw(0..self.iron_golem_count, 0..1);
                 }
             }
             if let Some(bee) = &self.bee_buf {

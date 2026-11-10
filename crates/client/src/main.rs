@@ -284,6 +284,8 @@ struct Args {
     shot_dungeon: Option<std::path::PathBuf>,
     /// Abandoned mineshaft spur under the mine, then quit.
     shot_mineshaft: Option<std::path::PathBuf>,
+    /// Village iron golem guarding the green, then quit.
+    shot_golem: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
     /// Axolotl companion swim, then quit.
@@ -556,6 +558,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_emerald: args.shot_emerald,
         shot_dungeon: args.shot_dungeon,
         shot_mineshaft: args.shot_mineshaft,
+        shot_golem: args.shot_golem,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
         shot_frog: args.shot_frog,
@@ -713,6 +716,7 @@ struct App {
     shot_emerald: Option<std::path::PathBuf>,
     shot_dungeon: Option<std::path::PathBuf>,
     shot_mineshaft: Option<std::path::PathBuf>,
+    shot_golem: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
     shot_frog: Option<std::path::PathBuf>,
@@ -1056,6 +1060,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_mineshaft.take() {
                     state.arm_mineshaft_shot(path);
+                }
+                if let Some(path) = self.shot_golem.take() {
+                    state.arm_iron_golem_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -1432,6 +1439,7 @@ where
         shot_emerald: None,
         shot_dungeon: None,
         shot_mineshaft: None,
+        shot_golem: None,
         shot_keybinds: None,
         shot_axolotl: None,
         shot_frog: None,
@@ -2012,6 +2020,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-mineshaft".to_string())?;
                 parsed.shot_mineshaft = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-golem" | "--shot-iron-golem" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-golem".to_string())?;
+                parsed.shot_golem = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter
