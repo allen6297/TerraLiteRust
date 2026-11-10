@@ -402,6 +402,8 @@ mod tests {
             "assets/terralite/textures/cobblestone.png",
             "assets/terralite/textures/coal_ore.png",
             "assets/terralite/textures/iron_ore.png",
+            "assets/terralite/textures/emerald_ore.png",
+            "assets/terralite/textures/emerald.png",
             "assets/terralite/textures/anvil.png",
             "assets/terralite/textures/enchanting_table.png",
             "assets/terralite/textures/brewing_stand.png",

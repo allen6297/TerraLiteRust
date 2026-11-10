@@ -391,6 +391,9 @@ pub const SHAFT_RAIL: (i32, i32) = (SHAFT_MOUTH.0 + 7, SHAFT_MOUTH.1);
 /// Lodestone northwest of the mouth — link a compass here.
 pub const SHAFT_LODESTONE: (i32, i32) = (SHAFT_MOUTH.0 - 1, SHAFT_MOUTH.1 + 2);
 
+/// Demo emerald ore west of the lodestone — rare hills ore for village trades.
+pub const EMERALD_ORE: (i32, i32) = (SHAFT_LODESTONE.0 - 1, SHAFT_LODESTONE.1);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Ruined nether-portal frame, northwest of the demo pad.
@@ -1149,6 +1152,18 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     let stone_z = (SHAFT_LODESTONE.1 - chunk_z * 16) as u8;
     blocks.retain(|(x, y, z, _)| !(*x == stone_x && *z == stone_z && *y >= floor));
     blocks.push((stone_x, floor, stone_z, Block::new("lodestone", 0)));
+    // West of the lodestone: a short emerald vein for the trader loop.
+    let ore_x = (EMERALD_ORE.0 - chunk_x * 16) as u8;
+    let ore_z = (EMERALD_ORE.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| {
+        !((*x == ore_x && *z == ore_z && *y >= floor.saturating_sub(1))
+            || (*x == ore_x && *z == ore_z.saturating_sub(1) && *y == floor))
+    });
+    blocks.push((ore_x, floor.saturating_sub(1), ore_z, Block::new("emerald_ore", 0)));
+    blocks.push((ore_x, floor, ore_z, Block::new("emerald_ore", 0)));
+    if ore_z > 0 {
+        blocks.push((ore_x, floor, ore_z - 1, Block::new("emerald_ore", 0)));
+    }
     // East of the apron: a short rail spur for a minecart ride.
     let rail_z = (SHAFT_MOUTH.1 - chunk_z * 16) as u8;
     for dx in 4..=7 {
@@ -1312,8 +1327,12 @@ fn beside_mouth(x: i32, z: i32) -> bool {
 }
 
 /// Coal in pairs through the stone. Iron in pairs in the bottom three layers.
+/// Emerald is rare in hills, mid-height stone.
 fn vein(x: i32, y: u16, z: i32) -> Option<&'static str> {
     let h = hash3(x.div_euclid(2), i32::from(y).div_euclid(2), z.div_euclid(2));
+    if biome_at(x, z) == Biome::Hills && (4..=8).contains(&y) && h % 47 == 0 {
+        return Some("emerald_ore");
+    }
     if y <= 3 && h % 31 == 0 {
         return Some("iron_ore");
     }
@@ -1918,6 +1937,23 @@ mod tests {
                 2 * 16 + (SHAFT_LODESTONE.1 - 2 * 16)
             ),
             SHAFT_LODESTONE
+        );
+        assert_eq!(
+            shaft
+                .block(
+                    (EMERALD_ORE.0 - (-2 * 16)) as u8,
+                    post,
+                    (EMERALD_ORE.1 - 2 * 16) as u8
+                )
+                .id,
+            "emerald_ore"
+        );
+        assert_eq!(
+            (
+                -2 * 16 + (EMERALD_ORE.0 - (-2 * 16)),
+                2 * 16 + (EMERALD_ORE.1 - 2 * 16)
+            ),
+            EMERALD_ORE
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;

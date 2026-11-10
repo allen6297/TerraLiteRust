@@ -52,6 +52,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "polished_deepslate" => [0.42, 0.42, 0.48],
         "coal_ore" => [0.22, 0.22, 0.24],
         "iron_ore" => [0.72, 0.58, 0.48],
+        "emerald_ore" => [0.28, 0.55, 0.36],
         "grass" => match metadata {
             1 => [0.14, 0.46, 0.22],
             2 => [0.95, 0.88, 0.36],

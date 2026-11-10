@@ -8237,6 +8237,83 @@ impl State {
         true
     }
 
+    /// Look at the demo emerald ore vein west of the lodestone.
+    pub fn arm_emerald_ore_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (ox, oz) = rebuild_world::EMERALD_ORE;
+        let mut oy = None;
+        for y in 0..80 {
+            if self.world.block_at(ox, y, oz).id == "emerald_ore" {
+                oy = Some(y);
+                break;
+            }
+        }
+        let oy = oy.unwrap_or(4);
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: ox,
+                    y: oy,
+                    z: oz,
+                    block: Block::new("emerald_ore", 0),
+                },
+                CellChange {
+                    x: ox,
+                    y: oy.saturating_sub(1),
+                    z: oz,
+                    block: Block::new("emerald_ore", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(ox, oz);
+        self.found_mine = true;
+
+        let focus = glam::Vec3::new(ox as f32 + 0.5, oy as f32 + 0.55, oz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            ox as f32 + 2.6,
+            oy as f32 + 0.95 + body::EYE_HEIGHT,
+            oz as f32 - 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("emerald ore");
+        self.gui.push_chat("mine for trades");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(ox + dx * 8, oz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Right-click the village trader to open emerald stock trades.
     fn try_trader(&mut self) -> bool {
         let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];

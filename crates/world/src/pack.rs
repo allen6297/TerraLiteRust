@@ -3363,6 +3363,7 @@ fn pick_block(id: &str) -> bool {
             | "cobblestone"
             | "coal_ore"
             | "iron_ore"
+            | "emerald_ore"
             | "deepslate"
             | "deepslate_bricks"
             | "cobbled_deepslate"
@@ -6740,6 +6741,8 @@ mod tests {
             ("cobblestone", "assets/terralite/textures/cobblestone.png"),
             ("coal_ore", "assets/terralite/textures/coal_ore.png"),
             ("iron_ore", "assets/terralite/textures/iron_ore.png"),
+            ("emerald_ore", "assets/terralite/textures/emerald_ore.png"),
+            ("emerald", "assets/terralite/textures/emerald.png"),
             ("deepslate", "assets/terralite/textures/deepslate.png"),
             ("dirt", "assets/terralite/textures/block/dirt.png"),
             ("water", "assets/terralite/textures/water.png"),
@@ -6783,6 +6786,8 @@ mod tests {
             "lantern",
             "coal_ore",
             "iron_ore",
+            "emerald_ore",
+            "emerald",
         ] {
             assert!(pack.block_registry().contains(id), "{id}");
         }
