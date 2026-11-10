@@ -63,6 +63,8 @@ pub enum Sound {
     Wind,
     /// A soft water-edge lap. Louder when standing close to the surface.
     Lap,
+    /// A soft cave drip under deep cover.
+    Drip,
 }
 
 /// Seconds before the same horn can sound again.
@@ -259,6 +261,8 @@ pub struct Audio {
     lap_left: f32,
     /// Seconds until the next rain patter.
     rain_left: f32,
+    /// Seconds until the next cave drip.
+    drip_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -286,6 +290,7 @@ impl Audio {
             wind_left: 0.0,
             lap_left: 0.0,
             rain_left: 0.0,
+            drip_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -449,6 +454,24 @@ impl Audio {
         Some(0.12 + mix * 0.32)
     }
 
+    /// Loudness for the next cave drip, or `None` this frame.
+    ///
+    /// `mix` is cover depth (`0` open → `1` deep under solid).
+    pub fn drip_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.drip_left = 0.0;
+            return None;
+        }
+        self.drip_left -= dt;
+        if self.drip_left > 0.0 {
+            return None;
+        }
+        // Sparse under light cover (~3.4s); busier deep (~1.6s).
+        self.drip_left = 3.4 - mix * 1.8;
+        Some(0.12 + mix * 0.24)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -501,6 +524,7 @@ impl Audio {
             Sound::Crackle => fire_crackle(),
             Sound::Wind => wind_hush(),
             Sound::Lap => water_lap(),
+            Sound::Drip => cave_drip(),
         }
     }
 }
@@ -830,6 +854,24 @@ fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
         let tone = (t * slide * std::f32::consts::TAU).sin();
         let env = (t / 0.015).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((tone * 0.85 + n * 0.08) * volume * env * 32_767.0) as i16);
+    }
+    samples
+}
+
+/// A soft single drip. Shorter and quieter than a shore lap.
+fn cave_drip() -> Vec<i16> {
+    let seconds = 0.09;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 131u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let tone = (t * 1_900.0 * std::f32::consts::TAU).sin() * 0.55
+            + (t * 3_400.0 * std::f32::consts::TAU).sin() * 0.2;
+        let env = (t / 0.006).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.15 + tone) * 0.10 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1182,6 +1224,21 @@ mod tests {
         assert_eq!(audio.played, vec![Sound::Rain]);
         let edge = audio.rain_ready(10.0, 0.2).expect("drizzle still patters");
         assert!(edge < level);
+    }
+
+    #[test]
+    fn cave_drips_under_cover_and_respect_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.drip_ready(0.1, 0.0).is_none());
+        let level = audio
+            .drip_ready(0.1, 1.0)
+            .expect("deep cover drips on the first beat");
+        assert!(level > 0.25 && level <= 0.4);
+        audio.play_heard(Sound::Drip, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Drip]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Drip, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Drip]);
     }
 
     #[test]

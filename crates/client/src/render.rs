@@ -1008,6 +1008,8 @@ pub struct State {
     rain_mix: f32,
     /// True after a rain-onset chat tip this wet spell.
     rain_told: bool,
+    /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
+    drip_mix: f32,
     /// Eased night cricket mix, `0` day through `1` deep night.
     cricket_mix: f32,
     /// Eased dawn bird mix, `0` elsewhere through `1` at sunrise peak.
@@ -1917,6 +1919,7 @@ impl State {
             jump_kick: 0.0,
             rain_mix: 0.0,
             rain_told: false,
+            drip_mix: 0.0,
             cricket_mix: 0.0,
             bird_mix: 0.0,
             crackle_mix: 0.0,
@@ -9662,6 +9665,8 @@ impl State {
         self.bird_mix += (dawn - self.bird_mix) * (dt * 0.8).min(1.0);
         self.rain_mix += (wet - self.rain_mix) * (dt * 1.1).min(1.0);
         self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
+        let cover = cave_drip_mix(&self.world, eye);
+        self.drip_mix += (cover - self.drip_mix) * (dt * 1.4).min(1.0);
         if self.rain_mix < 0.15 {
             self.rain_told = false;
         }
@@ -9694,6 +9699,12 @@ impl State {
                     crate::audio::Hearing::even(level),
                 );
             }
+            if let Some(level) = self.audio.drip_ready(dt, self.drip_mix) {
+                self.audio.play_heard(
+                    crate::audio::Sound::Drip,
+                    crate::audio::Hearing::even(level),
+                );
+            }
             if let Some(level) = self.audio.wind_ready(dt, self.wind_mix) {
                 self.audio.play_heard(
                     crate::audio::Sound::Wind,
@@ -9714,6 +9725,7 @@ impl State {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
             let _ = self.audio.rain_ready(dt, 0.0);
+            let _ = self.audio.drip_ready(dt, 0.0);
             let _ = self.audio.wind_ready(dt, 0.0);
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
@@ -11716,6 +11728,23 @@ fn open_sky(world: &Cluster, eye: [f32; 3]) -> bool {
     true
 }
 
+/// Cave-like cover above the eye. Needs a few solids so thin roofs stay quiet.
+fn cave_drip_mix(world: &Cluster, eye: [f32; 3]) -> f32 {
+    let x = eye[0].floor() as i32;
+    let z = eye[2].floor() as i32;
+    let start = eye[1].floor() as i32 + 1;
+    let mut solids = 0u32;
+    for y in start..(start + 16) {
+        if shape_of(world.block_at(x, y, z)).is_full_cube() {
+            solids += 1;
+        }
+    }
+    if solids < 3 {
+        return 0.0;
+    }
+    ((solids as f32 - 2.0) / 8.0).clamp(0.35, 1.0)
+}
+
 /// Soft proximity to a water surface (air or non-water above). Mix is `0`
 /// outside ~10 blocks, rising to `1` at the shore. Returns the surface center.
 fn nearest_water_edge(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -12252,6 +12281,44 @@ mod tests {
             }],
         );
         assert!(!super::open_sky(&cluster, eye));
+    }
+
+    #[test]
+    fn cave_drips_need_deep_cover_not_a_thin_roof() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        let eye = [0.5, 40.0, 0.5];
+        assert_eq!(super::cave_drip_mix(&cluster, eye), 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[
+                rebuild_world::CellChange {
+                    x: 0,
+                    y: 42,
+                    z: 0,
+                    block: rebuild_world::Block::new("stone", 0),
+                },
+                rebuild_world::CellChange {
+                    x: 0,
+                    y: 43,
+                    z: 0,
+                    block: rebuild_world::Block::new("stone", 0),
+                },
+            ],
+        );
+        assert_eq!(super::cave_drip_mix(&cluster, eye), 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &(44..50)
+                .map(|y| rebuild_world::CellChange {
+                    x: 0,
+                    y,
+                    z: 0,
+                    block: rebuild_world::Block::new("stone", 0),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let deep = super::cave_drip_mix(&cluster, eye);
+        assert!(deep > 0.5, "deep cover drips: {deep}");
     }
 
     #[test]
