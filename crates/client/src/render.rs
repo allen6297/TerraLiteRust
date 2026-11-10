@@ -6646,6 +6646,7 @@ impl State {
         self.playing = false;
         self.menu.close_menu();
         self.gui.open_creative_tab("flow");
+        self.gui.push_chat("flow tab: pipes tanks power");
         let _ = self.window.focus_window();
     }
 

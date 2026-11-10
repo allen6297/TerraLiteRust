@@ -1049,9 +1049,20 @@ fn draw_creative_panel(
             }
             for index in 0..Gui::catalog_tab_count() {
                 let name = Gui::catalog_tab_name(index);
+                let label = {
+                    let mut chars = name.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            let mut out = first.to_uppercase().collect::<String>();
+                            out.push_str(chars.as_str());
+                            out
+                        }
+                        None => name.to_string(),
+                    }
+                };
                 let selected = gui.catalog_tab() == index;
                 let fill = if selected { SELECT } else { BUTTON };
-                let tab = egui::Button::new(RichText::new(name).size(13.0).color(
+                let tab = egui::Button::new(RichText::new(label).size(13.0).color(
                     if selected {
                         Color32::from_rgb(20, 18, 12)
                     } else {
@@ -1078,9 +1089,14 @@ fn draw_creative_panel(
             ui.label(RichText::new("search").color(MUTED).size(13.0));
             let mut q = gui.catalog_query().to_string();
             let edit_w = (panel_w - 72.0).clamp(120.0, 240.0);
+            let hint = if Gui::catalog_tab_name(gui.catalog_tab()) == "flow" {
+                "pipe tank"
+            } else {
+                "oak log"
+            };
             let edit = egui::TextEdit::singleline(&mut q)
                 .desired_width(edit_w)
-                .hint_text("oak log")
+                .hint_text(hint)
                 .text_color(INK);
             if ui.add(edit).changed() {
                 gui.set_catalog_query(&q);
