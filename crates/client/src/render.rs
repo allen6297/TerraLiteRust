@@ -8606,6 +8606,76 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shrine bell panel mid-ring with a mote, then quit with a PNG.
+    pub fn arm_bell_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, bz) = rebuild_world::SHRINE_BELL;
+        let mut by = 4;
+        for y in 0..80 {
+            if self.world.block_at(bx, y, bz).id == "bell" {
+                by = y;
+                break;
+            }
+        }
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: bx,
+                y: by,
+                z: bz,
+                block: Block::new("bell", 1),
+            }],
+        );
+        self.chunk_bake.touch(bx, bz);
+        let focus = glam::Vec3::new(bx as f32 + 0.5, by as f32 + 0.9, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            bx as f32 - 2.4,
+            by as f32 + 1.35 + body::EYE_HEIGHT,
+            bz as f32 + 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote_at = [bx as f32 + 0.5, by as f32 + 1.05, bz as f32 + 0.5];
+        self.note_shot_at = Some(mote_at);
+        self.note_shot_pitch = 12;
+        self.drops.note(mote_at, 12);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(12), mote_at);
+        let _ = self.gui.open_bell([bx, by, bz]);
+        self.gui.note_bell("ring");
+        self.gui.push_chat("ring");
+        self.found_shrine = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Insert a disc into the camp jukebox mid-melody mote, then quit with a PNG.
     pub fn arm_jukebox_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12720,13 +12790,15 @@ impl State {
         word
     }
 
-    /// Ring the open bell, tip it, and swing it back after a short beat.
+    /// Ring the open bell, tip it, mote, and swing it back after a short beat.
     fn ring_bell(&mut self) -> &'static str {
         let Some(at) = self.gui.bell_at() else {
             return "ring";
         };
         let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
         self.play_world(crate::audio::Sound::Note(12), source);
+        self.drops.note([source[0], at[1] as f32 + 1.05, source[2]], 12);
+        self.rebuild_drops();
         let block = self.world.block_at(at[0], at[1], at[2]);
         if block.id != "bell" || !self.pending.is_empty() {
             return "ring";

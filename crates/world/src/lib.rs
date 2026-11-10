@@ -105,7 +105,7 @@ pub use size::WorldSize;
 pub use terrain::{
     Biome, CAMP_CHEST, CAMP_FIRE, CAMP_JUKEBOX, CAMP_NOTE, CAMP_SIGN, CAMP_SMOKER, CLAY_BANK,
     SHAFT_BLAST, SHAFT_CHEST, SHAFT_MOUTH,
-    SHRINE, SHRINE_CHEST, SHRINE_FURNACE, SHRINE_TABLE, TerrainPump,
+    SHRINE, SHRINE_BELL, SHRINE_CHEST, SHRINE_FURNACE, SHRINE_TABLE, TerrainPump,
     biome_at,
     ensure_terrain, generate_chunk, seed_terrain_ring, sky_tint,
 };
