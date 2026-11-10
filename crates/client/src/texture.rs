@@ -48,6 +48,20 @@ pub fn texture_slot(path: &str) -> Option<u32> {
         .map(|(_, slot)| *slot)
 }
 
+/// Atlas column for a soft-rendered model slot icon (`slot-icon/<id>`), or `0`.
+pub fn slot_icon_face(id: &str) -> f32 {
+    if id.is_empty() || id == "air" || id == "empty" {
+        return 0.0;
+    }
+    let key = crate::item_icon::atlas_key(id);
+    atlas()
+        .slots
+        .iter()
+        .find(|(name, _)| name == &key)
+        .map(|(_, slot)| (*slot + 1) as f32)
+        .unwrap_or(0.0)
+}
+
 /// Atlas column for a block or a placeable item, stored as `slot + 1`.
 ///
 /// `0` means the quad stays a flat color. The GUI and the hotbar use this
@@ -277,6 +291,8 @@ fn build_atlas() -> Atlas {
             push_tile(&variant, &mut tiles, &mut slots);
         }
     }
+    // Soft-rendered model icons for the world HUD hotbar (same path as egui).
+    crate::item_icon::append_slot_icons(&mut tiles, &mut slots);
     if tiles.is_empty() {
         return Atlas {
             image: Image {

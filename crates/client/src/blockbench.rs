@@ -679,13 +679,17 @@ fn tint(value: Option<&Value>, name: &str) -> Result<[f32; 3], String> {
             return Ok([rgb[0] / scale, rgb[1] / scale, rgb[2] / scale]);
         }
     }
-    Ok(match name {
+    let lower = name.to_ascii_lowercase();
+    Ok(match lower.as_str() {
         "body" | "head" => [0.95, 0.95, 0.96],
-        "arm_l" | "arm_r" => [0.86, 0.72, 0.58],
+        // Zombie Blockbench parts (capitalised names + palette index colors).
+        "larm" | "rarm" | "arm_l" | "arm_r" => [0.45, 0.72, 0.32],
+        "lleg" | "rleg" | "leg_l" | "leg_r" | "leg" => [0.35, 0.22, 0.55],
         "beak" => [0.95, 0.72, 0.18],
         "comb" | "wattle" => [0.86, 0.16, 0.18],
-        "leg_l" | "leg_r" | "leg" => [0.93, 0.55, 0.28],
         "egg" => [0.98, 0.90, 0.55],
+        _ if lower.contains("head") => [0.40, 0.70, 0.30],
+        _ if lower.contains("body") => [0.22, 0.28, 0.55],
         _ => [0.80, 0.80, 0.80],
     })
 }

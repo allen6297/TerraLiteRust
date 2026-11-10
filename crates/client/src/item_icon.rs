@@ -26,6 +26,98 @@ pub fn render(id: &str, size: usize) -> ColorImage {
     flat_fallback(id, size)
 }
 
+/// Atlas key for a HUD / egui-shared slot icon tile.
+pub fn atlas_key(id: &str) -> String {
+    format!("slot-icon/{id}")
+}
+
+/// Bake 16×16 model icons into the block atlas so the world HUD hotbar can
+/// sample the same `display.gui` rasters egui uses.
+pub fn append_slot_icons(tiles: &mut Vec<Image>, slots: &mut Vec<(String, u32)>) {
+    let pack = Pack::builtin();
+    let mut ids: Vec<String> = pack
+        .blocks()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    for id in pack.model_item_ids() {
+        ids.push(id);
+    }
+    // Tools / food / armor icons also show on the HUD and in creative.
+    for id in pack.tool_ids() {
+        ids.push(id);
+    }
+    for id in pack.food_ids() {
+        ids.push(id);
+    }
+    for id in pack.armor_ids() {
+        ids.push(id);
+    }
+    ids.sort();
+    ids.dedup();
+    for id in ids {
+        let key = atlas_key(&id);
+        if slots.iter().any(|(existing, _)| existing == &key) {
+            continue;
+        }
+        let rendered = render(&id, 32);
+        let Some(tile) = downscale_to_tile(&rendered) else {
+            continue;
+        };
+        let slot = tiles.len() as u32;
+        slots.push((key, slot));
+        tiles.push(tile);
+    }
+}
+
+fn downscale_to_tile(image: &ColorImage) -> Option<Image> {
+    let w = image.width();
+    let h = image.height();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    const TILE: u32 = 16;
+    let mut rgba = vec![0u8; (TILE * TILE * 4) as usize];
+    for ty in 0..TILE as usize {
+        for tx in 0..TILE as usize {
+            let x0 = tx * w / TILE as usize;
+            let x1 = ((tx + 1) * w / TILE as usize).max(x0 + 1);
+            let y0 = ty * h / TILE as usize;
+            let y1 = ((ty + 1) * h / TILE as usize).max(y0 + 1);
+            let mut r = 0u32;
+            let mut g = 0u32;
+            let mut b = 0u32;
+            let mut a = 0u32;
+            let mut n = 0u32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let c = image.pixels[y * w + x];
+                    if c.a() < 8 {
+                        continue;
+                    }
+                    r += c.r() as u32;
+                    g += c.g() as u32;
+                    b += c.b() as u32;
+                    a += c.a() as u32;
+                    n += 1;
+                }
+            }
+            let i = (ty * TILE as usize + tx) * 4;
+            if n == 0 {
+                continue;
+            }
+            rgba[i] = (r / n) as u8;
+            rgba[i + 1] = (g / n) as u8;
+            rgba[i + 2] = (b / n) as u8;
+            rgba[i + 3] = (a / n) as u8;
+        }
+    }
+    Some(Image {
+        width: TILE,
+        height: TILE,
+        rgba,
+    })
+}
+
 fn raster_shape(
     id: &str,
     shape: Shape<'_>,

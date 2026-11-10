@@ -1379,6 +1379,15 @@ impl Quad {
         self
     }
 
+    /// Bind an already-resolved atlas column (`slot + 1`).
+    pub fn with_tex(mut self, tex: f32, tiles_x: f32, tiles_y: f32) -> Self {
+        if tex > 0.0 {
+            self.tex = tex;
+            self.span = [tiles_x.max(1.0), tiles_y.max(1.0)];
+        }
+        self
+    }
+
     pub fn tag(mut self, hit: u16) -> Self {
         self.hit = hit;
         self
@@ -1429,10 +1438,8 @@ fn push_flat_icon(
     );
 }
 
-/// Slot icon: Blockbench model when present, otherwise a flat atlas face.
-///
-/// Custom isometric scanlines (ab667ef) drew house/pentagon silhouettes; egui
-/// menus own block presentation going forward, so HUD slots stay flat.
+/// Slot icon: soft-rendered model tile when present, else Blockbench boxes,
+/// else a flat atlas face.
 pub fn push_slot_icon(
     quads: &mut Vec<Quad>,
     width: f32,
@@ -1443,6 +1450,17 @@ pub fn push_slot_icon(
     id: &str,
 ) {
     if id.is_empty() || id == "air" || id == "empty" {
+        return;
+    }
+    // Prefer the same display.gui raster egui uses (baked into the atlas).
+    let model_tex = crate::texture::slot_icon_face(id);
+    if model_tex > 0.0 {
+        // Tint stays near-white for the atlas sample, but not exact COUNT white
+        // so digit overlays (tex 0 + COUNT) stay distinct in tests/hit logic.
+        quads.push(
+            pixel_quad(width, height, x, y, x + size, y + size, [0.98, 0.98, 0.98])
+                .with_tex(model_tex, 1.0, 1.0),
+        );
         return;
     }
     if push_model_icon(quads, width, height, x, y, size, id) {
@@ -1750,11 +1768,16 @@ mod tests {
         let quads = bar_quads(800.0, 600.0, &bar);
         let highlights: Vec<_> = quads.iter().filter(|quad| quad.color == SELECTED).collect();
         assert_eq!(highlights.len(), 1);
-        let cobble = crate::texture::block_face("cobblestone");
+        let cobble = crate::texture::slot_icon_face("cobblestone");
+        let cobble = if cobble > 0.0 {
+            cobble
+        } else {
+            crate::texture::block_face("cobblestone")
+        };
         let fill = quads
             .iter()
             .find(|quad| quad.tex == cobble && cobble > 0.0)
-            .expect("cobblestone isometric fill");
+            .expect("cobblestone slot icon");
         let highlight = highlights[0];
         assert!(highlight.min[0] < fill.min[0] && highlight.min[1] < fill.min[1]);
         assert!(highlight.max[0] > fill.max[0] && highlight.max[1] > fill.max[1]);
@@ -1792,6 +1815,8 @@ mod tests {
             .iter()
             .filter(|quad| quad.color == COUNT_SHADOW)
             .count();
+        // Digit glyphs are small white quads; exact count can shift slightly with
+        // icon padding, but both digits must be present.
         assert_eq!(ink.len(), 21, "64 is two white digits");
         assert_eq!(shadow, 21);
         let outline = quads
@@ -1817,19 +1842,17 @@ mod tests {
     }
 
     #[test]
-    fn a_coin_icon_uses_the_bbmodel_boxes() {
+    fn a_coin_icon_uses_the_model_slot_tile() {
         let mut bar = Hotbar::new();
         assert!(bar.collect("coin"));
         assert_eq!(bar.slot(1), Some("coin"));
         let quads = bar_quads(800.0, 600.0, &bar);
-        let gold = palette::color("coin", 0);
-        let coin: Vec<_> = quads
-            .iter()
-            .filter(|quad| quad.color == gold && quad.tex == 0.0)
-            .collect();
-        assert_eq!(coin.len(), 1);
-        let width = coin[0].max[0] - coin[0].min[0];
-        assert!(width < 0.07, "the disc is not a full slot, width {width}");
+        let coin_tex = crate::texture::slot_icon_face("coin");
+        assert!(coin_tex > 0.0, "coin should bake a slot-icon atlas tile");
+        assert!(
+            quads.iter().any(|quad| quad.tex == coin_tex),
+            "coin draws via the model slot tile"
+        );
     }
 
     #[test]
@@ -1901,10 +1924,15 @@ mod tests {
         assert!(bar.shrink(stack, "bucket"));
         assert_eq!(bar.count(stack), 1);
         let quads = bar_quads(800.0, 600.0, &bar);
-        let dirt = crate::texture::block_face("dirt");
+        let dirt = crate::texture::slot_icon_face("dirt");
+        let dirt = if dirt > 0.0 {
+            dirt
+        } else {
+            crate::texture::block_face("dirt")
+        };
         assert!(
             dirt > 0.0 && quads.iter().any(|quad| quad.tex == dirt),
-            "dirt draws as an isometric atlas icon"
+            "dirt draws as a model slot icon"
         );
         assert!(
             quads
