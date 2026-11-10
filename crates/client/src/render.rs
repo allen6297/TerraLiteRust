@@ -1016,6 +1016,7 @@ pub struct State {
     found_camp: bool,
     found_shrine: bool,
     found_mine: bool,
+    found_clay: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -1967,6 +1968,7 @@ impl State {
             found_camp: false,
             found_shrine: false,
             found_mine: false,
+            found_clay: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3513,6 +3515,10 @@ impl State {
         if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
             self.found_mine = true;
             self.gui.push_chat("a mine");
+        }
+        if !self.found_clay && near(rebuild_world::CLAY_BANK.0, rebuild_world::CLAY_BANK.1) {
+            self.found_clay = true;
+            self.gui.push_chat("clay under the water");
         }
     }
 
@@ -6331,6 +6337,54 @@ impl State {
     /// Hold cooked food over a smoker after a one-step cook, then quit with a PNG.
     pub fn arm_smoker_cook_shot(&mut self, path: std::path::PathBuf) {
         self.arm_heat_cook_shot(path, "smoker");
+    }
+
+    /// Look at the marsh clay bank under water, then quit with a PNG.
+    pub fn arm_clay_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CLAY_BANK;
+        let mut cy = 2;
+        for y in 0..16 {
+            if self.world.block_at(cx, y, cz).id == "clay" {
+                cy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.6, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            cy as f32 + 1.6 + body::EYE_HEIGHT,
+            cz as f32 - 3.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Look at the shrine furnace beside clay, then quit with a PNG.

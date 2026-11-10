@@ -153,6 +153,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_camp(&mut blocks, chunk_x, chunk_z);
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
+    stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
 }
 
@@ -251,6 +252,14 @@ pub const SHRINE_FURNACE: (i32, i32) = (SHRINE.0 + 2, SHRINE.1);
 
 const SHRINE_CHUNK: (i32, i32) = (2, 2);
 
+/// Marsh clay bank south of the demo pad, under the shallow water.
+///
+/// The chunk is `(0, 2)`. Walk south from the stairs into the marsh. Break
+/// clay under the water, then bake it at the shrine furnace.
+pub const CLAY_BANK: (i32, i32) = (2, 41);
+
+const CLAY_CHUNK: (i32, i32) = (0, 2);
+
 /// A ruined stone-brick square with a chest. Only the shrine chunk gets one.
 fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
     if (chunk_x, chunk_z) != SHRINE_CHUNK {
@@ -332,6 +341,33 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((furnace_x, floor, furnace_z, Block::new("furnace", 0)));
     // A clay block beside it so the bake loop is findable without creative give.
     blocks.push((furnace_x, floor, furnace_z + 1, Block::new("clay", 0)));
+}
+
+/// Clay under marsh water south of the pad. Only the clay chunk gets it.
+fn stamp_clay_bank(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != CLAY_CHUNK {
+        return;
+    }
+    let (cx, cz) = CLAY_BANK;
+    let clay = Block::new("clay", 0);
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let x = cx + dx;
+            let z = cz + dz;
+            if biome_at(x, z) != Biome::Marsh {
+                continue;
+            }
+            let height = column_height(x, z, Biome::Marsh);
+            if height == 0 {
+                continue;
+            }
+            let lx = (x - chunk_x * 16) as u8;
+            let lz = (z - chunk_z * 16) as u8;
+            let floor = height - 1;
+            blocks.retain(|(bx, by, bz, _)| !(*bx == lx && *by == floor && *bz == lz));
+            blocks.push((lx, floor, lz, clay));
+        }
+    }
 }
 
 /// A timbered hole. Only the shaft chunk gets one.
@@ -857,6 +893,28 @@ mod tests {
         assert_eq!(
             cluster.block_at(-22, i32::from(post - 1), SHAFT_MOUTH.1).id,
             "gravel"
+        );
+    }
+
+    #[test]
+    fn a_clay_bank_sits_in_the_marsh_south_of_the_pad() {
+        let chunk = generate_chunk(CLAY_CHUNK.0, CLAY_CHUNK.1);
+        let (cx, cz) = CLAY_BANK;
+        let lx = (cx - CLAY_CHUNK.0 * 16) as u8;
+        let lz = (cz - CLAY_CHUNK.1 * 16) as u8;
+        let height = column_height(cx, cz, Biome::Marsh);
+        assert!(height > 0);
+        assert_eq!(chunk.block(lx, height - 1, lz).id, "clay");
+        assert_eq!(chunk.block(lx, height, lz).id, "water");
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster.block_at(cx, i32::from(height - 1), cz).id,
+            "clay"
+        );
+        assert_ne!(
+            generate_chunk(2, 2).block(lx, height - 1, lz).id,
+            "clay"
         );
     }
 
