@@ -112,6 +112,8 @@ struct Args {
     shot_held_light: Option<std::path::PathBuf>,
     /// Midnight outdoor zombie horde, then quit.
     shot_night_spawn: Option<std::path::PathBuf>,
+    /// Night bed sleep → morning, then quit.
+    shot_bed_sleep: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -182,6 +184,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_settings: args.shot_settings,
         shot_held_light: args.shot_held_light,
         shot_night_spawn: args.shot_night_spawn,
+        shot_bed_sleep: args.shot_bed_sleep,
         state: None,
         last_frame: Instant::now(),
     };
@@ -201,6 +204,7 @@ struct App {
     shot_settings: Option<std::path::PathBuf>,
     shot_held_light: Option<std::path::PathBuf>,
     shot_night_spawn: Option<std::path::PathBuf>,
+    shot_bed_sleep: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -249,6 +253,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_night_spawn.take() {
                     state.arm_night_spawn_shot(path);
+                }
+                if let Some(path) = self.shot_bed_sleep.take() {
+                    state.arm_bed_sleep_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -392,6 +399,7 @@ where
         shot_settings: None,
         shot_held_light: None,
         shot_night_spawn: None,
+        shot_bed_sleep: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -427,6 +435,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-night-spawn".to_string())?;
                 parsed.shot_night_spawn = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-bed-sleep" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-bed-sleep".to_string())?;
+                parsed.shot_bed_sleep = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

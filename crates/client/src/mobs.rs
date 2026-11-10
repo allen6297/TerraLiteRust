@@ -711,6 +711,8 @@ const NIGHT_CAP: usize = 6;
 const NIGHT_COOLDOWN: f32 = 2.4;
 /// Closest spawn ring, in blocks from the player.
 const NIGHT_SPAWN_MIN: f32 = 8.0;
+/// Hostile bodies this close block bed sleep (same radius as the night spawn min ring).
+pub const SLEEP_MONSTER_RANGE: f32 = NIGHT_SPAWN_MIN;
 /// Farthest spawn ring, in blocks from the player.
 const NIGHT_SPAWN_MAX: f32 = 22.0;
 /// Despawn when farther than this from the player.
@@ -786,6 +788,28 @@ impl NightHorde {
         let mut zombie = Zombie::new();
         zombie.rouse_wild(at);
         self.pack.push(zombie);
+    }
+
+    /// True when any living wild body sits within `range` blocks of `at`.
+    pub fn any_living_within(&self, at: [f32; 3], range: f32) -> bool {
+        let r2 = range * range;
+        self.pack.iter().any(|zombie| {
+            if !zombie.living() {
+                return false;
+            }
+            let [x, y, z] = zombie.origin();
+            let dx = x - at[0];
+            let dy = y - at[1];
+            let dz = z - at[2];
+            dx * dx + dy * dy + dz * dz <= r2
+        })
+    }
+
+    /// Drop every wild body. Used after sleeping through the night.
+    pub fn clear_wild(&mut self) -> bool {
+        let before = self.pack.len();
+        self.pack.clear();
+        before > 0
     }
 
     /// Decay knockdowns, cull bright/day/far bodies, try one spawn, run chase AI.
@@ -4063,6 +4087,19 @@ mod tests {
         );
         assert!(dirty);
         assert!(!horde.vertices().is_empty());
+    }
+
+    #[test]
+    fn sleep_blocks_when_a_wild_zombie_is_inside_the_spawn_min_ring() {
+        let mut horde = NightHorde::new();
+        horde.force_at([10.0, 1.0, 10.0]);
+        let feet = [8.0, 1.0, 10.0];
+        assert!(horde.any_living_within(feet, SLEEP_MONSTER_RANGE));
+        assert!(!horde.any_living_within(feet, 1.5));
+        assert!(horde.clear_wild());
+        assert_eq!(horde.len(), 0);
+        assert!(!horde.any_living_within(feet, SLEEP_MONSTER_RANGE));
+        assert!(!horde.clear_wild());
     }
 
     #[test]

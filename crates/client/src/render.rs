@@ -833,6 +833,12 @@ pub struct State {
     night_spawn_shot_eye: glam::Vec3,
     night_spawn_shot_yaw: f32,
     night_spawn_shot_pitch: f32,
+    /// One-shot bed sleep → morning, then quit.
+    bed_sleep_shot_path: Option<std::path::PathBuf>,
+    bed_sleep_shot_frames: u32,
+    bed_sleep_shot_eye: glam::Vec3,
+    bed_sleep_shot_yaw: f32,
+    bed_sleep_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -907,8 +913,10 @@ pub struct State {
     horn_due: bool,
     /// Seconds left before a golem's copper chest shuts.
     golem_shut: f32,
-    /// A charged respawn anchor. Empty respawns by the stairs.
+    /// Bed or charged respawn anchor. Empty respawns by the stairs.
     spawn_at: Option<[i32; 3]>,
+    /// Full-screen sleep veil. `1` just woke, fading to `0`.
+    sleep_fade: f32,
     /// A struck rod, seconds left on the flash, and whether the neighbor already pulsed.
     rod_strike: Option<([i32; 3], f32, bool)>,
     /// A hit target, seconds left on the flash, and whether the neighbor already pulsed.
@@ -1658,6 +1666,11 @@ impl State {
             night_spawn_shot_eye: glam::Vec3::ZERO,
             night_spawn_shot_yaw: 0.0,
             night_spawn_shot_pitch: 0.0,
+            bed_sleep_shot_path: None,
+            bed_sleep_shot_frames: 0,
+            bed_sleep_shot_eye: glam::Vec3::ZERO,
+            bed_sleep_shot_yaw: 0.0,
+            bed_sleep_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1699,6 +1712,7 @@ impl State {
             horn_due: false,
             golem_shut: 0.0,
             spawn_at: None,
+            sleep_fade: 0.0,
             rod_strike: None,
             target_hit: None,
             frame,
@@ -3038,12 +3052,53 @@ impl State {
             self.gui.push_chat("awake");
             return;
         }
-        if self.clock.sleep() {
-            self.note_dawn();
-            self.gui.push_chat("slept until morning");
-        } else {
-            self.gui.push_chat("too bright to sleep");
+        let feet = [
+            self.camera.eye.x,
+            self.camera.eye.y - body::EYE_HEIGHT,
+            self.camera.eye.z,
+        ];
+        let night = !(0.25..0.75).contains(&self.clock.time_of_day());
+        if night && self.monsters_near_sleep(feet) {
+            self.gui.push_chat("monsters nearby");
+            return;
         }
+        // Day click still claims the bed; night needs a clear ring first.
+        self.spawn_at = Some(at);
+        if !self.clock.sleep() {
+            self.gui.push_chat("respawn point set");
+            self.gui.push_chat("only sleep at night");
+            return;
+        }
+        if self.night.clear_wild() {
+            self.rebuild_zombie();
+        }
+        self.sleep_fade = 1.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.note_dawn();
+        self.gui.push_chat("slept until morning");
+    }
+
+    /// True when a living hostile sits inside the night-spawn min ring.
+    fn monsters_near_sleep(&self, at: [f32; 3]) -> bool {
+        let range = crate::mobs::SLEEP_MONSTER_RANGE;
+        let r2 = range * range;
+        let near = |origin: [f32; 3]| {
+            let dx = origin[0] - at[0];
+            let dy = origin[1] - at[1];
+            let dz = origin[2] - at[2];
+            dx * dx + dy * dy + dz * dz <= r2
+        };
+        if self.zombie.living() && near(self.zombie.origin()) {
+            return true;
+        }
+        if self.night.any_living_within(at, range) {
+            return true;
+        }
+        self.guests
+            .iter()
+            .any(|guest| guest.hostile() && guest.alive() && near(guest.origin()))
     }
 
     /// `events.dawn` sees the day of the four-day year. The first block it
@@ -5002,6 +5057,84 @@ impl State {
         self.pose_dirty = true;
     }
 
+    /// Night bed beside the stairs, sleep to dawn, then quit with a PNG.
+    pub fn arm_bed_sleep_shot(&mut self, path: std::path::PathBuf) {
+        self.bed_sleep_shot_path = Some(path);
+        self.bed_sleep_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+
+        // Keep hostiles out of the sleep ring so the proof reaches morning.
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+
+        let bed = [9, 1, 11];
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: bed[0],
+                y: bed[1],
+                z: bed[2],
+                block: Block::new("bed", 0),
+            }],
+        );
+        self.chunk_bake.touch(bed[0], bed[2]);
+
+        // Start after dusk so sleep advances to morning.
+        self.clock.set_time_of_day(0.85);
+        self.sleep_in_bed(bed);
+        // Mods may re-seed guests on ticks; keep the ring clear for the shot.
+        self.guests.clear();
+        self.rebuild_guests();
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(
+            bed[0] as f32 + 0.5,
+            bed[1] as f32 + 0.7,
+            bed[2] as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, target);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.bed_sleep_shot_eye = eye;
+        self.bed_sleep_shot_yaw = yaw;
+        self.bed_sleep_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        // Let the wake veil settle so the morning bed reads clearly.
+        self.sleep_fade = 0.35;
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_bed_sleep_shot_camera(&mut self) {
+        if self.bed_sleep_shot_path.is_none() {
+            return;
+        }
+        if !self.guests.is_empty() {
+            self.guests.clear();
+            self.rebuild_guests();
+        }
+        self.camera.restore(
+            self.bed_sleep_shot_eye,
+            self.bed_sleep_shot_yaw,
+            self.bed_sleep_shot_pitch,
+        );
+        self.posed_eye = self.bed_sleep_shot_eye;
+        self.posed_yaw = self.bed_sleep_shot_yaw;
+        self.posed_pitch = self.bed_sleep_shot_pitch;
+        self.pose_dirty = true;
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -5163,6 +5296,37 @@ impl State {
                 eprintln!("night-spawn shot failed: {err}");
                 if self.night_spawn_shot_frames > 250 {
                     self.night_spawn_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    fn poll_bed_sleep_shot(&mut self) {
+        let Some(path) = self.bed_sleep_shot_path.clone() else {
+            return;
+        };
+        self.pin_bed_sleep_shot_camera();
+        self.bed_sleep_shot_frames = self.bed_sleep_shot_frames.saturating_add(1);
+        if self.bed_sleep_shot_frames < 120 || !self.chunk_bake.is_idle() {
+            if self.bed_sleep_shot_frames > 600 {
+                eprintln!("bed-sleep shot timed out");
+                self.bed_sleep_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("bed-sleep shot wrote {}", path.display());
+                self.bed_sleep_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("bed-sleep shot failed: {err}");
+                if self.bed_sleep_shot_frames > 250 {
+                    self.bed_sleep_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -7529,12 +7693,11 @@ impl State {
 
     fn respawn(&mut self) {
         let saved = self.spawn_at;
-        let charged = saved.is_some_and(|at| {
+        let home = saved.filter(|&at| {
             let block = self.world.block_at(at[0], at[1], at[2]);
-            block.id == "respawn_anchor" && block.metadata > 0
+            block.id == "bed" || (block.id == "respawn_anchor" && block.metadata > 0)
         });
-        let anchor = saved.filter(|_| charged);
-        let planned = if let Some(at) = anchor {
+        let planned = if let Some(at) = home {
             Camera::anchor_eye(at)
         } else {
             self.spawn_at = None;
@@ -7638,6 +7801,7 @@ impl State {
         self.mace_wait = (self.mace_wait - dt).max(0.0);
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt * 2.2).max(0.0);
+        self.sleep_fade = (self.sleep_fade - dt * 1.4).max(0.0);
         self.sip = (self.sip - dt * 1.8).max(0.0);
         self.sprint_kick = (self.sprint_kick - dt * 3.5).max(0.0);
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
@@ -8641,6 +8805,9 @@ impl State {
         if self.crouch > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::crouch_quads(gui_w, gui_h, self.crouch));
         }
+        if self.sleep_fade > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::sleep_quads(gui_w, gui_h, self.sleep_fade));
+        }
         if !self.menu.is_open() && !self.dead && !self.screen_open() {
             let looked = self.inspect_id();
             let held = self.hotbar.slot(self.hotbar.selected());
@@ -8819,6 +8986,7 @@ impl State {
         self.poll_settings_shot();
         self.poll_held_light_shot();
         self.poll_night_spawn_shot();
+        self.poll_bed_sleep_shot();
     }
 }
 

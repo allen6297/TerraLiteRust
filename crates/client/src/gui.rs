@@ -5367,6 +5367,26 @@ pub fn hurt_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     ]
 }
 
+/// Dark edge veil after sleeping through the night. `amount` is `1` just woke through `0`.
+///
+/// Opaque HUD quads have no alpha, so the wake cue closes in from the edges
+/// (full cover at `1`, clear at `0`) instead of tinting the whole frame.
+pub fn sleep_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.0 || width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let band_y = (height * 0.5 * amount).max(1.0);
+    let band_x = (width * 0.5 * amount).max(1.0);
+    let shade = [0.03, 0.04, 0.08];
+    vec![
+        pixel_quad(width, height, 0.0, height - band_y, width, height, shade),
+        pixel_quad(width, height, 0.0, 0.0, width, band_y, shade),
+        pixel_quad(width, height, 0.0, 0.0, band_x, height, shade),
+        pixel_quad(width, height, width - band_x, 0.0, width, height, shade),
+    ]
+}
+
 /// Left inset for the HUD status cluster (hearts / hunger / armor).
 const HUD_STATUS_LEFT: f32 = 16.0;
 /// Gap between the hotbar chrome and the stacked status plates.
@@ -7865,6 +7885,8 @@ mod tests {
     fn a_hit_draws_a_red_edge_and_death_offers_respawn() {
         assert!(hurt_quads(200.0, 100.0, 0.0).is_empty());
         assert_eq!(hurt_quads(200.0, 100.0, 1.0).len(), 4);
+        assert!(sleep_quads(200.0, 100.0, 0.0).is_empty());
+        assert_eq!(sleep_quads(200.0, 100.0, 1.0).len(), 4);
         assert!(bite_quads(200.0, 100.0, 0.0, false).is_empty());
         assert!(crouch_quads(200.0, 100.0, 0.0).is_empty());
         let low = crouch_quads(200.0, 100.0, 1.0);
