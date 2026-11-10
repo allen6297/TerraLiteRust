@@ -160,6 +160,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_nether_fortress(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
+    stamp_ocean_monument(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
@@ -481,6 +482,20 @@ pub const SHIPWRECK: (i32, i32) = (-24, 8);
 pub const SHIPWRECK_CHEST: (i32, i32) = (SHIPWRECK.0 + 1, SHIPWRECK.1);
 
 const WRECK_CHUNK: (i32, i32) = (-2, 0);
+
+/// Small prismarine ocean-monument remnant south of the shipwreck shallows.
+///
+/// The chunk is `(-2, 1)`. Swim south from the wreck into deeper water. Hollow
+/// prismarine shell with a gold nook, sponge pads, and a loot chest.
+pub const OCEAN_MONUMENT: (i32, i32) = (-24, 22);
+
+/// Loot chest in the monument hall center.
+pub const OCEAN_MONUMENT_CHEST: (i32, i32) = (OCEAN_MONUMENT.0, OCEAN_MONUMENT.1);
+
+/// Northwest gold-block corner of the monument treasure nook.
+pub const OCEAN_MONUMENT_GOLD: (i32, i32) = (OCEAN_MONUMENT.0 - 2, OCEAN_MONUMENT.1 - 1);
+
+const MONUMENT_CHUNK: (i32, i32) = (-2, 1);
 
 /// Ruined village plaza north of the demo pad.
 ///
@@ -832,6 +847,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | CLAY_CHUNK
             | TEMPLE_CHUNK
             | WRECK_CHUNK
+            | MONUMENT_CHUNK
             | VILLAGE_CHUNK
             | NETHER_CHUNK
             | (0, 0)
@@ -940,6 +956,7 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | PORTAL_CHUNK
             | NETHER_CHUNK
             | WRECK_CHUNK
+            | MONUMENT_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1047,6 +1064,7 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             | PORTAL_CHUNK
             | NETHER_CHUNK
             | TEMPLE_CHUNK
+            | MONUMENT_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1140,6 +1158,124 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
     blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
 }
 
+/// Small underwater prismarine remnant with a gold nook + sponge + chest.
+/// Guaranteed in [`MONUMENT_CHUNK`] south of the shipwreck shallows.
+fn stamp_ocean_monument(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    let guaranteed = (chunk_x, chunk_z) == MONUMENT_CHUNK;
+    let reserved = matches!(
+        (chunk_x, chunk_z),
+        CAMP_CHUNK
+            | SHAFT_CHUNK
+            | SHRINE_CHUNK
+            | CLAY_CHUNK
+            | PORTAL_CHUNK
+            | NETHER_CHUNK
+            | TEMPLE_CHUNK
+            | WRECK_CHUNK
+            | VILLAGE_CHUNK
+            | (0, 0)
+    );
+    if !guaranteed {
+        if reserved {
+            return;
+        }
+        let cx = chunk_x * 16 + 8;
+        let cz = chunk_z * 16 + 8;
+        let wet = biome_at(cx, cz) == Biome::Marsh
+            || biome_at(cx, cz + 8) == Biome::Marsh
+            || biome_at(cx + 8, cz) == Biome::Marsh;
+        if !wet || hash2(chunk_x.wrapping_mul(67), chunk_z.wrapping_mul(31)) % 109 != 0 {
+            return;
+        }
+    }
+    let (cx, cz) = if guaranteed {
+        OCEAN_MONUMENT
+    } else {
+        (chunk_x * 16 + 8, chunk_z * 16 + 8)
+    };
+    let surface = column_height(cx, cz, biome_at(cx, cz)).max(5);
+    let floor = surface.saturating_sub(2).max(2);
+    let x0 = ((cx - 3) - chunk_x * 16) as u8;
+    let x1 = ((cx + 3) - chunk_x * 16) as u8;
+    let z0 = ((cz - 3) - chunk_z * 16) as u8;
+    let z1 = ((cz + 3) - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| {
+        !(*x >= x0 && *x <= x1 && *z >= z0 && *z <= z1 && *y + 1 >= floor.saturating_sub(1))
+    });
+    let sand = Block::new("sand", 0);
+    let water = Block::new("water", 0);
+    let prism = Block::new("prismarine", 0);
+    let bricks = Block::new("prismarine_bricks", 0);
+    let dark = Block::new("dark_prismarine", 0);
+    let lantern = Block::new("sea_lantern", 0);
+    let gold = Block::new("gold_block", 0);
+    let sponge = Block::new("sponge", 0);
+    // Wet basin: sand underfloor, water column, prismarine shell.
+    for dz in -3i32..=3 {
+        for dx in -3i32..=3 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.push((lx, floor - 1, lz, sand));
+            let edge = dx.abs() == 3 || dz.abs() == 3;
+            let corner = dx.abs() == 3 && dz.abs() == 3;
+            if edge {
+                let wall = if corner { dark } else { bricks };
+                blocks.push((lx, floor, lz, wall));
+                // Broken upper walls — skip a few for ruin silhouette.
+                if !(dx == 0 || dz == 0 || (dx == 2 && dz == 3)) {
+                    blocks.push((lx, floor + 1, lz, wall));
+                }
+                if corner || dx.abs() + dz.abs() == 4 {
+                    blocks.push((lx, floor + 2, lz, dark));
+                }
+            } else {
+                blocks.push((lx, floor, lz, prism));
+            }
+            // Water fills the hall and rises to the surface.
+            for y in (floor + 1)..=surface {
+                if edge && y <= floor + 2 {
+                    continue;
+                }
+                blocks.push((lx, y, lz, water));
+            }
+        }
+    }
+    // Sea lantern pillars at the four floor corners.
+    for &(dx, dz) in &[(-2i32, -2), (2, -2), (-2, 2), (2, 2)] {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        blocks.push((lx, floor, lz, lantern));
+        blocks.push((lx, floor + 1, lz, lantern));
+    }
+    // Gold treasure nook (NW interior).
+    let (gx, gz) = if guaranteed {
+        OCEAN_MONUMENT_GOLD
+    } else {
+        (cx - 2, cz - 1)
+    };
+    for &(dx, dz) in &[(0i32, 0), (1, 0), (0, 1), (1, 1)] {
+        let lx = (gx + dx - chunk_x * 16) as u8;
+        let lz = (gz + dz - chunk_z * 16) as u8;
+        blocks.push((lx, floor, lz, gold));
+    }
+    // Sponge pads beside the gold.
+    let sponge_spots = [(gx + 2, gz), (gx + 2, gz + 1), (gx, gz + 2)];
+    for &(sx, sz) in &sponge_spots {
+        let lx = (sx - chunk_x * 16) as u8;
+        let lz = (sz - chunk_z * 16) as u8;
+        blocks.push((lx, floor, lz, sponge));
+    }
+    // Loot chest in the hall center (on prismarine, under water).
+    let (chest_x, chest_z) = if guaranteed {
+        OCEAN_MONUMENT_CHEST
+    } else {
+        (cx, cz)
+    };
+    let chest_lx = (chest_x - chunk_x * 16) as u8;
+    let chest_lz = (chest_z - chunk_z * 16) as u8;
+    blocks.push((chest_lx, floor + 1, chest_lz, Block::new("chest", 0)));
+}
+
 /// Ruined plaza + three house shells + well. Guaranteed in [`VILLAGE_CHUNK`].
 /// Open green around the well stays clear for future villager NPCs.
 fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
@@ -1154,6 +1290,7 @@ fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, c
             | NETHER_CHUNK
             | TEMPLE_CHUNK
             | WRECK_CHUNK
+            | MONUMENT_CHUNK
             | (0, 0)
     );
     if !guaranteed {
@@ -2215,11 +2352,66 @@ mod tests {
         assert_ne!(WRECK_CHUNK, CAMP_CHUNK);
         assert_ne!(WRECK_CHUNK, PORTAL_CHUNK);
         assert_ne!(WRECK_CHUNK, TEMPLE_CHUNK);
+        assert_ne!(WRECK_CHUNK, MONUMENT_CHUNK);
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);
         assert_eq!(
             cluster
                 .block_at(SHIPWRECK_CHEST.0, i32::from(floor), SHIPWRECK_CHEST.1)
+                .id,
+            "chest"
+        );
+    }
+
+    #[test]
+    fn an_ocean_monument_remnant_lies_south_of_the_wreck() {
+        let monument = generate_chunk(MONUMENT_CHUNK.0, MONUMENT_CHUNK.1);
+        let (cx, cz) = OCEAN_MONUMENT;
+        let lx = (cx - MONUMENT_CHUNK.0 * 16) as u8;
+        let lz = (cz - MONUMENT_CHUNK.1 * 16) as u8;
+        let surface = column_height(cx, cz, biome_at(cx, cz)).max(5);
+        let floor = surface.saturating_sub(2).max(2);
+        let mut prism = false;
+        for y in floor..(floor + 3) {
+            if matches!(
+                monument.block(lx, y, lz).id,
+                "prismarine" | "prismarine_bricks" | "dark_prismarine" | "chest" | "water"
+            ) {
+                prism = true;
+            }
+        }
+        assert!(prism, "monument hall should include prismarine or water");
+        let chest_lx = (OCEAN_MONUMENT_CHEST.0 - MONUMENT_CHUNK.0 * 16) as u8;
+        let chest_lz = (OCEAN_MONUMENT_CHEST.1 - MONUMENT_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            monument.block(chest_lx, floor + 1, chest_lz).id,
+            "chest",
+            "loot chest in the monument hall"
+        );
+        let gold_lx = (OCEAN_MONUMENT_GOLD.0 - MONUMENT_CHUNK.0 * 16) as u8;
+        let gold_lz = (OCEAN_MONUMENT_GOLD.1 - MONUMENT_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            monument.block(gold_lx, floor, gold_lz).id,
+            "gold_block",
+            "gold treasure nook"
+        );
+        let sponge_lx = ((OCEAN_MONUMENT_GOLD.0 + 2) - MONUMENT_CHUNK.0 * 16) as u8;
+        assert_eq!(
+            monument.block(sponge_lx, floor, gold_lz).id,
+            "sponge",
+            "sponge pad beside the gold"
+        );
+        assert_ne!(MONUMENT_CHUNK, WRECK_CHUNK);
+        assert_ne!(MONUMENT_CHUNK, CAMP_CHUNK);
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster
+                .block_at(
+                    OCEAN_MONUMENT_CHEST.0,
+                    i32::from(floor + 1),
+                    OCEAN_MONUMENT_CHEST.1
+                )
                 .id,
             "chest"
         );

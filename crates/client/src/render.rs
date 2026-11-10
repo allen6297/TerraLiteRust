@@ -1376,6 +1376,8 @@ pub struct State {
     found_temple: bool,
     /// Once: walked up to the west beach shipwreck.
     found_wreck: bool,
+    /// Once: swam up to the ocean monument remnant south of the wreck.
+    found_monument: bool,
     /// Once: walked up to the north village remnant.
     found_village: bool,
     /// Once: walked into the underground dungeon under the mine.
@@ -2668,6 +2670,7 @@ impl State {
             portal_cool: 0.0,
             found_temple: false,
             found_wreck: false,
+            found_monument: false,
             found_village: false,
             found_dungeon: false,
             found_mineshaft: false,
@@ -7050,6 +7053,15 @@ impl State {
                 self.gui.push_chat("a guardian");
             }
         }
+        if !self.found_monument
+            && near(
+                rebuild_world::OCEAN_MONUMENT.0,
+                rebuild_world::OCEAN_MONUMENT.1,
+            )
+        {
+            self.found_monument = true;
+            self.gui.push_chat("an ocean monument");
+        }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
         {
@@ -7641,6 +7653,7 @@ impl State {
             .or_else(|| fresh_portal(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_temple(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_monument(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_village(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen))
@@ -9346,6 +9359,76 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Ocean monument remnant south of the shipwreck, then quit with a PNG.
+    pub fn arm_ocean_monument_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (cx, cz) = rebuild_world::OCEAN_MONUMENT;
+        let chunk_x = cx.div_euclid(16);
+        let chunk_z = cz.div_euclid(16);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(chunk_x, chunk_z));
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 0));
+        self.clock.set_time_of_day(0.34);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut floor = 3;
+        for y in 0..80 {
+            let id = self.world.block_at(cx, y, cz).id;
+            if matches!(
+                id,
+                "prismarine" | "prismarine_bricks" | "dark_prismarine" | "gold_block" | "sponge"
+            ) {
+                floor = y;
+                break;
+            }
+        }
+        self.found_monument = true;
+        self.water_sub = 0.85;
+        self.was_wet = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("an ocean monument");
+
+        // Stand inside the flooded hall looking toward the gold nook + chest.
+        let (gx, gz) = rebuild_world::OCEAN_MONUMENT_GOLD;
+        let focus = glam::Vec3::new(gx as f32 + 1.0, floor as f32 + 1.15, gz as f32 + 0.8);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.6,
+            floor as f32 + 1.55,
+            cz as f32 + 2.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("prismarine");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -30165,6 +30248,11 @@ fn wreck_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::SHIPWRECK_CHEST
 }
 
+/// The ocean-monument remnant hall chest.
+fn monument_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::OCEAN_MONUMENT_CHEST
+}
+
 /// The north village-remnant west-house chest.
 fn village_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::VILLAGE_CHEST
@@ -30780,6 +30868,28 @@ fn fresh_wreck(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
         return None;
     }
     wreck_loot(x, z, omen)
+}
+
+/// One drop from the ocean-monument chest, read from the data pack.
+fn monument_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !monument_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_monument_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the ocean-monument hall chest.
+fn fresh_monument(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    monument_loot(x, z, omen)
 }
 
 /// One drop from the village-remnant chest, read from the data pack.
@@ -31412,6 +31522,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_wreck(true, x, z, false).is_none());
         assert!(super::fresh_wreck(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_monument_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::OCEAN_MONUMENT_CHEST;
+        assert!(super::monument_cell(x, z));
+        assert!(!super::monument_cell(
+            rebuild_world::OCEAN_MONUMENT_GOLD.0,
+            rebuild_world::OCEAN_MONUMENT_GOLD.1
+        ));
+        assert!(!super::wreck_cell(x, z));
+        assert!(!super::camp_cell(x, z));
+        let table = crate::loot::load_monument_chest().unwrap();
+        let paid = super::fresh_monument(false, x, z, false).unwrap();
+        let rich = super::fresh_monument(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_monument(true, x, z, false).is_none());
+        assert!(super::fresh_monument(false, 0, 0, false).is_none());
     }
 
     #[test]

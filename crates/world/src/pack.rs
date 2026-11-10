@@ -7856,6 +7856,7 @@ mod tests {
         assert_eq!(pack.tool_icon("prismarine_crystals"), Some("sea_lantern"));
         assert!(pack.contains_block("iron_block"));
         assert!(pack.contains_block("gold_block"));
+        assert!(pack.contains_block("sponge"));
         assert!(pack.contains_block("emerald_block"));
         assert!(pack.contains_block("diamond_block"));
         assert!(pack.is_key("trial_key"));

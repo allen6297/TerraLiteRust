@@ -214,6 +214,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "nautilus_shell" => [0.85, 0.78, 0.65],
         "prismarine_shard" => [0.45, 0.72, 0.62],
         "prismarine_crystals" => [0.55, 0.9, 0.85],
+        "sponge" => [0.86, 0.82, 0.28],
 
         "iron_block" => [0.72, 0.72, 0.75],
         "gold_block" => [0.92, 0.78, 0.22],
