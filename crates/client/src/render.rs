@@ -1010,6 +1010,10 @@ pub struct State {
     cricket_mix: f32,
     /// Eased dawn bird mix, `0` elsewhere through `1` at sunrise peak.
     bird_mix: f32,
+    /// Eased campfire proximity, `0` far through `1` at the fire.
+    crackle_mix: f32,
+    /// World position of the campfire feeding `crackle_mix`, when nearby.
+    crackle_at: Option<[f32; 3]>,
     /// Seconds until a held mace can swing again.
     mace_wait: f32,
     /// The next trial key pays a richer drop.
@@ -1906,6 +1910,8 @@ impl State {
             rain_wait: 0.0,
             cricket_mix: 0.0,
             bird_mix: 0.0,
+            crackle_mix: 0.0,
+            crackle_at: None,
             mace_wait: 0.0,
             omen: false,
             trial_at: None,
@@ -9622,12 +9628,15 @@ impl State {
             self.rain_wait = 1.6;
             self.audio.play(crate::audio::Sound::Rain);
         }
-        // Night insects and dawn birds ease with the sky; mute stays silent.
+        // Night insects, dawn birds, and campfire crackle; mute stays silent.
         let time = self.clock.time_of_day();
         let night = crate::daylight::night_fog(time);
         let dawn = crate::daylight::dawn_chorus(time);
         self.cricket_mix += (night - self.cricket_mix) * (dt * 0.7).min(1.0);
         self.bird_mix += (dawn - self.bird_mix) * (dt * 0.8).min(1.0);
+        let (fire_mix, fire_at) = nearest_campfire(&self.world, self.camera.eye.to_array());
+        self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
+        self.crackle_at = fire_at;
         if self.playing && !self.menu.is_open() && !self.dead {
             if let Some(level) = self.audio.cricket_ready(dt, self.cricket_mix) {
                 self.audio.play_heard(
@@ -9641,9 +9650,15 @@ impl State {
                     crate::audio::Hearing::even(level),
                 );
             }
+            if let Some(level) = self.audio.crackle_ready(dt, self.crackle_mix) {
+                if let Some(source) = self.crackle_at {
+                    self.play_world_soft(crate::audio::Sound::Crackle, source, level);
+                }
+            }
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
+            let _ = self.audio.crackle_ready(dt, 0.0);
         }
         self.mace_wait = (self.mace_wait - dt).max(0.0);
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
@@ -11625,6 +11640,40 @@ fn camp_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::CAMP_CHEST
 }
 
+/// Soft proximity to the nearest campfire. Mix is `0` outside ~12 blocks,
+/// rising to `1` when standing over the flame. Returns the fire's center too.
+fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 10;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 4)..=(cy + 2) {
+                if world.block_at(x, y, z).id != "campfire" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.35, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 12.0 => {
+            let t = ((12.0 - dist) / 12.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// One drop from the camp chest, read from the data pack. Any other cell is
 /// `None`. The same cell always yields the same item. `omen` uses the richer
 /// list. `None` also means the file could not be read.
@@ -12041,6 +12090,29 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_camp(true, x, z, false).is_none());
         assert!(super::fresh_camp(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn campfire_crackle_mix_rises_near_the_spawn_fire() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        rebuild_world::seed_terrain_ring(&mut cluster);
+        let (fx, fz) = rebuild_world::CAMP_FIRE;
+        let mut fy = None;
+        for y in 0..80 {
+            if cluster.block_at(fx, y, fz).id == "campfire" {
+                fy = Some(y);
+                break;
+            }
+        }
+        let fy = fy.expect("spawn campfire");
+        let at = [fx as f32 + 0.5, fy as f32 + 1.6, fz as f32 + 0.5];
+        let (close, src) = super::nearest_campfire(&cluster, at);
+        assert!(close > 0.7, "standing over the fire: {close}");
+        assert!(src.is_some());
+        let far = [fx as f32 + 20.0, fy as f32 + 1.6, fz as f32 + 20.0];
+        let (away, none) = super::nearest_campfire(&cluster, far);
+        assert_eq!(away, 0.0);
+        assert!(none.is_none());
     }
 
     #[test]

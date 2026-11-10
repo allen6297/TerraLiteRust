@@ -57,6 +57,8 @@ pub enum Sound {
     Cricket,
     /// A soft dawn bird call. Louder near sunrise, quiet by mid-morning.
     Bird,
+    /// A soft campfire crackle. Louder when standing close to the fire.
+    Crackle,
 }
 
 /// Seconds before the same horn can sound again.
@@ -245,6 +247,8 @@ pub struct Audio {
     cricket_left: f32,
     /// Seconds until the next dawn bird call.
     bird_left: f32,
+    /// Seconds until the next campfire crackle.
+    crackle_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -268,6 +272,7 @@ impl Audio {
             stroke_left: 0.0,
             cricket_left: 0.0,
             bird_left: 0.0,
+            crackle_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -359,6 +364,24 @@ impl Audio {
         Some(0.14 + mix * 0.26)
     }
 
+    /// Loudness for the next campfire crackle, or `None` this frame.
+    ///
+    /// `mix` is proximity (`0` far → `1` at the fire). Out of range resets.
+    pub fn crackle_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.crackle_left = 0.0;
+            return None;
+        }
+        self.crackle_left -= dt;
+        if self.crackle_left > 0.0 {
+            return None;
+        }
+        // Far ~1.4s apart; standing over the fire ~0.45s.
+        self.crackle_left = 1.4 - mix * 0.95;
+        Some(0.16 + mix * 0.34)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -408,6 +431,7 @@ impl Audio {
             Sound::Burp => burp(),
             Sound::Cricket => cricket_chirp(),
             Sound::Bird => bird_call(),
+            Sound::Crackle => fire_crackle(),
         }
     }
 }
@@ -741,6 +765,23 @@ fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
     samples
 }
 
+/// A soft fire pop. Noise burst with a short low snap under it.
+fn fire_crackle() -> Vec<i16> {
+    let seconds = 0.12;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 73u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let snap = (t * 280.0 * std::f32::consts::TAU).sin() * 0.35;
+        let env = (t / 0.012).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.7 + snap) * 0.14 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
 /// Two soft high chirps. Quiet enough to sit under footsteps.
 fn cricket_chirp() -> Vec<i16> {
     let mut samples = Vec::new();
@@ -966,6 +1007,26 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Bird, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Bird]);
+    }
+
+    #[test]
+    fn campfire_crackles_near_the_fire_and_respect_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.crackle_ready(0.1, 0.0).is_none());
+        let level = audio
+            .crackle_ready(0.1, 1.0)
+            .expect("close fire crackles on the first beat");
+        assert!(level > 0.4 && level <= 0.55);
+        assert!(audio.crackle_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Crackle, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Crackle]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Crackle, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Crackle]);
+        let edge = audio
+            .crackle_ready(10.0, 0.2)
+            .expect("edge of range still pops");
+        assert!(edge < level);
     }
 
     #[test]
