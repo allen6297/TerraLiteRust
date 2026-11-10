@@ -3,6 +3,8 @@
 //!
 //! The zombie body is `models/entity/zombie.bbmodel` with `textures/entity/zombie.png`,
 //! playing `idle`, `walk`, and `attack` the same way the chicken and player do.
+//! Night and dark-cave spawns reuse that same mesh and chase/bite AI; the trial
+//! spawner zombie stays a separate demo body.
 //!
 //! The entity tick runs `"pig"`, `"zombie"`, `"breeze"`, `"golem"`, `"wolf"`,
 //! `"cat"`, `"parrot"`, `"frog"`, `"bee"`, `"fox"`, and `"goat"` every 50 ms,
@@ -409,6 +411,8 @@ pub struct Zombie {
     attacking: bool,
     /// Seconds of red hit flash left on the mesh.
     flash: f32,
+    /// Night/cave spawn: knockdown ends in removal instead of home revive.
+    wild: bool,
 }
 
 impl Zombie {
@@ -424,7 +428,22 @@ impl Zombie {
             moving: false,
             attacking: false,
             flash: 0.0,
+            wild: false,
         }
+    }
+
+    /// Feet of a living body.
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn living(&self) -> bool {
+        self.hearts > 0
+    }
+
+    /// Wild body finished its knockdown and should leave the horde.
+    pub fn spent(&self) -> bool {
+        self.wild && self.hearts <= 0 && self.down <= 0.0
     }
 
     /// Shove the zombie away from a wind burst. True when it was inside.
@@ -527,6 +546,13 @@ impl Zombie {
         self.moving = false;
         self.attacking = false;
         self.flash = 0.0;
+        self.wild = false;
+    }
+
+    /// Stand a night/cave spawn at `at`. Knockdown despawns instead of home revive.
+    pub fn rouse_wild(&mut self, at: [f32; 3]) {
+        self.rouse(at);
+        self.wild = true;
     }
 
     /// Freeze in place (proof shots / shove recovery).
@@ -543,7 +569,8 @@ impl Zombie {
 
     /// Decay the hit flash, or stand back up after a knockdown.
     ///
-    /// True while the mesh should rebuild: flash frames, or the rise frame.
+    /// True while the mesh should rebuild: flash frames, the rise frame, or a
+    /// wild body finishing its knockdown (caller removes it).
     pub fn rest(&mut self, dt: f32) -> bool {
         if self.hearts > 0 {
             if self.flash <= 0.0 {
@@ -555,6 +582,10 @@ impl Zombie {
         self.down -= dt;
         if self.down > 0.0 {
             return false;
+        }
+        if self.wild {
+            self.down = 0.0;
+            return true;
         }
         self.hearts = ZOMBIE_HEARTS;
         self.origin = ZOMBIE_HOME;
@@ -672,6 +703,315 @@ fn zombie_figure() -> &'static crate::blockbench::Figure {
         ))
         .expect("zombie.bbmodel")
     })
+}
+
+/// Cap how many natural zombies stand near the player at once.
+const NIGHT_CAP: usize = 6;
+/// Seconds between spawn attempts while it is dark enough.
+const NIGHT_COOLDOWN: f32 = 2.4;
+/// Closest spawn ring, in blocks from the player.
+const NIGHT_SPAWN_MIN: f32 = 8.0;
+/// Farthest spawn ring, in blocks from the player.
+const NIGHT_SPAWN_MAX: f32 = 22.0;
+/// Despawn when farther than this from the player.
+const NIGHT_DESPAWN: f32 = 40.0;
+/// Block-light peak at or below this can host a spawn (Minecraft-ish ≤7).
+const NIGHT_DARK: u8 = 7;
+/// Block-light peak at or above this burns a wild zombie off.
+const NIGHT_BRIGHT: u8 = 12;
+
+/// Natural Blockbench zombies that rise in the dark near the player.
+///
+/// Reuses [`Zombie`] chase/bite. The trial-line demo zombie stays separate.
+pub struct NightHorde {
+    pack: Vec<Zombie>,
+    wait: f32,
+    salt: u32,
+}
+
+impl NightHorde {
+    pub fn new() -> Self {
+        Self {
+            pack: Vec::new(),
+            wait: 0.8,
+            salt: 1,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.pack.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Zombie> {
+        self.pack.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Zombie> {
+        self.pack.iter_mut()
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Zombie> {
+        self.pack.get_mut(index)
+    }
+
+    /// Closest living wild body under the look ray, if any.
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, zombie) in self.pack.iter().enumerate() {
+            if !zombie.aimed(eye, forward) {
+                continue;
+            }
+            let [x, y, z] = zombie.origin();
+            let dx = x - eye[0];
+            let dy = y + 0.9 - eye[1];
+            let dz = z - eye[2];
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            if best.is_none_or(|(_, so_far)| dist < so_far) {
+                best = Some((index, dist));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        for zombie in &self.pack {
+            out.extend(zombie.vertices());
+        }
+        out
+    }
+
+    /// Place one wild body at `at` for proof shots. Ignores light and the cap.
+    pub fn force_at(&mut self, at: [f32; 3]) {
+        let mut zombie = Zombie::new();
+        zombie.rouse_wild(at);
+        self.pack.push(zombie);
+    }
+
+    /// Decay knockdowns, cull bright/day/far bodies, try one spawn, run chase AI.
+    ///
+    /// `night` is true after dark. `held` is the player's torch (or similar) so
+    /// lit air near the hand stays clear. Returns whether any bite landed and
+    /// whether the mesh should rebuild.
+    pub fn tick(
+        &mut self,
+        dt: f32,
+        steps: u32,
+        player: [f32; 3],
+        night: bool,
+        held: Option<rebuild_world::Emitter>,
+        world: &Cluster,
+        clear_of: &mut dyn FnMut([f32; 3]) -> bool,
+    ) -> (bool, bool) {
+        let mut dirty = false;
+        let mut bite = false;
+        for zombie in &mut self.pack {
+            if zombie.rest(dt) {
+                dirty = true;
+            }
+        }
+        let before = self.pack.len();
+        self.pack.retain(|zombie| !zombie.spent());
+        if self.pack.len() != before {
+            dirty = true;
+        }
+
+        let feet = [player[0], player[2]];
+        self.wait = (self.wait - dt).max(0.0);
+        if self.wait <= 0.0 {
+            self.wait = NIGHT_COOLDOWN;
+            // Light / day / range cull shares the spawn cadence so torch checks stay cheap.
+            let mut kept = Vec::with_capacity(self.pack.len());
+            for zombie in self.pack.drain(..) {
+                if !zombie.living() {
+                    kept.push(zombie);
+                    continue;
+                }
+                let origin = zombie.origin();
+                let dx = origin[0] - player[0];
+                let dz = origin[2] - player[2];
+                let dist = (dx * dx + dz * dz).sqrt();
+                let cell = [
+                    origin[0].floor() as i32,
+                    origin[1].floor() as i32,
+                    origin[2].floor() as i32,
+                ];
+                let light = cheap_block_light(world, cell[0], cell[1], cell[2], held);
+                let open = sky_open(world, cell[0], cell[1], cell[2]);
+                if dist > NIGHT_DESPAWN || light >= NIGHT_BRIGHT || (!night && open) {
+                    dirty = true;
+                    continue;
+                }
+                kept.push(zombie);
+            }
+            self.pack = kept;
+            if self.try_spawn(player, night, held, world) {
+                dirty = true;
+            }
+        }
+
+        if steps > 0 {
+            for zombie in &mut self.pack {
+                if !zombie.living() {
+                    continue;
+                }
+                let (min, max) = zombie.bounds();
+                let from = [
+                    (min[0] + max[0]) * 0.5,
+                    min[1] + 1.4,
+                    (min[2] + max[2]) * 0.5,
+                ];
+                let clear = clear_of(from);
+                if zombie.tick_near(steps, feet, clear, world) {
+                    bite = true;
+                }
+                dirty = true;
+            }
+        }
+        (bite, dirty)
+    }
+
+    fn try_spawn(
+        &mut self,
+        player: [f32; 3],
+        night: bool,
+        held: Option<rebuild_world::Emitter>,
+        world: &Cluster,
+    ) -> bool {
+        if self.pack.iter().filter(|z| z.living()).count() >= NIGHT_CAP {
+            return false;
+        }
+        for _ in 0..8 {
+            self.salt = self.salt.wrapping_add(1);
+            let Some(at) = spawn_spot(world, player, self.salt) else {
+                continue;
+            };
+            let cell = [at[0].floor() as i32, at[1].floor() as i32, at[2].floor() as i32];
+            if !can_host_zombie(world, cell[0], cell[1], cell[2], night, held) {
+                continue;
+            }
+            if self.pack.iter().any(|zombie| {
+                let o = zombie.origin();
+                (o[0] - at[0]).abs() < 1.1 && (o[2] - at[2]).abs() < 1.1
+            }) {
+                continue;
+            }
+            let mut zombie = Zombie::new();
+            zombie.rouse_wild(at);
+            self.pack.push(zombie);
+            return true;
+        }
+        false
+    }
+}
+
+fn spawn_spot(world: &Cluster, player: [f32; 3], salt: u32) -> Option<[f32; 3]> {
+    let angle = salt as f32 * 2.399_963;
+    let span = NIGHT_SPAWN_MAX - NIGHT_SPAWN_MIN;
+    let dist = NIGHT_SPAWN_MIN + (salt % 11) as f32 / 10.0 * span;
+    let x = (player[0] + angle.cos() * dist).floor() as i32;
+    let z = (player[2] + angle.sin() * dist).floor() as i32;
+    let py = player[1].floor() as i32;
+    let top = (py + 6).min(250);
+    let bottom = (py - 10).max(1);
+    for y in (bottom..=top).rev() {
+        if spawn_footing(world, x, y, z) {
+            return Some([x as f32 + 0.5, y as f32, z as f32 + 0.5]);
+        }
+    }
+    None
+}
+
+fn spawn_footing(world: &Cluster, x: i32, y: i32, z: i32) -> bool {
+    if !(1..255).contains(&y) {
+        return false;
+    }
+    let floor = world.block_at(x, y - 1, z);
+    if floor.is_air() || is_fluid(floor.id) || !rebuild_world::shape_of(floor).is_full_cube() {
+        return false;
+    }
+    !cell_blocks(world, x, y, z) && !cell_blocks(world, x, y + 1, z)
+}
+
+fn can_host_zombie(
+    world: &Cluster,
+    x: i32,
+    y: i32,
+    z: i32,
+    night: bool,
+    held: Option<rebuild_world::Emitter>,
+) -> bool {
+    if !spawn_footing(world, x, y, z) {
+        return false;
+    }
+    let light = cheap_block_light(world, x, y, z, held);
+    if light > NIGHT_DARK {
+        return false;
+    }
+    let open = sky_open(world, x, y, z);
+    // Open sky after dark, or a dark cave / roofed pocket any time.
+    night || !open
+}
+
+fn sky_open(world: &Cluster, x: i32, y: i32, z: i32) -> bool {
+    for yy in (y + 1)..256 {
+        let block = world.block_at(x, yy, z);
+        if block.is_air() {
+            continue;
+        }
+        if rebuild_world::shape_of(block).is_full_cube() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Peak block-light channel at a cell, ignoring walls (cheap torch / held check).
+fn cheap_block_light(
+    world: &Cluster,
+    x: i32,
+    y: i32,
+    z: i32,
+    held: Option<rebuild_world::Emitter>,
+) -> u8 {
+    let mut level = 0u8;
+    let reach = rebuild_world::LIGHT_REACH;
+    for dy in -reach..=reach {
+        for dz in -reach..=reach {
+            for dx in -reach..=reach {
+                let man = dx.abs() + dy.abs() + dz.abs();
+                if man > reach {
+                    continue;
+                }
+                let ny = y + dy;
+                if !(0..256).contains(&ny) {
+                    continue;
+                }
+                let Some(light) = rebuild_world::light_of(world.block_at(x + dx, ny, z + dz)) else {
+                    continue;
+                };
+                let peak = light
+                    .channels()
+                    .into_iter()
+                    .max()
+                    .unwrap_or(0);
+                level = level.max(peak.saturating_sub(man as u8));
+            }
+        }
+    }
+    if let Some(emitter) = held {
+        let man = (emitter.x - x).abs() + (emitter.y - y).abs() + (emitter.z - z).abs();
+        if man <= reach {
+            let peak = emitter
+                .light
+                .channels()
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            level = level.max(peak.saturating_sub(man as u8));
+        }
+    }
+    level
 }
 
 const BREEZE_HEARTS: i32 = 4;
@@ -3672,6 +4012,57 @@ mod tests {
         assert_eq!(spawned.len(), 2);
         assert_eq!(spawned[1].id(), "rosegold:wisp");
         assert_eq!(spawned[1].origin(), [12.5, 1.0, 14.5]);
+    }
+
+    #[test]
+    fn night_spawns_need_dark_footing_and_respect_the_cap() {
+        let mut blocks: Vec<(u8, u16, u8, Block)> = (0..16u8)
+            .flat_map(|z| (0..16u8).map(move |x| (x, 0u16, z, Block::new("stone", 0))))
+            .collect();
+        // Stone roof above (4,1,4) so day cave spawns stay legal.
+        blocks.push((4, 4, 4, Block::new("stone", 0)));
+        let ground = Cluster::try_from_chunks(
+            0,
+            0,
+            [Chunk::from_blocks(0, 0, blocks).unwrap()],
+        )
+        .unwrap();
+        // Open night surface should host.
+        assert!(can_host_zombie(&ground, 8, 1, 8, true, None));
+        // Open day surface should not.
+        assert!(!can_host_zombie(&ground, 8, 1, 8, false, None));
+        // Roofed dark cell can host by day.
+        assert!(can_host_zombie(&ground, 4, 1, 4, false, None));
+        // A held torch at the cell burns the spot.
+        let torch = rebuild_world::Emitter {
+            x: 4,
+            y: 1,
+            z: 4,
+            light: rebuild_world::Light {
+                color: [1.0, 0.8, 0.4],
+                level: 14,
+            },
+        };
+        assert!(!can_host_zombie(&ground, 4, 1, 4, true, Some(torch)));
+
+        let mut horde = NightHorde::new();
+        for i in 0..NIGHT_CAP {
+            horde.force_at([8.5 + i as f32, 1.0, 10.5]);
+        }
+        assert_eq!(horde.len(), NIGHT_CAP);
+        assert!(!horde.try_spawn([8.0, 2.0, 8.0], true, None, &ground));
+        let mut clear = |_from: [f32; 3]| true;
+        let (_bite, dirty) = horde.tick(
+            0.05,
+            1,
+            [8.0, 2.0, 8.0],
+            true,
+            None,
+            &ground,
+            &mut clear,
+        );
+        assert!(dirty);
+        assert!(!horde.vertices().is_empty());
     }
 
     #[test]

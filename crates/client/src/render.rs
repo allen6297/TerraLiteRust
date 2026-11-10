@@ -827,6 +827,12 @@ pub struct State {
     held_light_shot_eye: glam::Vec3,
     held_light_shot_yaw: f32,
     held_light_shot_pitch: f32,
+    /// One-shot midnight horde near the player, then quit.
+    night_spawn_shot_path: Option<std::path::PathBuf>,
+    night_spawn_shot_frames: u32,
+    night_spawn_shot_eye: glam::Vec3,
+    night_spawn_shot_yaw: f32,
+    night_spawn_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -918,6 +924,8 @@ pub struct State {
     pig_buf: Option<wgpu::Buffer>,
     pig_count: u32,
     zombie: crate::mobs::Zombie,
+    /// Natural night/cave Blockbench zombies (capped). Trial zombie stays above.
+    night: crate::mobs::NightHorde,
     zombie_buf: Option<wgpu::Buffer>,
     zombie_count: u32,
     breeze: crate::mobs::Breeze,
@@ -1645,6 +1653,11 @@ impl State {
             held_light_shot_eye: glam::Vec3::ZERO,
             held_light_shot_yaw: 0.0,
             held_light_shot_pitch: 0.0,
+            night_spawn_shot_path: None,
+            night_spawn_shot_frames: 0,
+            night_spawn_shot_eye: glam::Vec3::ZERO,
+            night_spawn_shot_yaw: 0.0,
+            night_spawn_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1699,6 +1712,7 @@ impl State {
             pig_buf: None,
             pig_count: 0,
             zombie: crate::mobs::Zombie::new(),
+            night: crate::mobs::NightHorde::new(),
             zombie_buf: None,
             zombie_count: 0,
             breeze: crate::mobs::Breeze::new(),
@@ -2218,7 +2232,8 @@ impl State {
     }
 
     fn rebuild_zombie(&mut self) {
-        let vertices = self.zombie.vertices();
+        let mut vertices = self.zombie.vertices();
+        vertices.extend(self.night.vertices());
         if vertices.is_empty() {
             self.zombie_buf = None;
             self.zombie_count = 0;
@@ -2233,6 +2248,15 @@ impl State {
                 }),
         );
         self.zombie_count = vertices.len() as u32;
+    }
+
+    fn held_emitter(&self) -> Option<Emitter> {
+        let pack = Pack::builtin();
+        self.hotbar.slot(self.hotbar.selected()).and_then(|id| {
+            let light = held_light_of(&pack, id)?;
+            let [x, y, z] = eye_cell(self.camera.eye);
+            Some(Emitter { x, y, z, light })
+        })
     }
 
     fn rebuild_breeze(&mut self) {
@@ -2559,8 +2583,14 @@ impl State {
         let eye = self.camera.eye.to_array();
         let forward = self.camera.forward().to_array();
         let zombie_aimed = self.zombie.aimed(eye, forward);
-        let breeze_aimed = !zombie_aimed && self.breeze.aimed(eye, forward);
-        let guest_index = if zombie_aimed || breeze_aimed {
+        let night_index = if zombie_aimed {
+            None
+        } else {
+            self.night.aimed(eye, forward)
+        };
+        let breeze_aimed =
+            !zombie_aimed && night_index.is_none() && self.breeze.aimed(eye, forward);
+        let guest_index = if zombie_aimed || night_index.is_some() || breeze_aimed {
             None
         } else {
             self.aimed_guest(eye, forward)
@@ -2574,6 +2604,19 @@ impl State {
                 (min[2] + max[2]) * 0.5,
             ];
             self.hurt_mob("zombie", amount, origin, |s, n| s.zombie.hurt(n))
+        };
+        let dropped_night = if let Some(index) = night_index {
+            let origin = self
+                .night
+                .iter()
+                .nth(index)
+                .map(crate::mobs::Zombie::origin)
+                .unwrap_or([0.0; 3]);
+            self.hurt_mob("zombie", amount, origin, |s, n| {
+                s.night.get_mut(index).is_some_and(|z| z.hurt(n))
+            })
+        } else {
+            false
         };
         let dropped_breeze = breeze_aimed && {
             let origin = self.breeze.origin();
@@ -2591,8 +2634,8 @@ impl State {
         } else {
             false
         };
-        let aimed = zombie_aimed || breeze_aimed || guest_index.is_some();
-        let dropped = dropped_zombie || dropped_breeze || dropped_guest;
+        let aimed = zombie_aimed || night_index.is_some() || breeze_aimed || guest_index.is_some();
+        let dropped = dropped_zombie || dropped_night || dropped_breeze || dropped_guest;
         let word = if !aimed {
             "swing"
         } else if dropped {
@@ -4285,6 +4328,13 @@ impl State {
         for (id, (min, max)) in bodies {
             note(&mut best, id, look::ray_aabb(eye, forward, min, max));
         }
+        for zombie in self.night.iter() {
+            if !zombie.living() {
+                continue;
+            }
+            let (min, max) = zombie.bounds();
+            note(&mut best, "zombie", look::ray_aabb(eye, forward, min, max));
+        }
         if let Some([x, y, z]) = self.boat.origin() {
             note(
                 &mut best,
@@ -4342,7 +4392,7 @@ impl State {
     fn aimed_kind(&self) -> Option<&'static str> {
         let eye = self.camera.eye.to_array();
         let forward = self.camera.forward().to_array();
-        if self.zombie.aimed(eye, forward) {
+        if self.zombie.aimed(eye, forward) || self.night.aimed(eye, forward).is_some() {
             return Some("zombie");
         }
         if self.breeze.aimed(eye, forward) {
@@ -4895,6 +4945,63 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Midnight outdoor horde in view, then quit with a PNG.
+    pub fn arm_night_spawn_shot(&mut self, path: std::path::PathBuf) {
+        self.night_spawn_shot_path = Some(path);
+        self.night_spawn_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.0);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        // Keep the trial demo zombie out of frame; night pack is the subject.
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.night.force_at([8.0, 1.0, 12.0]);
+        self.night.force_at([9.2, 1.0, 11.4]);
+        self.night.force_at([7.0, 1.0, 11.0]);
+        for zombie in self.night.iter_mut() {
+            zombie.hold();
+            // Face the camera (looking north toward -Z from south of the stairs).
+            zombie.face(0.0);
+        }
+
+        // Same proven stairs overlook as the Blockbench zombie shot, aimed at the pack.
+        let eye = glam::Vec3::new(8.5, 3.5 + body::EYE_HEIGHT, 14.4);
+        let target = glam::Vec3::new(8.2, 1.7, 11.6);
+        self.camera = Camera::looking_at(eye, target);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.night_spawn_shot_eye = eye;
+        self.night_spawn_shot_yaw = yaw;
+        self.night_spawn_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.rebuild_zombie();
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_night_spawn_shot_camera(&mut self) {
+        if self.night_spawn_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.night_spawn_shot_eye,
+            self.night_spawn_shot_yaw,
+            self.night_spawn_shot_pitch,
+        );
+        self.posed_eye = self.night_spawn_shot_eye;
+        self.posed_yaw = self.night_spawn_shot_yaw;
+        self.posed_pitch = self.night_spawn_shot_pitch;
+        self.pose_dirty = true;
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -4973,12 +5080,7 @@ impl State {
 
     /// Seed the mesh light field from the selected hotbar placeable, or clear it.
     fn sync_held_light(&mut self) {
-        let pack = Pack::builtin();
-        let held = self.hotbar.slot(self.hotbar.selected()).and_then(|id| {
-            let light = held_light_of(&pack, id)?;
-            let [x, y, z] = eye_cell(self.camera.eye);
-            Some(Emitter { x, y, z, light })
-        });
+        let held = self.held_emitter();
         self.chunk_bake.set_held(held);
     }
 
@@ -5027,6 +5129,40 @@ impl State {
                 eprintln!("settings shot failed: {err}");
                 if self.settings_shot_frames > 120 {
                     self.settings_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    fn poll_night_spawn_shot(&mut self) {
+        let Some(path) = self.night_spawn_shot_path.clone() else {
+            return;
+        };
+        self.pin_night_spawn_shot_camera();
+        self.night_spawn_shot_frames = self.night_spawn_shot_frames.saturating_add(1);
+        if self.night_spawn_shot_frames < 150
+            || self.zombie_count < 3
+            || !self.chunk_bake.is_idle()
+        {
+            if self.night_spawn_shot_frames > 600 {
+                eprintln!("night-spawn shot timed out");
+                self.night_spawn_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("night-spawn shot wrote {}", path.display());
+                self.night_spawn_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("night-spawn shot failed: {err}");
+                if self.night_spawn_shot_frames > 250 {
+                    self.night_spawn_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -7511,6 +7647,19 @@ impl State {
         if !self.trial_due && self.zombie.rest(dt) {
             self.rebuild_zombie();
         }
+        {
+            let mut night_dirty = false;
+            for zombie in self.night.iter_mut() {
+                if zombie.rest(dt) {
+                    night_dirty = true;
+                }
+            }
+            let before = self.night.len();
+            // spent() bodies are removed in NightHorde::tick; flash still rebuilds here.
+            if night_dirty || self.night.len() != before {
+                self.rebuild_zombie();
+            }
+        }
         if !self.trial_due && self.breeze.rest(dt) {
             self.rebuild_breeze();
         }
@@ -7522,6 +7671,7 @@ impl State {
             self.wanted_sun = light.direction;
         }
         self.pin_held_light_shot_camera();
+        self.pin_night_spawn_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -7533,7 +7683,7 @@ impl State {
         if self.gui.is_open() || self.menu.is_open() || self.dead {
             return;
         }
-        let obstacles = [
+        let mut obstacles = vec![
             self.sheep.bounds(),
             self.pig.bounds(),
             self.zombie.bounds(),
@@ -7549,6 +7699,11 @@ impl State {
             self.fox.bounds(),
             self.goat.bounds(),
         ];
+        for zombie in self.night.iter() {
+            if zombie.living() {
+                obstacles.push(zombie.bounds());
+            }
+        }
         if self.boat.aboard() {
             self.steer_boat(dt);
         } else if self.pig.ridden() {
@@ -7682,6 +7837,32 @@ impl State {
                 }
                 let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                 self.apply_damage(amount);
+            }
+            {
+                let night = crate::daylight::night_fog(self.clock.time_of_day()) > 0.35;
+                let held = self.held_emitter();
+                let player = [
+                    self.camera.eye.x,
+                    self.camera.eye.y - body::EYE_HEIGHT,
+                    self.camera.eye.z,
+                ];
+                let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+                let (night_bite, _night_dirty) = {
+                    let world = &self.world;
+                    let horde = &mut self.night;
+                    let mut clear_of =
+                        |from: [f32; 3]| look::clear_between(from, eye, world);
+                    horde.tick(dt, steps, player, night, held, world, &mut clear_of)
+                };
+                if night_bite {
+                    let blocked = self.hotbar.block_bite();
+                    if blocked {
+                        self.hotbar_dirty = true;
+                        self.gui.push_chat("blocked");
+                    }
+                    let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                    self.apply_damage(amount);
+                }
             }
             self.rebuild_zombie();
             let mut guest_bite = false;
@@ -8637,6 +8818,7 @@ impl State {
         self.poll_zombie_shot();
         self.poll_settings_shot();
         self.poll_held_light_shot();
+        self.poll_night_spawn_shot();
     }
 }
 
