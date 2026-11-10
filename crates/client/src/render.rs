@@ -886,6 +886,14 @@ pub struct State {
     hunger_shot_eye: glam::Vec3,
     hunger_shot_yaw: f32,
     hunger_shot_pitch: f32,
+    /// One-shot idle vs chewing FOV stitch, then quit.
+    eat_shot_path: Option<std::path::PathBuf>,
+    eat_shot_frames: u32,
+    eat_shot_phase: EatShotPhase,
+    eat_shot_idle: Option<CapturedRgba>,
+    eat_shot_eye: glam::Vec3,
+    eat_shot_yaw: f32,
+    eat_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -926,6 +934,10 @@ pub struct State {
     sip: f32,
     /// The strip is a drink, not a bite.
     sipping: bool,
+    /// Chew phase while `sip` is up. Feeds FOV and eye bob.
+    chew_phase: f32,
+    /// Food finish burp still owed once `sip` crosses the cue line.
+    burp_due: bool,
     /// Hearts hit zero. Enter, Space, Escape, or a click respawns.
     dead: bool,
     /// Alt place-shape picker for stone / oak families.
@@ -1773,6 +1785,13 @@ impl State {
             hunger_shot_eye: glam::Vec3::ZERO,
             hunger_shot_yaw: 0.0,
             hunger_shot_pitch: 0.0,
+            eat_shot_path: None,
+            eat_shot_frames: 0,
+            eat_shot_phase: EatShotPhase::Idle,
+            eat_shot_idle: None,
+            eat_shot_eye: glam::Vec3::ZERO,
+            eat_shot_yaw: 0.0,
+            eat_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1795,6 +1814,8 @@ impl State {
             hurt_flash: 0.0,
             sip: 0.0,
             sipping: false,
+            chew_phase: 0.0,
+            burp_due: false,
             dead: false,
             shape_pick: crate::shape_pick::ShapePick::new(),
             plate_held: None,
@@ -3528,6 +3549,8 @@ impl State {
     fn note_taste(&mut self, drink: bool) {
         self.sip = 1.0;
         self.sipping = drink;
+        self.chew_phase = 0.0;
+        self.burp_due = !drink;
         let sound = if drink {
             crate::audio::Sound::Sip
         } else {
@@ -5642,6 +5665,74 @@ impl State {
         }
     }
 
+    /// Idle view then mid-chew FOV/plate from the stairs overlook, stitched side by side.
+    pub fn arm_eat_shot(&mut self, path: std::path::PathBuf) {
+        self.eat_shot_path = Some(path);
+        self.eat_shot_frames = 0;
+        self.eat_shot_phase = EatShotPhase::WaitingIdle;
+        self.eat_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let _ = self.hotbar.select_digit(1);
+        let _ = self.hotbar.give_stack("apple");
+        self.hunger.set_food(6);
+        self.sip = 0.0;
+        self.sipping = false;
+        self.chew_phase = 0.0;
+        self.burp_due = false;
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.eat_shot_eye = eye;
+        self.eat_shot_yaw = yaw;
+        self.eat_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_eat_shot_camera(&mut self) {
+        if self.eat_shot_path.is_none() {
+            return;
+        }
+        let _ = self.hotbar.select_digit(1);
+        if self.hotbar.slot(0) != Some("apple") {
+            let _ = self.hotbar.give_stack("apple");
+        }
+        self.camera.restore(self.eat_shot_eye, self.eat_shot_yaw, self.eat_shot_pitch);
+        self.camera.on_ground = true;
+        self.posed_eye = self.eat_shot_eye;
+        self.posed_yaw = self.eat_shot_yaw;
+        self.posed_pitch = self.eat_shot_pitch;
+        self.pose_dirty = true;
+        match self.eat_shot_phase {
+            EatShotPhase::WaitingIdle | EatShotPhase::Idle => {
+                self.sip = 0.0;
+                self.sipping = false;
+                self.chew_phase = 0.0;
+                self.burp_due = false;
+            }
+            EatShotPhase::WaitingChew => {
+                self.sip = 1.0;
+                self.sipping = false;
+                self.chew_phase = std::f32::consts::FRAC_PI_2;
+                self.burp_due = true;
+            }
+        }
+    }
+
     /// Fed HUD then starving hunger veil from the stairs overlook, stitched side by side.
     pub fn arm_hunger_shot(&mut self, path: std::path::PathBuf) {
         self.hunger_shot_path = Some(path);
@@ -6271,6 +6362,75 @@ impl State {
                 }
             }
             HungerShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_eat_shot(&mut self) {
+        let Some(path) = self.eat_shot_path.clone() else {
+            return;
+        };
+        self.pin_eat_shot_camera();
+        self.eat_shot_frames = self.eat_shot_frames.saturating_add(1);
+        if self.eat_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.eat_shot_frames > 600 {
+                eprintln!("eat shot timed out");
+                self.eat_shot_path = None;
+                self.eat_shot_phase = EatShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.eat_shot_phase {
+            EatShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.eat_shot_idle = Some(idle);
+                    self.eat_shot_frames = 0;
+                    self.eat_shot_phase = EatShotPhase::WaitingChew;
+                }
+                Err(err) => {
+                    eprintln!("eat idle capture failed: {err}");
+                    if self.eat_shot_frames > 400 {
+                        self.eat_shot_path = None;
+                        self.eat_shot_phase = EatShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            EatShotPhase::WaitingChew => {
+                let Some(idle) = self.eat_shot_idle.take() else {
+                    self.eat_shot_path = None;
+                    self.eat_shot_phase = EatShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(chew) => match stitch_held_light_proof(&idle, &chew, &path) {
+                        Ok(()) => {
+                            eprintln!("eat shot wrote {}", path.display());
+                            self.eat_shot_path = None;
+                            self.eat_shot_phase = EatShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("eat stitch failed: {err}");
+                            self.eat_shot_path = None;
+                            self.eat_shot_phase = EatShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("eat chew capture failed: {err}");
+                        self.eat_shot_idle = Some(idle);
+                        if self.eat_shot_frames > 400 {
+                            self.eat_shot_path = None;
+                            self.eat_shot_phase = EatShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            EatShotPhase::Idle => {}
         }
     }
 
@@ -8747,6 +8907,9 @@ impl State {
         self.dead = false;
         self.hurt_flash = 0.0;
         self.sip = 0.0;
+        self.sipping = false;
+        self.chew_phase = 0.0;
+        self.burp_due = false;
         self.cactus_left = 0.0;
         self.magma_left = 0.0;
         self.cake_eat = None;
@@ -8840,7 +9003,19 @@ impl State {
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt * 2.2).max(0.0);
         self.sleep_fade = (self.sleep_fade - dt * 1.4).max(0.0);
+        let sip_before = self.sip;
         self.sip = (self.sip - dt * 1.8).max(0.0);
+        if self.sip > 0.02 {
+            self.chew_phase += dt * 14.0;
+        }
+        if self.burp_due && !self.sipping && sip_before > 0.2 && self.sip <= 0.2 {
+            self.burp_due = false;
+            self.audio.play(crate::audio::Sound::Burp);
+        }
+        if self.sip <= 0.0 {
+            self.burp_due = false;
+            self.chew_phase = 0.0;
+        }
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
         self.splash_kick = (self.splash_kick - dt * 5.0).max(0.0);
         if !self.boat.aboard() {
@@ -8885,6 +9060,7 @@ impl State {
         self.pin_boat_shot_camera();
         self.pin_attack_shot_camera();
         self.pin_hunger_shot_camera();
+        self.pin_eat_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -9438,18 +9614,30 @@ impl State {
         let base = crate::camera::look_fov(self.spyglass_zoomed());
         let bob_scale = self.menu.bob().scale();
         let water_fov = (self.water_sub + self.splash_kick * 0.35).min(1.0);
+        let chew = if self.sipping {
+            0.0
+        } else {
+            crate::camera::chew_fov(self.sip, self.chew_phase) * bob_scale
+        };
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
             self.hit_kick * bob_scale,
             water_fov,
             self.boat_kick * bob_scale,
-        );
+        ) + chew;
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
+        let chew_bob = if self.sipping {
+            0.0
+        } else {
+            crate::camera::chew_rise(self.sip, self.chew_phase) * bob_scale
+        };
         let mut view_eye = self.camera.bobbed_eye(
             side,
-            rise - crate::camera::nibble(self.sip) - crate::camera::crouch_drop(self.crouch),
+            rise + chew_bob
+                - crate::camera::nibble(self.sip)
+                - crate::camera::crouch_drop(self.crouch),
         );
         if self.third_person {
             view_eye -= self.camera.forward() * 3.4;
@@ -9936,6 +10124,9 @@ impl State {
         if self.boat_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::boat_quads(gui_w, gui_h, self.boat_show));
         }
+        if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));
+        }
         if self.water_sub > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::water_quads(gui_w, gui_h, self.water_sub));
         }
@@ -10137,6 +10328,7 @@ impl State {
         self.poll_boat_shot();
         self.poll_attack_shot();
         self.poll_hunger_shot();
+        self.poll_eat_shot();
     }
 }
 
@@ -10180,6 +10372,13 @@ enum HungerShotPhase {
     Idle,
     WaitingFed,
     WaitingStarved,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EatShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingChew,
 }
 
 struct CapturedRgba {

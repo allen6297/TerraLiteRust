@@ -51,6 +51,8 @@ pub enum Sound {
     Sip,
     /// A soft exhale after a sprint.
     Breath,
+    /// A short finish cue after chewing food.
+    Burp,
 }
 
 /// Seconds before the same horn can sound again.
@@ -356,6 +358,7 @@ impl Audio {
             Sound::Bite => bite(),
             Sound::Sip => sip(),
             Sound::Breath => breath(),
+            Sound::Burp => burp(),
         }
     }
 }
@@ -660,6 +663,23 @@ fn breath() -> Vec<i16> {
         let tone = (t * 90.0 * std::f32::consts::TAU).sin() * 0.35;
         let env = (t / 0.06).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((n * 0.55 + tone) * 0.07 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
+/// A short low finish after a food chew. Softer than a bite crunch.
+fn burp() -> Vec<i16> {
+    let seconds = 0.16;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 53u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let tone = (t * 55.0 * std::f32::consts::TAU).sin() * 0.55;
+        let env = (t / 0.03).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.35 + tone) * 0.09 * env * 32_767.0) as i16);
     }
     samples
 }

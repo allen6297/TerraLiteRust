@@ -254,7 +254,28 @@ pub fn head_bob(phase: f32, amount: f32) -> (f32, f32) {
 
 /// How far the view dips while eating or drinking, in blocks.
 pub fn nibble(amount: f32) -> f32 {
-    amount.clamp(0.0, 1.0) * 0.04
+    amount.clamp(0.0, 1.0) * 0.06
+}
+
+/// Extra vertical chew bob while food is still in the mouth.
+pub fn chew_rise(amount: f32, phase: f32) -> f32 {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.02 {
+        return 0.0;
+    }
+    (phase * 12.0).sin() * 0.018 * amount
+}
+
+/// Degrees of FOV chew while eating. Negative tightens; oscillates with `phase`.
+pub const CHEW_FOV: f32 = 3.0;
+
+/// FOV punch while chewing. `sip` is the taste fade (`1` just bit → `0`).
+pub fn chew_fov(sip: f32, phase: f32) -> f32 {
+    let sip = sip.clamp(0.0, 1.0);
+    if sip <= 0.02 {
+        return 0.0;
+    }
+    -sip * 1.5 + (phase * 10.0).sin() * CHEW_FOV * sip
 }
 
 /// How far the view drops while crouching, in blocks. `1` is fully down.
@@ -323,8 +344,13 @@ mod tests {
         assert!((bobbed - camera.eye).length() > 0.01);
         let _ = camera.view_proj(1.0);
         assert_eq!(nibble(0.0), 0.0);
-        assert_eq!(nibble(1.0), 0.04);
-        assert_eq!(nibble(2.0), 0.04);
+        assert_eq!(nibble(1.0), 0.06);
+        assert_eq!(nibble(2.0), 0.06);
+        assert_eq!(chew_fov(0.0, 1.0), 0.0);
+        assert!(chew_fov(1.0, 0.0) < 0.0);
+        assert!(
+            (chew_rise(1.0, std::f32::consts::FRAC_PI_2 / 12.0) - 0.018).abs() < 1.0e-5
+        );
         assert_eq!(
             punched_fov(LOOK_FOV, 1.0, 0.0, 0.0, 0.0),
             LOOK_FOV + SPRINT_FOV
