@@ -1012,6 +1012,10 @@ pub struct State {
     rain_mix: f32,
     /// True after a rain-onset chat tip this wet spell.
     rain_told: bool,
+    /// First approach chat tips for the three findable landmarks this session.
+    found_camp: bool,
+    found_shrine: bool,
+    found_mine: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1948,6 +1952,9 @@ impl State {
             jump_kick: 0.0,
             rain_mix: 0.0,
             rain_told: false,
+            found_camp: false,
+            found_shrine: false,
+            found_mine: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3437,6 +3444,31 @@ impl State {
     fn tell_sky_edge(&mut self, word: &str) {
         if sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
             self.gui.push_chat(word);
+        }
+    }
+
+    /// Once per landmark, when the player first walks into range.
+    fn tell_landmarks(&mut self) {
+        if !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            return;
+        }
+        let eye = self.camera.eye;
+        let near = |x: i32, z: i32| {
+            let dx = eye.x - (x as f32 + 0.5);
+            let dz = eye.z - (z as f32 + 0.5);
+            dx * dx + dz * dz < 10.0 * 10.0
+        };
+        if !self.found_camp && near(rebuild_world::CAMP_FIRE.0, rebuild_world::CAMP_FIRE.1) {
+            self.found_camp = true;
+            self.gui.push_chat("a camp");
+        }
+        if !self.found_shrine && near(rebuild_world::SHRINE.0, rebuild_world::SHRINE.1) {
+            self.found_shrine = true;
+            self.gui.push_chat("a shrine");
+        }
+        if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
+            self.found_mine = true;
+            self.gui.push_chat("a mine");
         }
     }
 
@@ -10071,6 +10103,7 @@ impl State {
         self.flush_chest();
         self.gui.stoke(dt);
         self.gui.age_chat(dt);
+        self.tell_landmarks();
         self.note_pose();
         if self.drops.tick_motes(dt) {
             self.rebuild_drops();
@@ -12831,6 +12864,21 @@ mod tests {
         assert!(!super::sky_edge_tip_open(false, false, false));
         assert!(!super::sky_edge_tip_open(true, true, false));
         assert!(!super::sky_edge_tip_open(true, false, true));
+    }
+
+    #[test]
+    fn landmark_tips_fire_once_when_near() {
+        let near = |ex: f32, ez: f32, x: i32, z: i32| {
+            let dx = ex - (x as f32 + 0.5);
+            let dz = ez - (z as f32 + 0.5);
+            dx * dx + dz * dz < 10.0 * 10.0
+        };
+        let (sx, sz) = rebuild_world::SHRINE;
+        assert!(near(sx as f32 + 0.5, sz as f32 + 0.5, sx, sz));
+        assert!(!near(0.5, 0.5, sx, sz));
+        let (mx, mz) = rebuild_world::SHAFT_MOUTH;
+        assert!(near(mx as f32 + 3.0, mz as f32 + 0.5, mx, mz));
+        assert!(!near(0.5, 0.5, mx, mz));
     }
 
     #[test]
