@@ -375,6 +375,39 @@ impl Drops {
         }
     }
 
+    /// Gold pop when a totem of undying blocks a lethal hit.
+    pub fn totem_pop(&mut self, origin: [f32; 3]) {
+        const COLOR: [f32; 3] = [0.95, 0.78, 0.22];
+        const GLOW: [f32; 3] = [0.85, 0.55, 0.08];
+        const DIRS: [[f32; 3]; 12] = [
+            [1.1, 2.0, 0.2],
+            [-1.2, 1.7, 0.4],
+            [0.4, 2.4, -1.0],
+            [-0.5, 1.4, -1.1],
+            [1.3, 1.8, 1.0],
+            [-1.1, 2.1, 0.85],
+            [0.15, 2.6, 0.1],
+            [-0.7, 0.9, -0.35],
+            [0.9, 1.1, -0.7],
+            [-0.95, 1.0, 0.95],
+            [0.55, 2.2, 0.55],
+            [-0.35, 2.3, -0.45],
+        ];
+        for dir in DIRS {
+            self.motes.push(Mote {
+                center: [origin[0], origin[1] + 0.4, origin[2]],
+                velocity: dir,
+                color: COLOR,
+                block: GLOW,
+                life: 0.95,
+                rise: false,
+                hover: false,
+                tumble: true,
+                half: 0.06,
+            });
+        }
+    }
+
     /// Teal pop when an ender pearl lands and teleports the thrower.
     pub fn pearl_pop(&mut self, origin: [f32; 3]) {
         const COLOR: [f32; 3] = [0.22, 0.72, 0.58];

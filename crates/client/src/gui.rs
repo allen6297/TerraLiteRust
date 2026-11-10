@@ -6497,6 +6497,11 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.totem_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.splash_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
@@ -6685,6 +6690,7 @@ fn tab_of(id: &str) -> &'static str {
             | "healing_potion"
             | "splash_healing_potion"
             | "splash_harming_potion"
+            | "totem_of_undying"
             | "ender_pearl"
             | "eye_of_ender"
             | "chorus_plant"

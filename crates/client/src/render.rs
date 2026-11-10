@@ -3451,6 +3451,87 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Totem of undying mid-save: gold pop, one heart left, no death overlay.
+    pub fn arm_totem_undying_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([8.5, 1.0, 9.2]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("totem_of_undying");
+        self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("totem");
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        self.third_person = false;
+        let eye = glam::Vec3::new(8.5, 1.55 + crate::body::EYE_HEIGHT, 13.2);
+        let focus = glam::Vec3::new(8.5, 1.5, 9.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.splash = crate::splash::Splash::new();
+        self.pearls = crate::pearls::Pearls::new();
+        // Mid-save pose: one heart left, totem still selected for the tip, gold pop.
+        self.hearts = 1;
+        self.dead = false;
+        self.hurt_flash = 0.85;
+        self.hit_kick = 0.7;
+        self.slot_punch = 0.9;
+        self.drops.totem_pop(eye.to_array());
+        self.player.tick(0.0, 0.0, -1.0, false, false, false);
+        self.rebuild_player();
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
     /// Survival death overlay (You Died + Respawn/Title/Quit), then quit with a PNG.
     pub fn arm_death_respawn_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -7201,12 +7282,16 @@ impl State {
 
     /// Spend hearts. At zero the egui death overlay waits instead of respawning now.
     /// Creative ignores player damage so survival death stays clear.
+    /// A held totem of undying consumes itself and restores one heart instead of dying.
     fn lose_hearts(&mut self, amount: i32) {
         if self.dead || amount <= 0 || self.menu.creative() {
             return;
         }
         self.hurt_flash = 1.0;
         self.hit_kick = 1.0;
+        if self.hearts - amount <= 0 && self.try_totem_save() {
+            return;
+        }
         self.hearts -= amount;
         if self.hearts <= 0 {
             self.hearts = 0;
@@ -7217,6 +7302,27 @@ impl State {
             self.map_open = false;
             self.set_capture(false);
         }
+    }
+
+    /// Selected-hotbar totem (offhand is still a stub). True when the lethal hit was blocked.
+    fn try_totem_save(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_totem(id) {
+            return false;
+        }
+        self.hotbar.consume_selected();
+        self.hotbar_dirty = true;
+        self.hearts = 1;
+        self.dead = false;
+        let eye = self.camera.eye.to_array();
+        self.drops.totem_pop(eye);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Chime, eye);
+        self.gui.push_chat("totem");
+        self.slot_punch = self.slot_punch.max(0.9);
+        true
     }
 
     /// Where Respawn will land, for the death overlay line.

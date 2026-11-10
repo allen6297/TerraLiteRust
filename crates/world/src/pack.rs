@@ -499,6 +499,11 @@ struct BowDef {
     icon: String,
 }
 
+struct TotemDef {
+    id: String,
+    icon: String,
+}
+
 struct SplashDef {
     id: String,
     icon: String,
@@ -605,6 +610,8 @@ pub struct Pack {
     arrows: Vec<ArrowDef>,
     /// Bows from the data pack. Hold use to draw, release to fire an arrow.
     bows: Vec<BowDef>,
+    /// Totems from the data pack. Holding one blocks a lethal hit once.
+    totems: Vec<TotemDef>,
     /// Splash potions from the data pack. Throw for an AOE heal or harm burst.
     splashes: Vec<SplashDef>,
     /// Crafting lines from `data/terralite/recipes`. The fletching table reads arrow.
@@ -678,6 +685,7 @@ impl Pack {
             fertilizers: Vec::new(),
             arrows: Vec::new(),
             bows: Vec::new(),
+            totems: Vec::new(),
             splashes: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
@@ -2456,6 +2464,12 @@ impl Pack {
                     .map(|bow| bow.icon.as_str())
             })
             .or_else(|| {
+                self.totems
+                    .iter()
+                    .find(|totem| totem.id == id)
+                    .map(|totem| totem.icon.as_str())
+            })
+            .or_else(|| {
                 self.splashes
                     .iter()
                     .find(|splash| splash.id == id)
@@ -2637,6 +2651,16 @@ impl Pack {
     /// Bow ids, in data-pack order.
     pub fn bow_ids(&self) -> Vec<String> {
         self.bows.iter().map(|bow| bow.id.clone()).collect()
+    }
+
+    /// True when `id` is a totem of undying.
+    pub fn is_totem(&self, id: &str) -> bool {
+        self.totems.iter().any(|totem| totem.id == id)
+    }
+
+    /// Totem ids, in data-pack order.
+    pub fn totem_ids(&self) -> Vec<String> {
+        self.totems.iter().map(|totem| totem.id.clone()).collect()
     }
 
     /// True when `id` is a throwable splash potion.
@@ -3066,6 +3090,7 @@ impl Pack {
         let mut fertilizers = Vec::new();
         let mut arrows = Vec::new();
         let mut bows = Vec::new();
+        let mut totems = Vec::new();
         let mut splashes = Vec::new();
         let mut pearls = Vec::new();
         let mut winds = Vec::new();
@@ -3111,6 +3136,7 @@ impl Pack {
                 || fertilizers.iter().any(|meal: &FertilizerDef| meal.id == id)
                 || arrows.iter().any(|arrow: &ArrowDef| arrow.id == id)
                 || bows.iter().any(|bow: &BowDef| bow.id == id)
+                || totems.iter().any(|totem: &TotemDef| totem.id == id)
                 || splashes.iter().any(|splash: &SplashDef| splash.id == id)
                 || pearls.iter().any(|pearl: &PearlDef| pearl.id == id)
                 || winds.iter().any(|wind: &WindDef| wind.id == id)
@@ -3152,6 +3178,7 @@ impl Pack {
                 PackItem::Fertilizer(meal) => fertilizers.push(meal),
                 PackItem::Arrow(arrow) => arrows.push(arrow),
                 PackItem::Bow(bow) => bows.push(bow),
+                PackItem::Totem(totem) => totems.push(totem),
                 PackItem::Splash(splash) => splashes.push(splash),
                 PackItem::Pearl(pearl) => pearls.push(pearl),
                 PackItem::Wind(wind) => winds.push(wind),
@@ -3188,6 +3215,7 @@ impl Pack {
         self.fertilizers = fertilizers;
         self.arrows = arrows;
         self.bows = bows;
+        self.totems = totems;
         self.splashes = splashes;
         self.pearls = pearls;
         self.winds = winds;
@@ -3227,6 +3255,7 @@ enum PackItem {
     Fertilizer(FertilizerDef),
     Arrow(ArrowDef),
     Bow(BowDef),
+    Totem(TotemDef),
     Splash(SplashDef),
     Pearl(PearlDef),
     Wind(WindDef),
@@ -3913,6 +3942,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("totem") {
+        require_only(obj, &["totem", "icon"], &format!("{id}.json"))?;
+        if obj.get("totem") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json totem must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Totem(TotemDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
     if obj.contains_key("splash") {
         require_only(obj, &["splash", "icon"], &format!("{id}.json"))?;
         let effect = obj
@@ -4039,6 +4085,7 @@ impl Pack {
             fertilizers: Vec::new(),
             arrows: Vec::new(),
             bows: Vec::new(),
+            totems: Vec::new(),
             splashes: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
@@ -7737,6 +7784,12 @@ mod tests {
         assert!(!pack.is_bow("arrow"));
         assert_eq!(pack.tool_icon("bow"), Some("stick"));
         assert!(pack.bow_ids().contains(&"bow".to_string()));
+        assert!(pack.is_totem("totem_of_undying"));
+        assert!(!pack.is_totem("shield"));
+        assert_eq!(pack.tool_icon("totem_of_undying"), Some("glowstone"));
+        assert!(pack
+            .totem_ids()
+            .contains(&"totem_of_undying".to_string()));
         assert!(pack.is_splash("splash_healing_potion"));
         assert!(pack.is_splash("splash_harming_potion"));
         assert!(!pack.is_splash("healing_potion"));
