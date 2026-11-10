@@ -1010,6 +1010,8 @@ pub struct State {
     rain_told: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
+    /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
+    rustle_mix: f32,
     /// Eased night cricket mix, `0` day through `1` deep night.
     cricket_mix: f32,
     /// Eased dawn bird mix, `0` elsewhere through `1` at sunrise peak.
@@ -1928,6 +1930,7 @@ impl State {
             rain_mix: 0.0,
             rain_told: false,
             drip_mix: 0.0,
+            rustle_mix: 0.0,
             cricket_mix: 0.0,
             bird_mix: 0.0,
             crackle_mix: 0.0,
@@ -9806,6 +9809,15 @@ impl State {
         self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
         let cover = cave_drip_mix(&self.world, eye);
         self.drip_mix += (cover - self.drip_mix) * (dt * 1.4).min(1.0);
+        let woods = if sky_open
+            && rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32)
+                == rebuild_world::Biome::Forest
+        {
+            (1.0 - wet * 0.45).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.rustle_mix += (woods - self.rustle_mix) * (dt * 1.0).min(1.0);
         if self.rain_mix < 0.15 {
             self.rain_told = false;
         }
@@ -9854,6 +9866,12 @@ impl State {
                     crate::audio::Hearing::even(level),
                 );
             }
+            if let Some(level) = self.audio.rustle_ready(dt, self.rustle_mix) {
+                self.audio.play_heard(
+                    crate::audio::Sound::Rustle,
+                    crate::audio::Hearing::even(level),
+                );
+            }
             if let Some(level) = self.audio.wind_ready(dt, self.wind_mix) {
                 self.audio.play_heard(
                     crate::audio::Sound::Wind,
@@ -9875,6 +9893,7 @@ impl State {
             let _ = self.audio.bird_ready(dt, 0.0);
             let _ = self.audio.rain_ready(dt, 0.0);
             let _ = self.audio.drip_ready(dt, 0.0);
+            let _ = self.audio.rustle_ready(dt, 0.0);
             let _ = self.audio.wind_ready(dt, 0.0);
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);

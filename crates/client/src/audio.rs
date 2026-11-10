@@ -65,6 +65,8 @@ pub enum Sound {
     Lap,
     /// A soft cave drip under deep cover.
     Drip,
+    /// Soft leaf rustle in forest under open sky.
+    Rustle,
 }
 
 /// Seconds before the same horn can sound again.
@@ -263,6 +265,8 @@ pub struct Audio {
     rain_left: f32,
     /// Seconds until the next cave drip.
     drip_left: f32,
+    /// Seconds until the next forest rustle.
+    rustle_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -291,6 +295,7 @@ impl Audio {
             lap_left: 0.0,
             rain_left: 0.0,
             drip_left: 0.0,
+            rustle_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -472,6 +477,24 @@ impl Audio {
         Some(0.12 + mix * 0.24)
     }
 
+    /// Loudness for the next forest leaf rustle, or `None` this frame.
+    ///
+    /// `mix` is forest open-sky amount (`0` elsewhere → `1` in woods).
+    pub fn rustle_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.rustle_left = 0.0;
+            return None;
+        }
+        self.rustle_left -= dt;
+        if self.rustle_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edge (~2.6s); steadier deep in woods (~1.4s).
+        self.rustle_left = 2.6 - mix * 1.2;
+        Some(0.10 + mix * 0.20)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -525,6 +548,7 @@ impl Audio {
             Sound::Wind => wind_hush(),
             Sound::Lap => water_lap(),
             Sound::Drip => cave_drip(),
+            Sound::Rustle => leaf_rustle(),
         }
     }
 }
@@ -854,6 +878,23 @@ fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
         let tone = (t * slide * std::f32::consts::TAU).sin();
         let env = (t / 0.015).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((tone * 0.85 + n * 0.08) * volume * env * 32_767.0) as i16);
+    }
+    samples
+}
+
+/// Soft leafy hush. Quieter and scratchier than wind.
+fn leaf_rustle() -> Vec<i16> {
+    let seconds = 0.24;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 149u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let scratch = (t * 780.0 * std::f32::consts::TAU).sin() * 0.15;
+        let env = (t / 0.03).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.7 + scratch) * 0.08 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1239,6 +1280,21 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Drip, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Drip]);
+    }
+
+    #[test]
+    fn forest_rustle_waits_for_woods_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.rustle_ready(0.1, 0.0).is_none());
+        let level = audio
+            .rustle_ready(0.1, 1.0)
+            .expect("woods rustle on the first beat");
+        assert!(level > 0.2 && level <= 0.35);
+        audio.play_heard(Sound::Rustle, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Rustle]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Rustle, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Rustle]);
     }
 
     #[test]
