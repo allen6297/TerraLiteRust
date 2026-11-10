@@ -310,6 +310,8 @@ struct Args {
     shot_beacon: Option<std::path::PathBuf>,
     /// Crafted conduit in a prismarine water ring, then quit.
     shot_conduit: Option<std::path::PathBuf>,
+    /// Guardian laser in the shipwreck shallows, then quit.
+    shot_guardian: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
     shot_wreck_heart: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
@@ -603,6 +605,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_wither_boss: args.shot_wither_boss,
         shot_beacon: args.shot_beacon,
         shot_conduit: args.shot_conduit,
+        shot_guardian: args.shot_guardian,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
@@ -772,6 +775,7 @@ struct App {
     shot_wither_boss: Option<std::path::PathBuf>,
     shot_beacon: Option<std::path::PathBuf>,
     shot_conduit: Option<std::path::PathBuf>,
+    shot_guardian: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
@@ -1153,6 +1157,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_conduit.take() {
                     state.arm_conduit_shot(path);
+                }
+                if let Some(path) = self.shot_guardian.take() {
+                    state.arm_guardian_shot(path);
                 }
                 if let Some(path) = self.shot_wreck_heart.take() {
                     state.arm_shipwreck_heart_shot(path);
@@ -1543,6 +1550,7 @@ where
         shot_wither_boss: None,
         shot_beacon: None,
         shot_conduit: None,
+        shot_guardian: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
         shot_axolotl: None,
@@ -2190,6 +2198,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-conduit".to_string())?;
                 parsed.shot_conduit = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-guardian" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-guardian".to_string())?;
+                parsed.shot_guardian = Some(std::path::PathBuf::from(value));
             }
             "--shot-wreck-heart" | "--shot-shipwreck-heart" | "--shot-heart" => {
                 let value = iter

@@ -7850,6 +7850,10 @@ mod tests {
         assert_eq!(pack.tool_icon("heart_of_the_sea"), Some("sea_lantern"));
         assert!(pack.is_core("nautilus_shell"));
         assert_eq!(pack.tool_icon("nautilus_shell"), Some("prismarine"));
+        assert!(pack.is_core("prismarine_shard"));
+        assert_eq!(pack.tool_icon("prismarine_shard"), Some("prismarine"));
+        assert!(pack.is_core("prismarine_crystals"));
+        assert_eq!(pack.tool_icon("prismarine_crystals"), Some("sea_lantern"));
         assert!(pack.contains_block("iron_block"));
         assert!(pack.contains_block("gold_block"));
         assert!(pack.contains_block("emerald_block"));

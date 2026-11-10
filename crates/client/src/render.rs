@@ -1675,6 +1675,15 @@ pub struct State {
     fireballs: crate::fireballs::Fireballs,
     /// Hand over a blaze rod once inventory has room.
     blaze_due: bool,
+    guardian: crate::mobs::Guardian,
+    guardian_buf: Option<wgpu::Buffer>,
+    guardian_count: u32,
+    /// Hand over prismarine shards/crystals once inventory has room.
+    guardian_due: bool,
+    /// Thin cyan laser bolt verts while a shot is in flight (shot / tip frames).
+    guardian_laser_buf: Option<wgpu::Buffer>,
+    guardian_laser_count: u32,
+    guardian_laser_left: f32,
     wither: crate::mobs::WitherSkeleton,
     wither_buf: Option<wgpu::Buffer>,
     wither_count: u32,
@@ -2853,6 +2862,13 @@ impl State {
             blaze_count: 0,
             fireballs: crate::fireballs::Fireballs::new(),
             blaze_due: false,
+            guardian: crate::mobs::Guardian::new(),
+            guardian_buf: None,
+            guardian_count: 0,
+            guardian_due: false,
+            guardian_laser_buf: None,
+            guardian_laser_count: 0,
+            guardian_laser_left: 0.0,
             wither: crate::mobs::WitherSkeleton::new(),
             wither_buf: None,
             wither_count: 0,
@@ -2945,6 +2961,7 @@ impl State {
         state.rebuild_trader();
         state.rebuild_iron_golem();
         state.rebuild_blaze();
+        state.rebuild_guardian();
         state.rebuild_wither();
         state.rebuild_wither_boss();
 
@@ -5079,6 +5096,134 @@ impl State {
         self.blaze_count = vertices.len() as u32;
     }
 
+    fn rebuild_guardian(&mut self) {
+        let vertices = self.guardian.vertices();
+        if vertices.is_empty() {
+            self.guardian_buf = None;
+            self.guardian_count = 0;
+            return;
+        }
+        self.guardian_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("guardian"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.guardian_count = vertices.len() as u32;
+    }
+
+    fn pin_guardian_laser(&mut self, from: [f32; 3], to: [f32; 3]) {
+        let mid = [
+            (from[0] + to[0]) * 0.5,
+            (from[1] + to[1]) * 0.5,
+            (from[2] + to[2]) * 0.5,
+        ];
+        let dx = to[0] - from[0];
+        let dy = to[1] - from[1];
+        let dz = to[2] - from[2];
+        let len = (dx * dx + dy * dy + dz * dz).sqrt().max(0.2);
+        // Axis-aligned stub bolt — reads as a cyan laser flash.
+        let mut vertices = Vec::new();
+        let color = [0.35, 0.95, 0.9];
+        let block = [0.7, 1.0, 1.0];
+        // Stretch along the dominant axis toward the player.
+        let (min, max) = if dx.abs() >= dy.abs() && dx.abs() >= dz.abs() {
+            (
+                [mid[0] - len * 0.5, mid[1] - 0.05, mid[2] - 0.05],
+                [mid[0] + len * 0.5, mid[1] + 0.05, mid[2] + 0.05],
+            )
+        } else if dz.abs() >= dy.abs() {
+            (
+                [mid[0] - 0.05, mid[1] - 0.05, mid[2] - len * 0.5],
+                [mid[0] + 0.05, mid[1] + 0.05, mid[2] + len * 0.5],
+            )
+        } else {
+            (
+                [mid[0] - 0.05, mid[1] - len * 0.5, mid[2] - 0.05],
+                [mid[0] + 0.05, mid[1] + len * 0.5, mid[2] + 0.05],
+            )
+        };
+        let corner = [
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], max[1], min[2]],
+            [min[0], max[1], min[2]],
+            [min[0], min[1], max[2]],
+            [max[0], min[1], max[2]],
+            [max[0], max[1], max[2]],
+            [min[0], max[1], max[2]],
+        ];
+        const FACES: [[usize; 4]; 6] = [
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [3, 2, 6, 7],
+            [0, 3, 7, 4],
+            [1, 2, 6, 5],
+        ];
+        const NORMALS: [[f32; 3]; 6] = [
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+        for (face, normal) in FACES.into_iter().zip(NORMALS) {
+            let tri = [face[0], face[1], face[2], face[0], face[2], face[3]];
+            for index in tri {
+                vertices.push(crate::mesh::Vertex {
+                    position: corner[index],
+                    color,
+                    normal,
+                    uv: [0.0, 0.0],
+                    textured: 0.0,
+                    block,
+                    bounce: [0.0, 0.0, 0.0],
+                    ao: 1.0,
+                });
+            }
+        }
+        self.guardian_laser_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("guardian_laser"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.guardian_laser_count = vertices.len() as u32;
+        self.guardian_laser_left = 0.35;
+    }
+
+    /// Hand over prismarine shards and crystals. A full bar leaves the debt.
+    fn grant_guardian_loot(&mut self) {
+        let mut owed = false;
+        for (id, tip) in [
+            ("prismarine_shard", "prismarine shard"),
+            ("prismarine_crystals", "prismarine crystals"),
+        ] {
+            if !self.hotbar.room_for(id) && !self.bag.room_for(id) {
+                owed = true;
+                continue;
+            }
+            if !self.hotbar.collect(id) {
+                self.bag.collect(id);
+                self.bag_dirty = true;
+            }
+            self.hotbar_dirty = true;
+            self.gui.push_chat(tip);
+        }
+        if owed {
+            if !self.guardian_due {
+                self.gui.push_chat("full");
+            }
+            self.guardian_due = true;
+        } else {
+            self.guardian_due = false;
+        }
+    }
+
     fn rebuild_wither(&mut self) {
         let vertices = self.wither.vertices();
         if vertices.is_empty() {
@@ -5445,21 +5590,29 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && self.blaze.aimed(eye, forward);
+        let guardian_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && self.guardian.aimed(eye, forward);
         let wither_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !guardian_aimed
             && self.wither.aimed(eye, forward);
         let wither_boss_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !guardian_aimed
             && !wither_aimed
             && self.wither_boss.aimed(eye, forward);
         let guest_index = if zombie_aimed
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
         {
@@ -5518,6 +5671,15 @@ impl State {
             }
             dropped
         };
+        let dropped_guardian = guardian_aimed && {
+            let origin = self.guardian.origin();
+            let dropped =
+                self.hurt_mob("guardian", amount, origin, |s, n| s.guardian.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_wither = wither_aimed && {
             let origin = self.wither.origin();
             let dropped = self.hurt_mob("wither_skeleton", amount, origin, |s, n| s.wither.hurt(n));
@@ -5552,6 +5714,7 @@ impl State {
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
             || guest_index.is_some();
@@ -5559,6 +5722,7 @@ impl State {
             || dropped_night
             || dropped_breeze
             || dropped_blaze
+            || dropped_guardian
             || dropped_wither
             || dropped_wither_boss
             || dropped_guest;
@@ -5600,6 +5764,9 @@ impl State {
         if dropped_blaze {
             self.grant_blaze_rod();
         }
+        if dropped_guardian {
+            self.grant_guardian_loot();
+        }
         if dropped_wither {
             self.grant_wither_loot();
         }
@@ -5612,6 +5779,7 @@ impl State {
         self.rebuild_zombie();
         self.rebuild_breeze();
         self.rebuild_blaze();
+        self.rebuild_guardian();
         self.rebuild_wither();
         self.rebuild_wither_boss();
     }
@@ -6152,6 +6320,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_blaze();
+                return true;
+            }
+            let guardian = self.guardian.origin();
+            let (gmin, gmax) = self.guardian.bounds();
+            if point_in_box(tip, gmin, gmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("guardian", amount, guardian, |s, n| s.guardian.hurt(n));
+                if dropped {
+                    self.grant_xp_at(guardian, true);
+                    self.grant_guardian_loot();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_guardian();
                 return true;
             }
             let wither = self.wither.origin();
@@ -6862,6 +7046,9 @@ impl State {
         {
             self.found_wreck = true;
             self.gui.push_chat("a shipwreck");
+            if self.guardian.alive() {
+                self.gui.push_chat("a guardian");
+            }
         }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
@@ -8255,6 +8442,18 @@ impl State {
                         self.rebuild_blaze();
                         hit = true;
                     }
+                    let guardian = self.guardian.origin();
+                    if crate::splash::in_radius(burst.center, guardian) {
+                        let dropped = self.hurt_mob("guardian", amount, guardian, |s, n| {
+                            s.guardian.hurt(n)
+                        });
+                        if dropped {
+                            self.grant_xp_at(guardian, true);
+                            self.grant_guardian_loot();
+                        }
+                        self.rebuild_guardian();
+                        hit = true;
+                    }
                     let wither = self.wither.origin();
                     if crate::splash::in_radius(burst.center, wither) {
                         let dropped = self.hurt_mob("wither_skeleton", amount, wither, |s, n| {
@@ -9147,6 +9346,68 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Guardian laser in the shipwreck shallows, then quit with a PNG.
+    pub fn arm_guardian_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (sx, sz) = rebuild_world::SHIPWRECK;
+        let chunk_x = sx.div_euclid(16);
+        let chunk_z = sz.div_euclid(16);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(chunk_x, chunk_z));
+        self.clock.set_time_of_day(0.32);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (gx, gz) = crate::mobs::GUARDIAN_PAD;
+        let gy = 3.4_f32;
+        self.guardian.place_at([gx as f32 + 0.5, gy, gz as f32 + 0.5]);
+        let origin = self.guardian.origin();
+        let eye = glam::Vec3::new(origin[0] + 3.6, origin[1] + 0.85, origin[2] + 1.4);
+        let focus = glam::Vec3::new(origin[0], origin[1] + 0.45, origin[2]);
+        self.pin_guardian_laser(
+            [origin[0], origin[1] + 0.55, origin[2]],
+            [eye.x, eye.y, eye.z],
+        );
+        self.drops.embers([origin[0], origin[1] + 0.55, origin[2]]);
+        self.rebuild_guardian();
+        self.rebuild_drops();
+        self.found_wreck = true;
+        self.water_sub = 0.55;
+        self.was_wet = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a guardian");
+        self.gui.push_chat("laser");
+
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_sword");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(gx + dx * 8, gz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -11095,6 +11356,9 @@ impl State {
         }
         if self.blaze.aimed(eye, forward) {
             return Some("blaze");
+        }
+        if self.guardian.aimed(eye, forward) {
+            return Some("guardian");
         }
         if self.wither.aimed(eye, forward) {
             return Some("wither_skeleton");
@@ -27721,6 +27985,9 @@ impl State {
             if self.blaze_due {
                 self.grant_blaze_rod();
             }
+            if self.guardian_due {
+                self.grant_guardian_loot();
+            }
             if self.wither_due {
                 self.grant_wither_loot();
             }
@@ -27752,6 +28019,48 @@ impl State {
                 self.rebuild_blaze();
             }
             self.rebuild_blaze();
+            {
+                let from = [
+                    self.guardian.origin()[0],
+                    self.guardian.origin()[1] + 0.55,
+                    self.guardian.origin()[2],
+                ];
+                let clear = look::clear_between(from, eye3, &self.world);
+                match self.guardian.tick_near(steps, eye3) {
+                    Some(crate::mobs::GuardHit::Laser) if clear => {
+                        let blocked = self.try_shield_block();
+                        let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                        self.apply_damage(amount);
+                        self.pin_guardian_laser(from, eye3);
+                        self.drops.embers(from);
+                        self.rebuild_drops();
+                        self.gui.push_chat(if blocked { "block" } else { "laser" });
+                    }
+                    Some(crate::mobs::GuardHit::Spike) => {
+                        let blocked = self.try_shield_block();
+                        let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                        self.apply_damage(amount);
+                        self.gui.push_chat(if blocked { "block" } else { "spike" });
+                    }
+                    Some(crate::mobs::GuardHit::Laser) => {
+                        // LOS blocked — still show a short charge flash.
+                        self.pin_guardian_laser(from, eye3);
+                        self.gui.push_chat("laser");
+                    }
+                    None => {}
+                }
+                if self.guardian.rest(dt) {
+                    self.rebuild_guardian();
+                }
+                self.rebuild_guardian();
+                if self.guardian_laser_left > 0.0 {
+                    self.guardian_laser_left = (self.guardian_laser_left - dt).max(0.0);
+                    if self.guardian_laser_left <= 0.0 {
+                        self.guardian_laser_buf = None;
+                        self.guardian_laser_count = 0;
+                    }
+                }
+            }
             {
                 let (wmin, wmax) = self.wither.bounds();
                 let from = [
@@ -28645,6 +28954,22 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, blaze.slice(..));
                     pass.draw(0..self.blaze_count, 0..1);
+                }
+            }
+            if let Some(guardian) = &self.guardian_buf {
+                if self.guardian_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, guardian.slice(..));
+                    pass.draw(0..self.guardian_count, 0..1);
+                }
+            }
+            if let Some(laser) = &self.guardian_laser_buf {
+                if self.guardian_laser_count >= 3 && self.guardian_laser_left > 0.02 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, laser.slice(..));
+                    pass.draw(0..self.guardian_laser_count, 0..1);
                 }
             }
             if let Some(wither) = &self.wither_buf {

@@ -5053,6 +5053,228 @@ impl IronGolem {
     }
 }
 
+/// Shallow water south of the shipwreck — guardian patrol pad.
+pub const GUARDIAN_PAD: (i32, i32) = (
+    rebuild_world::SHIPWRECK.0,
+    rebuild_world::SHIPWRECK.1 + 3,
+);
+
+const GUARDIAN_HEARTS: i32 = 6;
+const GUARDIAN_LASER_EVERY: u32 = 32;
+const GUARDIAN_SPIKE_EVERY: u32 = 18;
+const GUARDIAN_HOVER: f32 = 4.5;
+const GUARDIAN_STEP: f32 = 0.07;
+const GUARDIAN_HOME_Y: f32 = 3.4;
+const GUARDIAN_SPIKE_REACH: f32 = 1.6;
+
+/// What a guardian does this tick when in range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardHit {
+    Laser,
+    Spike,
+}
+
+/// Floating underwater hostile south of the shipwreck. Lasers at range, spikes up close.
+pub struct Guardian {
+    origin: [f32; 3],
+    home: [f32; 3],
+    swing: u32,
+    hearts: i32,
+    down: f32,
+    loose: u32,
+}
+
+impl Guardian {
+    pub fn new() -> Self {
+        let (x, z) = GUARDIAN_PAD;
+        let home = [x as f32 + 0.5, GUARDIAN_HOME_Y, z as f32 + 0.5];
+        Self {
+            origin: home,
+            home,
+            swing: 0,
+            hearts: GUARDIAN_HEARTS,
+            down: 0.0,
+            loose: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = GUARDIAN_HEARTS;
+        self.down = 0.0;
+        self.swing = 0;
+        self.loose = 0;
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.45, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=8.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 0.85
+    }
+
+    /// Spend hearts. True when this hit drops the guardian.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.down = 9.0;
+        true
+    }
+
+    /// Return home after a knockdown. True on the frame it rises.
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if self.hearts > 0 {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.hearts = GUARDIAN_HEARTS;
+        self.origin = self.home;
+        self.swing = 0;
+        self.down = 0.0;
+        self.loose = 0;
+        true
+    }
+
+    /// Drift in the shallows. Laser at mid range, spike when close.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> Option<GuardHit> {
+        if self.loose > 0 {
+            self.loose = self.loose.saturating_sub(count);
+            return None;
+        }
+        if self.hearts <= 0 {
+            return None;
+        }
+        let mut hit = None;
+        for _ in 0..count {
+            let dx = player[0] - self.origin[0];
+            let dy = player[1] - self.origin[1];
+            let dz = player[2] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            self.origin[1] = self.home[1] + (self.swing as f32 * 0.12).sin() * 0.14;
+            if dist > GUARDIAN_HOVER + 1.0 && dist > 0.05 {
+                let step = GUARDIAN_STEP.min(dist - GUARDIAN_HOVER);
+                self.origin[0] += dx / dist * step;
+                self.origin[2] += dz / dist * step;
+            } else if dist < GUARDIAN_HOVER - 1.2 && dist > 0.05 {
+                self.origin[0] -= dx / dist * GUARDIAN_STEP;
+                self.origin[2] -= dz / dist * GUARDIAN_STEP;
+            } else if dist > 16.0 {
+                let hx = self.home[0] - self.origin[0];
+                let hz = self.home[2] - self.origin[2];
+                let hd = (hx * hx + hz * hz).sqrt();
+                if hd > 0.05 {
+                    self.origin[0] += hx / hd * GUARDIAN_STEP;
+                    self.origin[2] += hz / hd * GUARDIAN_STEP;
+                }
+            }
+            // Bob toward the player's eye height a touch.
+            if dy.abs() > 0.4 {
+                self.origin[1] += dy.signum() * 0.03;
+            }
+            self.swing = self.swing.wrapping_add(1);
+            if dist <= GUARDIAN_SPIKE_REACH && self.swing % GUARDIAN_SPIKE_EVERY == 0 {
+                hit = Some(GuardHit::Spike);
+            } else if (2.5..12.0).contains(&dist) && self.swing % GUARDIAN_LASER_EVERY == 0 {
+                hit = Some(GuardHit::Laser);
+            }
+        }
+        hit
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if self.hearts <= 0 {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.55, y, z - 0.55], [x + 0.55, y + 1.05, z + 0.55])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bob = (self.swing as f32 * 0.15).sin() * 0.04;
+        let body = [0.35, 0.62, 0.55];
+        let dark = [0.18, 0.38, 0.35];
+        let eye = [0.95, 0.85, 0.25];
+        let spike = [0.55, 0.78, 0.7];
+        let mut out = Vec::new();
+        // Fat disc body.
+        push_box(
+            &mut out,
+            [x, y + 0.45 + bob, z],
+            [0.48, 0.28, 0.48],
+            body,
+        );
+        // Tail fin.
+        push_box(
+            &mut out,
+            [x, y + 0.45 + bob, z - 0.55],
+            [0.08, 0.22, 0.22],
+            dark,
+        );
+        // Spines.
+        for (ox, oz) in [(-0.35f32, 0.2), (0.35, 0.2), (0.0, 0.4), (-0.25, -0.25), (0.25, -0.25)]
+        {
+            push_box(
+                &mut out,
+                [x + ox, y + 0.85 + bob, z + oz],
+                [0.05, 0.22, 0.05],
+                spike,
+            );
+        }
+        // Big yellow eye.
+        push_box(
+            &mut out,
+            [x, y + 0.5 + bob, z + 0.42],
+            [0.16, 0.16, 0.08],
+            eye,
+        );
+        push_box(
+            &mut out,
+            [x, y + 0.5 + bob, z + 0.5],
+            [0.06, 0.06, 0.04],
+            dark,
+        );
+        out
+    }
+}
+
 /// Fortress blaze pad — floats above [`rebuild_world::NETHER_FORTRESS_BLAZE`].
 pub const BLAZE_PAD: (i32, i32) = (-29, -41);
 
@@ -5880,6 +6102,43 @@ mod tests {
         assert!(gust.dx > 0.0);
         assert!(gust.lift > 0.0);
         assert!(crate::body::breeze_shot([0.0, 3.0, 0.0], [40.0, 1.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn a_guardian_lasers_and_spikes_in_the_shallows() {
+        let mut guard = Guardian::new();
+        assert_eq!(
+            (
+                guard.origin()[0].floor() as i32,
+                guard.origin()[2].floor() as i32
+            ),
+            GUARDIAN_PAD
+        );
+        assert!(!guard.vertices().is_empty());
+        let home = guard.origin();
+        let mut laser = false;
+        let mut spike = false;
+        for _ in 0..GUARDIAN_LASER_EVERY {
+            match guard.tick_near(1, [home[0] + 5.0, home[1], home[2]]) {
+                Some(GuardHit::Laser) => laser = true,
+                Some(GuardHit::Spike) => spike = true,
+                None => {}
+            }
+        }
+        assert!(laser, "guardian should laser at mid range");
+        for _ in 0..GUARDIAN_SPIKE_EVERY {
+            if matches!(
+                guard.tick_near(1, [home[0] + 0.8, home[1], home[2]]),
+                Some(GuardHit::Spike)
+            ) {
+                spike = true;
+            }
+        }
+        assert!(spike, "guardian should spike up close");
+        assert!(guard.hurt(6));
+        assert!(!guard.alive());
+        assert!(guard.rest(10.0));
+        assert!(guard.alive());
     }
 
     #[test]
