@@ -1018,6 +1018,8 @@ pub struct State {
     found_mine: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
+    /// Once: holding blastable stone while looking at a blast furnace.
+    told_blast_heat: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1964,6 +1966,7 @@ impl State {
             found_shrine: false,
             found_mine: false,
             told_cook_heat: false,
+            told_blast_heat: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3525,6 +3528,36 @@ impl State {
         }
         self.told_cook_heat = true;
         self.gui.push_chat("use to cook");
+    }
+
+    /// Once: hold cobble/stone, look at a blast furnace — tip to use it.
+    fn tell_blast_heat(&mut self) {
+        if self.told_blast_heat || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead)
+        {
+            return;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return;
+        };
+        if !matches!(
+            id,
+            "cobblestone" | "stone" | "stone_bricks" | "netherrack"
+        ) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "blast_furnace"
+        {
+            return;
+        }
+        self.told_blast_heat = true;
+        self.gui.push_chat("use to blast");
     }
 
     /// True when `events.jump` keeps the player on the ground.
@@ -10490,6 +10523,7 @@ impl State {
         self.gui.age_chat(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
+        self.tell_blast_heat();
         self.note_pose();
         if self.drops.tick_motes(dt) {
             self.rebuild_drops();
