@@ -475,6 +475,11 @@ struct FishingDef {
     icon: String,
 }
 
+struct SeedsDef {
+    id: String,
+    icon: String,
+}
+
 struct CoreDef {
     id: String,
     icon: String,
@@ -547,6 +552,8 @@ pub struct Pack {
     rods: Vec<RodDef>,
     /// Fishing rods from the data pack. Cast into water for a catch.
     fishings: Vec<FishingDef>,
+    /// Crop seeds from the data pack. Plant on soil.
+    seeds: Vec<SeedsDef>,
     /// Heavy cores from the data pack. A smithing table sets one into a mace.
     cores: Vec<CoreDef>,
     /// Trial keys from the data pack. One opens a copper chest a single time.
@@ -606,6 +613,7 @@ impl Pack {
             winds: Vec::new(),
             rods: Vec::new(),
             fishings: Vec::new(),
+            seeds: Vec::new(),
             cores: Vec::new(),
             keys: Vec::new(),
             omens: Vec::new(),
@@ -1819,6 +1827,15 @@ impl Pack {
         if block.id == "cake" && block.metadata > 0 {
             return cake_slice(block.metadata);
         }
+        if block.id == "wheat_crop" {
+            let name = match block.metadata.min(3) {
+                0 => "wheat_crop_0",
+                1 => "wheat_crop_1",
+                2 => "wheat_crop_2",
+                _ => "wheat_crop",
+            };
+            return self.shape_named(name);
+        }
         if block.id == "cauldron" {
             return cauldron_shape(block.metadata);
         }
@@ -2227,6 +2244,12 @@ impl Pack {
                     .map(|rod| rod.icon.as_str())
             })
             .or_else(|| {
+                self.seeds
+                    .iter()
+                    .find(|seed| seed.id == id)
+                    .map(|seed| seed.icon.as_str())
+            })
+            .or_else(|| {
                 self.cores
                     .iter()
                     .find(|core| core.id == id)
@@ -2396,6 +2419,16 @@ impl Pack {
     /// Fishing rod ids, in data-pack order.
     pub fn fishing_ids(&self) -> Vec<String> {
         self.fishings.iter().map(|rod| rod.id.clone()).collect()
+    }
+
+    /// True when `id` plants a crop.
+    pub fn is_seeds(&self, id: &str) -> bool {
+        self.seeds.iter().any(|seed| seed.id == id)
+    }
+
+    /// Seed item ids, in data-pack order.
+    pub fn seed_ids(&self) -> Vec<String> {
+        self.seeds.iter().map(|seed| seed.id.clone()).collect()
     }
 
     /// True when `id` is a heavy core.
@@ -2722,6 +2755,7 @@ impl Pack {
         let mut winds = Vec::new();
         let mut rods = Vec::new();
         let mut fishings = Vec::new();
+        let mut seeds = Vec::new();
         let mut cores = Vec::new();
         let mut keys = Vec::new();
         let mut omens = Vec::new();
@@ -2761,6 +2795,7 @@ impl Pack {
                 || winds.iter().any(|wind: &WindDef| wind.id == id)
                 || rods.iter().any(|rod: &RodDef| rod.id == id)
                 || fishings.iter().any(|rod: &FishingDef| rod.id == id)
+                || seeds.iter().any(|seed: &SeedsDef| seed.id == id)
                 || cores.iter().any(|core: &CoreDef| core.id == id)
                 || keys.iter().any(|key: &KeyDef| key.id == id)
                 || omens.iter().any(|omen: &OmenDef| omen.id == id)
@@ -2796,6 +2831,7 @@ impl Pack {
                 PackItem::Wind(wind) => winds.push(wind),
                 PackItem::Rod(rod) => rods.push(rod),
                 PackItem::Fishing(rod) => fishings.push(rod),
+                PackItem::Seeds(seed) => seeds.push(seed),
                 PackItem::Core(core) => cores.push(core),
                 PackItem::Key(key) => keys.push(key),
                 PackItem::Omen(omen) => omens.push(omen),
@@ -2826,6 +2862,7 @@ impl Pack {
         self.winds = winds;
         self.rods = rods;
         self.fishings = fishings;
+        self.seeds = seeds;
         self.cores = cores;
         self.keys = keys;
         self.omens = omens;
@@ -2859,6 +2896,7 @@ enum PackItem {
     Wind(WindDef),
     Rod(RodDef),
     Fishing(FishingDef),
+    Seeds(SeedsDef),
     Core(CoreDef),
     Key(KeyDef),
     Omen(OmenDef),
@@ -3275,6 +3313,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("seeds") {
+        require_only(obj, &["seeds", "icon"], &format!("{id}.json"))?;
+        if obj.get("seeds") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json seeds must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Seeds(SeedsDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
     if obj.contains_key("core") {
         require_only(obj, &["core", "icon"], &format!("{id}.json"))?;
         if obj.get("core") != Some(&Value::Bool(true)) {
@@ -3551,6 +3606,7 @@ impl Pack {
             winds: Vec::new(),
             rods: Vec::new(),
             fishings: Vec::new(),
+            seeds: Vec::new(),
             cores: Vec::new(),
             keys: Vec::new(),
             omens: Vec::new(),
@@ -7138,6 +7194,13 @@ mod tests {
         assert!(pack.fishing_ids().contains(&"fishing_rod".to_string()));
         assert_eq!(pack.food_of("fish"), Some(2));
         assert_eq!(pack.tool_icon("fish"), Some("lily_pad"));
+        assert!(pack.is_seeds("wheat_seeds"));
+        assert!(!pack.is_seeds("wheat"));
+        assert_eq!(pack.tool_icon("wheat_seeds"), Some("grass"));
+        assert!(pack.seed_ids().contains(&"wheat_seeds".to_string()));
+        assert_eq!(pack.food_of("wheat"), Some(2));
+        assert_eq!(pack.tool_icon("wheat"), Some("hay_bale"));
+        assert_eq!(pack.hardness_of(Block::new("wheat_crop", 0)), Some(0.1));
         assert!(pack.is_eye("eye_of_ender"));
         assert!(!pack.is_eye("ender_pearl"));
         assert!(!pack.is_pearl("eye_of_ender"));

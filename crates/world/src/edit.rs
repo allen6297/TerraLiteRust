@@ -151,6 +151,7 @@ fn swings(id: &str) -> bool {
             | "dirt"
             | "clay"
             | "grass"
+            | "wheat_crop"
     )
 }
 
@@ -188,6 +189,13 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
     }
     if block.id == "flower" {
         return y > 0 && world.block_at(x, y - 1, z).id == "grass";
+    }
+    if block.id == "wheat_crop" {
+        if y <= 0 {
+            return false;
+        }
+        let soil = world.block_at(x, y - 1, z).id;
+        return soil == "dirt" || soil == "grass" || soil == "farmland";
     }
     if block.id == "flower_pot" {
         return true;

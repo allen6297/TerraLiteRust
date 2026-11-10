@@ -102,6 +102,7 @@ pub fn is_compost(id: &str) -> bool {
         "flower"
             | "cactus"
             | "sugar_cane"
+            | "wheat_seeds"
             | "pumpkin"
             | "melon"
             | "hay_bale"

@@ -1,0 +1,13 @@
+{
+  "elements": [
+    {
+      "from": [2, 0, 8],
+      "to": [14, 4, 8]
+    },
+    {
+      "from": [8, 0, 2],
+      "to": [8, 4, 14]
+    }
+  ],
+  "texture": "assets/terralite/textures/wheat_crop.png"
+}

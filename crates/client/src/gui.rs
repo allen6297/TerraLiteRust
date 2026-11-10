@@ -6168,6 +6168,11 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.seed_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.wind_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
@@ -6328,6 +6333,9 @@ fn tab_of(id: &str) -> &'static str {
             | "clay"
             | "fish"
             | "fishing_rod"
+            | "wheat"
+            | "wheat_crop"
+            | "wheat_seeds"
     ) {
         "nature"
     } else if matches!(
@@ -9397,7 +9405,7 @@ mod tests {
         assert_eq!(gui.selected_id().as_deref(), Some("grass"));
         assert_eq!(
             gui.selected_detail(),
-            "used to make apple and boat and clock and flower and hay bale"
+            "used to make apple and boat and clock and flower and hay bale and wheat seeds"
         );
         let second = gui.quads(1280.0, 720.0);
         let second_y = second

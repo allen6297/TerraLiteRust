@@ -4828,7 +4828,61 @@ impl State {
         true
     }
 
-    /// Spend bone meal on a sugar cane stalk to grow one more block. True when holding fertilizer.
+    /// Plant wheat seeds on dirt or grass. True when holding seeds.
+    fn try_plant_seeds(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_seeds(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let soil = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        let (x, y, z) = if matches!(soil.id, "dirt" | "grass" | "farmland") {
+            (hit.block[0], hit.block[1] + 1, hit.block[2])
+        } else {
+            let below = self
+                .world
+                .block_at(hit.place[0], hit.place[1] - 1, hit.place[2]);
+            if matches!(below.id, "dirt" | "grass" | "farmland") {
+                (hit.place[0], hit.place[1], hit.place[2])
+            } else {
+                self.gui.push_chat("need soil");
+                return true;
+            }
+        };
+        if !(0..256).contains(&y) || !self.world.block_at(x, y, z).is_air() {
+            self.gui.push_chat("blocked");
+            return true;
+        }
+        let slot = self.hotbar.selected();
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                x,
+                y,
+                z,
+                Block::new("wheat_crop", 0),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            Some(slot),
+        );
+        let mote = [x as f32 + 0.5, y as f32 + 0.25, z as f32 + 0.5];
+        self.drops.puff(mote, [0.55, 0.72, 0.28]);
+        self.rebuild_drops();
+        self.gui.push_chat("plant");
+        true
+    }
+
+    /// Spend bone meal on wheat or sugar cane. True when holding fertilizer.
     fn try_fertilize(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -4842,11 +4896,40 @@ impl State {
         let block = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        if block.id != "sugar_cane" {
-            self.gui.push_chat("need cane");
+        if !self.pending.is_empty() {
             return true;
         }
-        if !self.pending.is_empty() {
+        if block.id == "wheat_crop" {
+            if block.metadata >= 3 {
+                self.gui.push_chat("ripe");
+                return true;
+            }
+            let next = block.metadata.saturating_add(1).min(3);
+            let slot = self.hotbar.selected();
+            let (min, max) = body::player_box_bounds(self.camera.eye);
+            self.send_edit(
+                encode_place(
+                    hit.block[0],
+                    hit.block[1],
+                    hit.block[2],
+                    Block::new("wheat_crop", next),
+                    PlayerBox { min, max },
+                ),
+                TAG_PLACE,
+                Some(slot),
+            );
+            let mote = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 0.35 + next as f32 * 0.2,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.drops.puff(mote, [0.72, 0.82, 0.32]);
+            self.rebuild_drops();
+            self.gui.push_chat(if next >= 3 { "ripe" } else { "grow" });
+            return true;
+        }
+        if block.id != "sugar_cane" {
+            self.gui.push_chat("need crop");
             return true;
         }
         let (x, z) = (hit.block[0], hit.block[2]);
@@ -6364,6 +6447,7 @@ impl State {
             || self.try_eye()
             || self.try_arrow()
             || self.try_fish()
+            || self.try_plant_seeds()
             || self.try_fertilize()
         {
             return;
@@ -6596,6 +6680,17 @@ impl State {
                 && self.hotbar.collect("honey")
             {
                 self.hotbar_dirty = true;
+            }
+            if before.id == "wheat_crop" {
+                id.clear();
+                count = 0;
+                let cell_at = [cell.x, cell.y, cell.z];
+                if before.metadata >= 3 {
+                    self.drops.spawn("wheat", cell_at, remains);
+                    self.gui.push_chat("harvest");
+                }
+                self.drops.spawn("wheat_seeds", cell_at, remains);
+                self.rebuild_drops();
             }
             if before.id == "beehive" && self.hotbar.slot(self.hotbar.selected()).is_none() {
                 self.bee.anger();
@@ -8823,6 +8918,103 @@ impl State {
     }
 
     /// Mid-climb on the shaft ladder looking into the pit, then quit with a PNG.
+    /// Ripe wheat on dirt mid-harvest with a mote, then quit with a PNG.
+    pub fn arm_wheat_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 10;
+        let cz = 18;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 1)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::AIR,
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 3,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 3),
+        });
+        changes.push(CellChange {
+            x: cx - 1,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 2),
+        });
+        changes.push(CellChange {
+            x: cx + 1,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 1),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, 2.7, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(cx as f32 - 2.4, 2.05 + body::EYE_HEIGHT, cz as f32 + 2.6);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote = [cx as f32 + 0.5, 3.05, cz as f32 + 0.5];
+        self.note_shot_at = Some(mote);
+        self.note_shot_pitch = 4;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(mote, [0.78, 0.72, 0.28]);
+        self.drops.note(mote, 4);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(4), mote);
+        self.found_compound = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("wheat_seeds");
+        let _ = self.hotbar.collect("bone_meal");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("harvest");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Mid-grow a sugar cane stalk with bone meal puff, then quit with a PNG.
     pub fn arm_grow_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);

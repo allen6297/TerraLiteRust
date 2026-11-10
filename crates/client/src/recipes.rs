@@ -638,6 +638,7 @@ mod tests {
                 "tripwire".to_string(),
                 "vine".to_string(),
                 "water".to_string(),
+                "wheat_seeds".to_string(),
                 "wind_charge".to_string(),
                 "wire".to_string(),
                 "wooden_pickaxe".to_string(),
