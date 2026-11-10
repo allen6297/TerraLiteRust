@@ -8606,6 +8606,70 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shrine lectern on page 2 of the guidebook, then quit with a PNG.
+    pub fn arm_lectern_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (lx, lz) = rebuild_world::SHRINE_LECTERN;
+        let mut ly = 4;
+        for y in 0..80 {
+            if self.world.block_at(lx, y, lz).id == "lectern" {
+                ly = y;
+                break;
+            }
+        }
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: lx,
+                y: ly,
+                z: lz,
+                block: Block::new("lectern", 1),
+            }],
+        );
+        self.chunk_bake.touch(lx, lz);
+        let focus = glam::Vec3::new(lx as f32 + 0.5, ly as f32 + 0.85, lz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            lx as f32 + 0.5,
+            ly as f32 + 1.3 + body::EYE_HEIGHT,
+            lz as f32 + 3.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let _ = self.gui.open_lectern([lx, ly, lz], true);
+        let _ = self.gui.turn_lectern(1);
+        self.gui.push_chat(gui::LECTERN_PAGES[1]);
+        self.found_shrine = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(lx + dx * 8, lz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shrine bell panel mid-ring with a mote, then quit with a PNG.
     pub fn arm_bell_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -11237,6 +11301,28 @@ impl State {
                     self.gui.note_lectern(word);
                     self.gui.push_chat(word);
                     self.hotbar_dirty = true;
+                }
+                if self.gui.lectern_open()
+                    && matches!(
+                        code,
+                        KeyCode::ArrowLeft
+                            | KeyCode::ArrowRight
+                            | KeyCode::KeyA
+                            | KeyCode::KeyD
+                    )
+                {
+                    let delta = match code {
+                        KeyCode::ArrowLeft | KeyCode::KeyA => -1,
+                        _ => 1,
+                    };
+                    if let Some(line) = self.gui.turn_lectern(delta) {
+                        if let Some(at) = self.gui.lectern_at() {
+                            let source =
+                                [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+                            self.play_world(crate::audio::Sound::Note(5), source);
+                        }
+                        self.gui.push_chat(line);
+                    }
                 }
                 if self.gui.shelf_open() && code == KeyCode::Enter {
                     let word = self.store_shelf();

@@ -271,6 +271,9 @@ pub const SHRINE_TABLE: (i32, i32) = (SHRINE_FURNACE.0, SHRINE_FURNACE.1 - 1);
 /// Bell west of the altar pedestal.
 pub const SHRINE_BELL: (i32, i32) = (SHRINE.0 - 2, SHRINE.1);
 
+/// Lectern with a guidebook, north of the altar.
+pub const SHRINE_LECTERN: (i32, i32) = (SHRINE.0, SHRINE.1 + 2);
+
 const SHRINE_CHUNK: (i32, i32) = (2, 2);
 
 /// Marsh clay bank south of the demo pad, under the shallow water.
@@ -372,6 +375,10 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     let bell_x = (SHRINE_BELL.0 - chunk_x * 16) as u8;
     let bell_z = (SHRINE_BELL.1 - chunk_z * 16) as u8;
     blocks.push((bell_x, floor, bell_z, Block::new("bell", 0)));
+    // North of the altar: open the guidebook and turn pages.
+    let lectern_x = (SHRINE_LECTERN.0 - chunk_x * 16) as u8;
+    let lectern_z = (SHRINE_LECTERN.1 - chunk_z * 16) as u8;
+    blocks.push((lectern_x, floor, lectern_z, Block::new("lectern", 1)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -863,6 +870,12 @@ mod tests {
         assert_eq!(
             (2 * 16 + i32::from(local_x - 2), 2 * 16 + i32::from(local_z)),
             SHRINE_BELL
+        );
+        assert_eq!(shrine.block(local_x, floor, local_z + 2).id, "lectern");
+        assert_eq!(shrine.block(local_x, floor, local_z + 2).metadata, 1);
+        assert_eq!(
+            (2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z + 2)),
+            SHRINE_LECTERN
         );
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);

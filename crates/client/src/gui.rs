@@ -710,6 +710,10 @@ pub struct Gui {
     lectern_note: String,
     /// The lectern the page belongs to.
     lectern_at: Option<[i32; 3]>,
+    /// Index into [`LECTERN_PAGES`] while a book is open.
+    lectern_page: usize,
+    /// True when the open lectern already holds a book.
+    lectern_has_book: bool,
     compost_open: bool,
     /// The line under the compost title. Enter replaces it with the level.
     compost_note: String,
@@ -773,8 +777,16 @@ pub struct Gui {
     fletch_note: String,
 }
 
-/// The one page a lectern reads aloud.
-pub const LECTERN_PAGE: &str = "the road west of the stairs";
+/// First page a lectern reads aloud (kept for callers that want page 1).
+pub const LECTERN_PAGE: &str = LECTERN_PAGES[0];
+
+/// Pages of the shrine guidebook. Arrow keys turn them.
+pub const LECTERN_PAGES: [&str; 4] = [
+    "the road west of the stairs",
+    "campfire smoke north of the oak",
+    "clay under the southern marsh",
+    "ring the bell beside the altar",
+];
 
 /// The one line a hanging sign shows.
 pub const HANGING_LINE: &str = "the path north of the camp";
@@ -848,6 +860,8 @@ impl Gui {
                 lectern_open: false,
                 lectern_note: String::new(),
                 lectern_at: None,
+                lectern_page: 0,
+                lectern_has_book: false,
                 compost_open: false,
                 compost_note: String::new(),
                 compost_at: None,
@@ -959,6 +973,8 @@ impl Gui {
                     lectern_open: false,
                     lectern_note: String::new(),
                     lectern_at: None,
+                    lectern_page: 0,
+                    lectern_has_book: false,
                     compost_open: false,
                     compost_note: String::new(),
                     compost_at: None,
@@ -1080,6 +1096,8 @@ impl Gui {
             lectern_open: false,
             lectern_note: String::new(),
             lectern_at: None,
+            lectern_page: 0,
+            lectern_has_book: false,
             compost_open: false,
             compost_note: String::new(),
             compost_at: None,
@@ -1956,8 +1974,10 @@ impl Gui {
             return false;
         }
         self.lectern_at = Some(at);
+        self.lectern_has_book = has_book;
+        self.lectern_page = 0;
         self.lectern_note = if has_book {
-            LECTERN_PAGE.to_string()
+            LECTERN_PAGES[0].to_string()
         } else {
             "enter places a book".to_string()
         };
@@ -1973,9 +1993,42 @@ impl Gui {
         self.lectern_at
     }
 
+    pub fn lectern_has_book(&self) -> bool {
+        self.lectern_has_book
+    }
+
+    pub fn lectern_page(&self) -> usize {
+        self.lectern_page
+    }
+
+    /// Turn the open book. `delta` is −1 or +1. `Some` is the new page line.
+    pub fn turn_lectern(&mut self, delta: i32) -> Option<&'static str> {
+        if !self.lectern_open || !self.lectern_has_book || delta == 0 {
+            return None;
+        }
+        let n = LECTERN_PAGES.len() as i32;
+        let next = (self.lectern_page as i32 + delta).rem_euclid(n) as usize;
+        self.lectern_page = next;
+        let line = LECTERN_PAGES[next];
+        self.lectern_note = line.to_string();
+        Some(line)
+    }
+
     /// The word the last read left on the page.
     pub fn note_lectern(&mut self, note: &str) {
         self.lectern_note = note.to_string();
+        self.lectern_has_book = note != "enter places a book" && note != "need a book";
+        if self.lectern_has_book {
+            if let Some((i, _)) = LECTERN_PAGES
+                .iter()
+                .enumerate()
+                .find(|(_, page)| **page == note)
+            {
+                self.lectern_page = i;
+            } else {
+                self.lectern_page = 0;
+            }
+        }
     }
 
     /// A composter. `level` of 3 or more asks to take bone meal.
@@ -3086,9 +3139,18 @@ impl Gui {
         if code == KeyCode::KeyF || code == KeyCode::Escape {
             self.lectern_open = false;
             self.lectern_at = None;
+            self.lectern_page = 0;
+            self.lectern_has_book = false;
             return true;
         }
-        code == KeyCode::Enter
+        matches!(
+            code,
+            KeyCode::Enter
+                | KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::KeyA
+                | KeyCode::KeyD
+        )
     }
 
     fn on_compost(&mut self, code: KeyCode) -> bool {
@@ -3430,7 +3492,13 @@ impl Gui {
             return chart_quads(width, height, &self.chart_note);
         }
         if self.lectern_open {
-            return lectern_quads(width, height, &self.lectern_note);
+            return lectern_quads(
+                width,
+                height,
+                &self.lectern_note,
+                self.lectern_page,
+                self.lectern_has_book,
+            );
         }
         if self.compost_open {
             return compost_quads(width, height, &self.compost_note);
@@ -6870,8 +6938,54 @@ fn chart_quads(width: f32, height: f32, note: &str) -> Vec<Quad> {
     station_note(width, height, "Chart", note)
 }
 
-fn lectern_quads(width: f32, height: f32, note: &str) -> Vec<Quad> {
-    station_note(width, height, "Lectern", note)
+fn lectern_quads(
+    width: f32,
+    height: f32,
+    note: &str,
+    page: usize,
+    has_book: bool,
+) -> Vec<Quad> {
+    if !has_book {
+        return station_note(width, height, "Lectern", note);
+    }
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let screen = inventory_screen();
+    let title = brand("Lectern");
+    let footer = format!(
+        "page {}/{}   left right turn",
+        page + 1,
+        LECTERN_PAGES.len()
+    );
+    let panel_w = measure(&title, BRAND_SCALE)
+        .max(measure(note, 1.0))
+        .max(measure(&footer, 1.0))
+        + PAD * 2.0;
+    let panel_h = PAD + BRAND_H + TITLE_GAP + LINE + 10.0 + LINE + PAD;
+    let (mut quads, left, bottom, _) =
+        station_chrome(width, height, &title, panel_w, panel_h, &screen);
+    draw_text(
+        &mut quads,
+        width,
+        height,
+        left + PAD,
+        bottom + PAD + LINE + 10.0,
+        note,
+        INK,
+        1.0,
+    );
+    draw_text(
+        &mut quads,
+        width,
+        height,
+        left + PAD,
+        bottom + PAD,
+        &footer,
+        INK,
+        1.0,
+    );
+    quads
 }
 
 fn compost_quads(width: f32, height: f32, note: &str) -> Vec<Quad> {
@@ -8040,6 +8154,8 @@ mod tests {
             lectern_open: false,
             lectern_note: String::new(),
             lectern_at: None,
+            lectern_page: 0,
+            lectern_has_book: false,
             compost_open: false,
             compost_note: String::new(),
             compost_at: None,
@@ -8619,6 +8735,16 @@ mod tests {
         assert!(gui.open_lectern([1, 1, 1], true));
         gui.note_lectern(LECTERN_PAGE);
         assert_eq!(gui.screen_id(), "lectern");
+        assert!(gui.lectern_has_book());
+        assert_eq!(gui.lectern_page(), 0);
+        assert_eq!(
+            gui.turn_lectern(1),
+            Some(LECTERN_PAGES[1])
+        );
+        assert_eq!(gui.lectern_page(), 1);
+        assert_eq!(gui.turn_lectern(-1), Some(LECTERN_PAGES[0]));
+        assert_eq!(gui.turn_lectern(-1), Some(LECTERN_PAGES[3]));
+        assert!(!gui.quads(1280.0, 720.0).is_empty());
         assert!(gui.on_press(KeyCode::Escape));
 
         assert!(gui.open_compost([3, 1, 3], 0));
