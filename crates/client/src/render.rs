@@ -929,6 +929,8 @@ pub struct State {
     posed_eye: glam::Vec3,
     posed_yaw: f32,
     posed_pitch: f32,
+    /// Last swing bit sent on pose (dig/attack pulse).
+    posed_swing: bool,
     port: u16,
     gui: gui::Gui,
     menu: gui::Menu,
@@ -2178,6 +2180,7 @@ impl State {
             posed_eye,
             posed_yaw,
             posed_pitch,
+            posed_swing: false,
             port,
             gui: gui::Gui::new(),
             menu: gui::Menu::new(),
@@ -2869,12 +2872,16 @@ impl State {
                 yaw: -0.8,
                 name: "Player2".into(),
                 held: "torch".into(),
+                swinging: false,
+                pose: 0.0,
             },
             crate::peers::Other {
                 eye: [6.8, 1.0 + crate::body::EYE_HEIGHT, 9.2],
                 yaw: 0.6,
                 name: "Kalob".into(),
                 held: "cobblestone".into(),
+                swinging: false,
+                pose: 0.0,
             },
         ];
         self.rebuild_peers();
@@ -2883,6 +2890,85 @@ impl State {
 
         let eye = glam::Vec3::new(8.5, 3.4 + crate::body::EYE_HEIGHT, 14.0);
         let focus = glam::Vec3::new(8.5, 2.2, 9.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Peer dig/attack swing with held item, then quit with a PNG.
+    pub fn arm_peer_swing_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        // Dig clip peaks at ~0.2s (−70° right arm); freeze that for the still.
+        self.others = vec![
+            crate::peers::Other {
+                eye: [9.35, 1.0 + crate::body::EYE_HEIGHT, 10.9],
+                yaw: 3.55,
+                name: "Player2".into(),
+                held: "cobblestone".into(),
+                swinging: true,
+                pose: 0.2,
+            },
+            crate::peers::Other {
+                eye: [7.55, 1.0 + crate::body::EYE_HEIGHT, 10.35],
+                yaw: -0.15,
+                name: "Kalob".into(),
+                held: "torch".into(),
+                swinging: true,
+                pose: 0.2,
+            },
+        ];
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        let eye = glam::Vec3::new(8.5, 2.15 + crate::body::EYE_HEIGHT, 13.05);
+        let focus = glam::Vec3::new(8.5, 1.75, 10.55);
         self.camera = crate::camera::Camera::looking_at(eye, focus);
         self.camera.on_ground = true;
         self.camera.velocity_y = 0.0;
@@ -2944,12 +3030,16 @@ impl State {
                 yaw: 3.4,
                 name: "Player2".into(),
                 held: "torch".into(),
+                swinging: false,
+                pose: 0.0,
             },
             crate::peers::Other {
                 eye: [7.6, 1.0 + crate::body::EYE_HEIGHT, 10.4],
                 yaw: -0.2,
                 name: "Kalob".into(),
                 held: "cobblestone".into(),
+                swinging: false,
+                pose: 0.0,
             },
         ];
         self.rebuild_peers();
@@ -3221,15 +3311,29 @@ impl State {
     }
 
     pub fn set_breaking(&mut self, held: bool) {
+        let was = self.dig.is_held();
         if !held {
             self.dig.set_held(false);
+            if was {
+                self.pose_dirty = true;
+                self.pose_left = 0.0;
+            }
             return;
         }
         if self.try_script_attack() || self.hop_egg() || self.blast_crystal() {
             self.dig.set_held(false);
+            if was {
+                self.pose_dirty = true;
+                self.pose_left = 0.0;
+            }
             return;
         }
         self.dig.set_held(true);
+        if !was {
+            // Swing pulse ships on the next pose without waiting on the rate limit.
+            self.pose_dirty = true;
+            self.pose_left = 0.0;
+        }
     }
 
     /// Route a mouse button through remaps / keybind listening.
@@ -7910,11 +8014,13 @@ impl State {
                 self.gui.push_chat(&line);
             }
             if let Some(peers) = self.link.try_peers() {
+                let prior_pose: Vec<f32> = self.others.iter().map(|peer| peer.pose).collect();
                 self.others = peers
                     .into_iter()
                     .enumerate()
                     .map(|(index, peer)| {
                         let name = peer.name().to_string();
+                        let swinging = peer.swing();
                         crate::peers::Other {
                             eye: [peer.x, peer.y, peer.z],
                             yaw: peer.yaw,
@@ -7924,6 +8030,13 @@ impl State {
                                 name
                             },
                             held: peer.held().to_string(),
+                            swinging,
+                            // Keep the dig clock smooth across pose packets.
+                            pose: if swinging {
+                                prior_pose.get(index).copied().unwrap_or(0.12)
+                            } else {
+                                0.0
+                            },
                         }
                     })
                     .collect();
@@ -19076,6 +19189,11 @@ impl State {
 
     fn flush_pose(&mut self, dt: f32) {
         self.pose_left = (self.pose_left - dt).max(0.0);
+        let swing = self.dig.is_held();
+        if swing != self.posed_swing {
+            self.pose_dirty = true;
+            self.pose_left = 0.0;
+        }
         let due = self.pose_dirty || !self.local;
         if !due || self.pose_left > 0.0 || self.told_disconnect {
             return;
@@ -19092,6 +19210,7 @@ impl State {
                 pitch,
                 &self.player_name,
                 self.hotbar.slot(self.hotbar.selected()).unwrap_or(""),
+                swing,
             ))
             .is_err()
         {
@@ -19101,8 +19220,10 @@ impl State {
         self.posed_eye = eye;
         self.posed_yaw = yaw;
         self.posed_pitch = pitch;
+        self.posed_swing = swing;
         self.pose_dirty = false;
-        self.pose_left = 0.4;
+        // While swinging, refresh often so peers see the dig pulse.
+        self.pose_left = if swing { 0.12 } else { 0.4 };
     }
 
     pub fn mouse_look(&mut self, dx: f64, dy: f64) {
@@ -20700,6 +20821,10 @@ impl State {
         self.flush_bag();
         self.flush_pose(dt);
         self.flush_chest();
+        // Still shots freeze peer dig clocks so the armed pose stays readable.
+        if self.cook_shot_path.is_none() && crate::peers::tick(&mut self.others, dt) {
+            self.rebuild_peers();
+        }
         self.gui.stoke(dt);
         self.gui.age_chat(dt);
         self.tick_compound_flow(dt);

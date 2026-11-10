@@ -198,6 +198,8 @@ struct Args {
     shot_peer_nameplates: Option<std::path::PathBuf>,
     /// Peer held hotbar item in-hand, then quit.
     shot_peer_held_item: Option<std::path::PathBuf>,
+    /// Peer dig/attack swing pose, then quit.
+    shot_peer_swing: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -444,6 +446,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_localhost_chat: args.shot_localhost_chat,
         shot_peer_nameplates: args.shot_peer_nameplates,
         shot_peer_held_item: args.shot_peer_held_item,
+        shot_peer_swing: args.shot_peer_swing,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -568,6 +571,7 @@ struct App {
     shot_localhost_chat: Option<std::path::PathBuf>,
     shot_peer_nameplates: Option<std::path::PathBuf>,
     shot_peer_held_item: Option<std::path::PathBuf>,
+    shot_peer_swing: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -805,6 +809,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_peer_held_item.take() {
                     state.arm_peer_held_item_shot(path);
+                }
+                if let Some(path) = self.shot_peer_swing.take() {
+                    state.arm_peer_swing_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1159,6 +1166,7 @@ where
         shot_localhost_chat: None,
         shot_peer_nameplates: None,
         shot_peer_held_item: None,
+        shot_peer_swing: None,
         name: None,
         host: false,
         join: false,
@@ -1505,6 +1513,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-peer-held-item".to_string())?;
                 parsed.shot_peer_held_item = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-peer-swing" | "--shot-swing" | "--shot-peer-attack" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-peer-swing".to_string())?;
+                parsed.shot_peer_swing = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -1967,6 +1981,17 @@ mod tests {
         assert_eq!(
             args.shot_peer_held_item.as_deref(),
             Some(std::path::Path::new("peer-held-item.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-peer-swing".into(),
+            "peer-swing.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_peer_swing.as_deref(),
+            Some(std::path::Path::new("peer-swing.png"))
         );
     }
 }

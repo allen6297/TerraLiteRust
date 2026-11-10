@@ -70,10 +70,14 @@ fn figure() -> &'static Figure {
     })
 }
 
-/// Mesh used by remote peers: rest pose facing `yaw` (Blockbench +Z convention).
-pub fn peer_mesh(eye: [f32; 3], yaw: f32) -> Vec<Vertex> {
+/// Mesh used by remote peers facing `yaw` (Blockbench +Z convention).
+///
+/// `swinging` plays the dig clip; `pose` is the clip clock in seconds.
+pub fn peer_mesh(eye: [f32; 3], yaw: f32, swinging: bool, pose: f32) -> Vec<Vertex> {
     let feet = [eye[0], eye[1] - EYE_HEIGHT, eye[2]];
-    blockbench::mesh(figure(), "idle", 0.0, yaw, feet, &[])
+    let clip = if swinging { "dig" } else { "idle" };
+    let t = if swinging { pose } else { 0.0 };
+    blockbench::mesh(figure(), clip, t, yaw, feet, &[])
 }
 
 /// Soft-render the idle body for an egui inventory preview (third-person style).

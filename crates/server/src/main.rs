@@ -170,6 +170,7 @@ struct LivePlayer {
     yaw: f32,
     name: String,
     held: String,
+    swing: bool,
 }
 
 /// One chat line waiting for other Host/Join peers.
@@ -294,6 +295,7 @@ fn note_peer(
     yaw: f32,
     name: &str,
     held: &str,
+    swing: bool,
 ) {
     let cleaned = rebuild_world::player_label(name);
     let held = rebuild_world::item_id(held);
@@ -306,6 +308,7 @@ fn note_peer(
             peer.name = cleaned;
         }
         peer.held = held;
+        peer.swing = swing;
         return;
     }
     peers.push(LivePlayer {
@@ -320,6 +323,7 @@ fn note_peer(
             cleaned
         },
         held,
+        swing,
     });
 }
 
@@ -331,6 +335,7 @@ fn other_peers(peers: &[LivePlayer], id: u32) -> Vec<PeerPose> {
             PeerPose::new(peer.x, peer.y, peer.z, peer.yaw)
                 .with_name(&peer.name)
                 .with_held(&peer.held)
+                .with_swing(peer.swing)
         })
         .collect()
 }
@@ -361,6 +366,7 @@ fn session(
             -1.57,
             "",
             "",
+            false,
         );
         let cells = occupied_cells(&guard.world);
         let (center_x, center_z) = guard.world.center();
@@ -395,12 +401,13 @@ fn session(
             pitch,
             name,
             held,
+            swing,
         } = &request
         {
             if let Some(path) = save.as_deref() {
                 store_pose(path, *x, *y, *z, *yaw, *pitch);
             }
-            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw, name, held);
+            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw, name, held, *swing);
             // Peer chat rides ahead of the pose list; client drains TAG_CHAT then peers.
             deliver_chats(&mut stream, &guard, id, &mut last_chat)?;
             let others = other_peers(&guard.peers, id);
@@ -997,13 +1004,14 @@ mod tests {
 
         write_frame(
             &mut second,
-            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2", "torch"),
+            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2", "torch", false),
         )
         .unwrap();
         let seen = decode_peers(&read_frame(&mut second).unwrap()).unwrap();
         assert_eq!(seen.len(), 1);
         assert!((seen[0].x - 8.5).abs() < 0.1);
         assert_eq!(seen[0].name(), "Player1");
+        assert!(!seen[0].swing());
 
         // First player chats (echoed back); second receives it on the next pose poll.
         write_frame(&mut first, &encode_chat("hello there")).unwrap();
@@ -1011,13 +1019,13 @@ mod tests {
         assert!(matches!(echo, ClientRequest::Chat { text } if text == "hello there"));
         write_frame(
             &mut first,
-            &encode_pose(8.5, 5.12, 14.5, -1.57, 0.0, "Host", "cobblestone"),
+            &encode_pose(8.5, 5.12, 14.5, -1.57, 0.0, "Host", "cobblestone", true),
         )
         .unwrap();
         let _ = decode_peers(&read_frame(&mut first).unwrap()).unwrap();
         write_frame(
             &mut second,
-            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2", "torch"),
+            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2", "torch", false),
         )
         .unwrap();
         let chat_frame = read_frame(&mut second).unwrap();
@@ -1026,6 +1034,7 @@ mod tests {
         let seen_again = decode_peers(&read_frame(&mut second).unwrap()).unwrap();
         assert_eq!(seen_again.len(), 1);
         assert_eq!(seen_again[0].held(), "cobblestone");
+        assert!(seen_again[0].swing());
 
         let save = std::env::temp_dir().join(format!("terralite-size-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&save);

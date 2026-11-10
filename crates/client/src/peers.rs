@@ -3,7 +3,8 @@
 //! Each one is the same Blockbench player body as the local avatar, posed at the
 //! eye the server sent. They are not saved and they do not block a walk. A solo
 //! world has none. A short nameplate rides above the head in screen space. The
-//! selected hotbar item is drawn as a small cube in the right hand.
+//! selected hotbar item is drawn as a small cube in the right hand. A dig/attack
+//! swing pulse plays the dig clip and lifts the grip briefly.
 
 use glam::{Mat4, Vec3, Vec4};
 
@@ -19,6 +20,10 @@ pub struct Other {
     pub name: String,
     /// Selected hotbar item id; empty when bare-handed.
     pub held: String,
+    /// True while the peer is left-click digging / attacking.
+    pub swinging: bool,
+    /// Dig/idle clip clock in seconds (advanced locally while swinging).
+    pub pose: f32,
 }
 
 pub fn mesh(players: &[Other]) -> Vec<Vertex> {
@@ -27,12 +32,38 @@ pub fn mesh(players: &[Other]) -> Vec<Vertex> {
         // Camera yaw 0 looks +X. The Blockbench figure faces +Z at yaw 0.
         let (sy, cy) = player.yaw.sin_cos();
         let model_yaw = cy.atan2(sy);
-        out.extend(player::peer_mesh(player.eye, model_yaw));
+        out.extend(player::peer_mesh(
+            player.eye,
+            model_yaw,
+            player.swinging,
+            player.pose,
+        ));
         if !player.held.is_empty() {
-            out.extend(held_cube(player.eye, player.yaw, &player.held));
+            out.extend(held_cube(
+                player.eye,
+                player.yaw,
+                &player.held,
+                player.swinging,
+                player.pose,
+            ));
         }
     }
     out
+}
+
+/// Advance dig clocks for swinging peers. Returns true when any mesh must rebuild.
+pub fn tick(players: &mut [Other], dt: f32) -> bool {
+    let mut dirty = false;
+    for player in players {
+        if player.swinging {
+            player.pose = (player.pose + dt.max(0.0)).rem_euclid(64.0);
+            dirty = true;
+        } else if player.pose != 0.0 {
+            player.pose = 0.0;
+            dirty = true;
+        }
+    }
+    dirty
 }
 
 /// Default Host/Join label when the peer sent no name (`Player2`, `Player3`, …).
@@ -41,19 +72,33 @@ pub fn default_label(index: usize) -> String {
 }
 
 /// Right-hand grip in world space for a peer facing `yaw` (camera convention).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn hand_pos(eye: [f32; 3], yaw: f32) -> [f32; 3] {
+    hand_pos_swing(eye, yaw, false, 0.0)
+}
+
+/// Grip with a brief dig lift so the held cube follows the swing.
+pub fn hand_pos_swing(eye: [f32; 3], yaw: f32, swinging: bool, pose: f32) -> [f32; 3] {
     let (sy, cy) = yaw.sin_cos();
     let forward = [cy, 0.0, sy];
     let right = [-sy, 0.0, cy];
+    // Dig clip cycles ~0.5s; lift the grip on the downstroke so others see it.
+    let phase = if swinging {
+        ((pose * std::f32::consts::TAU * 2.0).sin() * 0.5 + 0.5).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let lift = phase * 0.28;
+    let reach = phase * 0.18;
     [
-        eye[0] + right[0] * 0.38 + forward[0] * 0.28,
-        eye[1] - 0.42,
-        eye[2] + right[2] * 0.38 + forward[2] * 0.28,
+        eye[0] + right[0] * 0.38 + forward[0] * (0.28 + reach),
+        eye[1] - 0.42 + lift,
+        eye[2] + right[2] * 0.38 + forward[2] * (0.28 + reach),
     ]
 }
 
-fn held_cube(eye: [f32; 3], yaw: f32, id: &str) -> Vec<Vertex> {
-    let center = hand_pos(eye, yaw);
+fn held_cube(eye: [f32; 3], yaw: f32, id: &str, swinging: bool, pose: f32) -> Vec<Vertex> {
+    let center = hand_pos_swing(eye, yaw, swinging, pose);
     let half = 0.14;
     let textured = crate::texture::block_face(id);
     let color = if textured > 0.0 {
@@ -226,12 +271,16 @@ mod tests {
                 yaw: 0.0,
                 name: "Player2".into(),
                 held: "torch".into(),
+                swinging: false,
+                pose: 0.0,
             },
             Other {
                 eye: [10.0, 5.12, 12.0],
                 yaw: 1.0,
                 name: String::new(),
                 held: String::new(),
+                swinging: true,
+                pose: 0.18,
             },
         ];
         let body = mesh(&players);
@@ -246,6 +295,25 @@ mod tests {
         assert_eq!(default_label(1), "Player3");
         let hand = hand_pos([8.5, 5.12, 14.5], 0.0);
         assert!((hand[1] - (5.12 - 0.42)).abs() < 0.01);
+        let swung = hand_pos_swing([8.5, 5.12, 14.5], 0.0, true, 0.12);
+        assert!(swung[1] > hand[1]);
+    }
+
+    #[test]
+    fn tick_advances_swing_pose() {
+        let mut players = [Other {
+            eye: [8.5, 5.12, 14.5],
+            yaw: 0.0,
+            name: "Player2".into(),
+            held: String::new(),
+            swinging: true,
+            pose: 0.0,
+        }];
+        assert!(tick(&mut players, 0.1));
+        assert!(players[0].pose > 0.0);
+        players[0].swinging = false;
+        assert!(tick(&mut players, 0.1));
+        assert_eq!(players[0].pose, 0.0);
     }
 
     #[test]
@@ -259,6 +327,8 @@ mod tests {
             yaw: 0.0,
             name: "Player2".into(),
             held: String::new(),
+            swinging: false,
+            pose: 0.0,
         }];
         let plates = nameplate_quads(&players, vp, 1280.0, 720.0, eye);
         assert!(!plates.is_empty());

@@ -130,6 +130,7 @@ pub enum ClientRequest {
     /// Eye position and look, in radians for yaw and pitch.
     /// `name` is a short Host/Join label (letters/digits, at most 12).
     /// `held` is the selected hotbar item id (empty when bare-handed).
+    /// `swing` is true while the peer is left-click digging / attacking.
     Pose {
         x: f32,
         y: f32,
@@ -138,6 +139,7 @@ pub enum ClientRequest {
         pitch: f32,
         name: String,
         held: String,
+        swing: bool,
     },
     /// A line of letters and spaces, at most 32 characters.
     Chat {
@@ -152,7 +154,7 @@ pub enum ClientRequest {
     },
 }
 
-/// One other player's eye, look, nameplate, and held item.
+/// One other player's eye, look, nameplate, held item, and swing pulse.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PeerPose {
     pub x: f32,
@@ -163,6 +165,7 @@ pub struct PeerPose {
     name_len: u8,
     held: [u8; 24],
     held_len: u8,
+    swing: bool,
 }
 
 impl PeerPose {
@@ -176,6 +179,7 @@ impl PeerPose {
             name_len: 0,
             held: [0; 24],
             held_len: 0,
+            swing: false,
         }
     }
 
@@ -186,6 +190,11 @@ impl PeerPose {
 
     pub fn with_held(mut self, held: &str) -> Self {
         self.set_held(held);
+        self
+    }
+
+    pub fn with_swing(mut self, swing: bool) -> Self {
+        self.swing = swing;
         self
     }
 
@@ -219,6 +228,10 @@ impl PeerPose {
     pub fn held(&self) -> &str {
         let len = self.held_len as usize;
         std::str::from_utf8(&self.held[..len.min(24)]).unwrap_or("")
+    }
+
+    pub fn swing(&self) -> bool {
+        self.swing
     }
 
     /// `Player{id}` when no name was sent.
@@ -410,6 +423,7 @@ pub fn encode_pose(
     pitch: f32,
     name: &str,
     held: &str,
+    swing: bool,
 ) -> Vec<u8> {
     let label = player_label(name);
     let label_bytes = label.as_bytes();
@@ -417,7 +431,7 @@ pub fn encode_pose(
     let held = item_id(held);
     let held_bytes = held.as_bytes();
     let held_len = held_bytes.len().min(24);
-    let mut out = Vec::with_capacity(23 + label_len + held_len);
+    let mut out = Vec::with_capacity(24 + label_len + held_len);
     out.push(TAG_POSE);
     for value in [x, y, z, yaw, pitch] {
         push_f32(&mut out, value);
@@ -426,6 +440,7 @@ pub fn encode_pose(
     out.extend_from_slice(&label_bytes[..label_len]);
     out.push(held_len as u8);
     out.extend_from_slice(&held_bytes[..held_len]);
+    out.push(u8::from(swing));
     out
 }
 
@@ -467,7 +482,7 @@ pub fn encode_chat(text: &str) -> Vec<u8> {
 
 pub fn encode_peers(peers: &[PeerPose]) -> Vec<u8> {
     let count = peers.len().min(8);
-    let mut out = Vec::with_capacity(2 + count * 54);
+    let mut out = Vec::with_capacity(2 + count * 55);
     out.push(TAG_PEERS);
     out.push(count as u8);
     for peer in peers.iter().take(count) {
@@ -481,6 +496,7 @@ pub fn encode_peers(peers: &[PeerPose]) -> Vec<u8> {
         let held_len = peer.held_len.min(24);
         out.push(held_len);
         out.extend_from_slice(&peer.held[..held_len as usize]);
+        out.push(u8::from(peer.swing));
     }
     out
 }
@@ -515,10 +531,12 @@ pub fn decode_peers(body: &[u8]) -> Result<Vec<PeerPose>, String> {
         let held_bytes = reader.take(held_len)?;
         let held = std::str::from_utf8(held_bytes)
             .map_err(|_| "peer held id is not utf-8".to_string())?;
+        let swing = reader.u8()? != 0;
         peers.push(
             PeerPose::new(pose[0], pose[1], pose[2], pose[3])
                 .with_name(text)
-                .with_held(held),
+                .with_held(held)
+                .with_swing(swing),
         );
     }
     reader.finish()?;
@@ -659,6 +677,7 @@ pub fn decode_client(body: &[u8]) -> Result<ClientRequest, String> {
             let held_bytes = reader.take(held_len)?;
             let held = std::str::from_utf8(held_bytes)
                 .map_err(|_| "pose held id is not utf-8".to_string())?;
+            let swing = reader.u8()? != 0;
             ClientRequest::Pose {
                 x: pose[0],
                 y: pose[1],
@@ -667,6 +686,7 @@ pub fn decode_client(body: &[u8]) -> Result<ClientRequest, String> {
                 pitch: pose[4],
                 name: player_label(text),
                 held: item_id(held),
+                swing,
             }
         }
         TAG_CHAT => {
@@ -1022,6 +1042,7 @@ mod tests {
             0.1,
             "Kalob",
             "torch",
+            true,
         ))
         .unwrap()
         {
@@ -1033,6 +1054,7 @@ mod tests {
                 pitch,
                 name,
                 held,
+                swing,
             } => {
                 assert_eq!(x.to_bits(), 8.5f32.to_bits());
                 assert_eq!(y.to_bits(), 5.0f32.to_bits());
@@ -1041,17 +1063,20 @@ mod tests {
                 assert_eq!(pitch.to_bits(), 0.1f32.to_bits());
                 assert_eq!(name, "Kalob");
                 assert_eq!(held, "torch");
+                assert!(swing);
             }
             other => panic!("pose, got {other:?}"),
         }
         let peers = decode_peers(&encode_peers(&[PeerPose::new(8.5, 5.0, 14.0, 0.5)
             .with_name("Player2")
-            .with_held("cobblestone")]))
+            .with_held("cobblestone")
+            .with_swing(true)]))
         .unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].x.to_bits(), 8.5f32.to_bits());
         assert_eq!(peers[0].name(), "Player2");
         assert_eq!(peers[0].held(), "cobblestone");
+        assert!(peers[0].swing());
         assert_eq!(player_label("Hi 2!"), "Hi2");
         assert_eq!(item_id("iron_pickaxe!"), "iron_pickaxe");
         match decode_client(&encode_chest(1, 2, 3, &[("dirt".into(), 4)])).unwrap() {
