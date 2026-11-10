@@ -1338,7 +1338,7 @@ where
                     .ok_or_else(|| "missing value for --shot-enchant".to_string())?;
                 parsed.shot_enchant = Some(std::path::PathBuf::from(value));
             }
-            "--shot-grind" | "--shot-grindstone" => {
+            "--shot-grind" | "--shot-grindstone" | "--shot-grind-scrape" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-grind".to_string())?;

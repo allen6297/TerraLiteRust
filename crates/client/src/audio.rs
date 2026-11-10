@@ -87,6 +87,8 @@ pub enum Sound {
     Ring,
     /// Soft brewing-stand bubble tick.
     Bubble,
+    /// Soft grindstone stone scrape.
+    Grind,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -688,6 +690,7 @@ impl Audio {
             Sound::Pop => torch_pop(),
             Sound::Ring => anvil_clang(),
             Sound::Bubble => brew_bubble(),
+            Sound::Grind => grind_scrape(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -936,6 +939,25 @@ fn iron_ring() -> Vec<i16> {
         let ring = (t * 880.0 * std::f32::consts::TAU).sin() * (-t * 14.0).exp();
         let mixed = (click * 0.8 + ring * 0.55).clamp(-1.0, 1.0);
         samples.push((mixed * 30_000.0) as i16);
+    }
+    samples
+}
+
+/// Soft grindstone scrape. Gritty stone with a short spark tick.
+fn grind_scrape() -> Vec<i16> {
+    let seconds = 0.16;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 241u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let grit = (t * 340.0 * std::f32::consts::TAU).sin() * 0.28
+            + (t * 710.0 * std::f32::consts::TAU).sin() * 0.12;
+        let spark = if t < 0.02 { (1.0 - t / 0.02) * 0.35 } else { 0.0 };
+        let env = (t / 0.015).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.4 + grit + spark) * 0.13 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1588,6 +1610,17 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn grind_scrape_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Grind);
+        assert_eq!(audio.played, vec![Sound::Grind]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Grind);
+        assert_eq!(audio.played, vec![Sound::Grind]);
     }
 
     #[test]
