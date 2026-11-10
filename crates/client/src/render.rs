@@ -14,7 +14,7 @@ use rebuild_world::{
     BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
     PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, compound_host, encode_bag,
     encode_break, encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind,
-    fill_name, held_light_of, load_dir, shape_of,
+    apply_compound_seeps, fill_name, held_light_of, load_dir, plan_compound_seeps, shape_of,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -1000,6 +1000,10 @@ pub struct State {
     ctrl_mod: bool,
     /// Last place/use click time — collapses WindowEvent + DeviceEvent doubles.
     place_click_at: Option<Instant>,
+    /// Seconds until the next compound fill seep pulse.
+    compound_flow_wait: f32,
+    /// One tip when fill first seeps through a pipe this session.
+    compound_flow_told: bool,
     /// The full map sheet is open.
     map_open: bool,
     /// F is down on a held spyglass.
@@ -1966,6 +1970,8 @@ impl State {
             zoom_mouse: false,
             ctrl_mod: false,
             place_click_at: None,
+            compound_flow_wait: 0.35,
+            compound_flow_told: false,
             map_open: false,
             zoom_key: false,
             horn_wait: 0.0,
@@ -4811,6 +4817,46 @@ impl State {
         true
     }
 
+    /// Slow pipe seep: copy fill into one nearby empty host each pulse.
+    fn tick_compound_flow(&mut self, dt: f32) {
+        if !self.playing || self.menu.is_open() || self.dead {
+            return;
+        }
+        self.compound_flow_wait -= dt;
+        if self.compound_flow_wait > 0.0 {
+            return;
+        }
+        self.compound_flow_wait = 0.42;
+        if self.told_disconnect || !self.pending.is_empty() {
+            return;
+        }
+        let eye = self.camera.eye;
+        let focus = [
+            eye.x.floor() as i32,
+            eye.y.floor() as i32,
+            eye.z.floor() as i32,
+        ];
+        let Some(cell) = plan_compound_seeps(&self.world, focus, 20, 1)
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        let player = PlayerBox {
+            min: [1.0e6, 1.0e6, 1.0e6],
+            max: [1.000_000_6e6, 1.000_001_8e6, 1.000_000_6e6],
+        };
+        self.send_edit(
+            encode_place(cell.x, cell.y, cell.z, cell.block, player),
+            TAG_PLACE,
+            None,
+        );
+        if !self.compound_flow_told {
+            self.compound_flow_told = true;
+            self.gui.push_chat("flow");
+        }
+    }
+
     /// Place water or ember into a looked-at compound host (grate, fence, …).
     fn try_compound_fill(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -5812,6 +5858,24 @@ impl State {
                     self.hotbar.consume_at(slot);
                     self.hotbar_dirty = true;
                 }
+            } else if before.id == cell.block.id
+                && before.fill == FILL_NONE
+                && cell.block.fill != FILL_NONE
+                && compound_host(cell.block.id)
+            {
+                // Pipe seep — no held item. Soft mote so flow reads in the world.
+                let origin = [
+                    cell.x as f32 + 0.5,
+                    cell.y as f32 + 0.55,
+                    cell.z as f32 + 0.5,
+                ];
+                let color = match cell.block.fill {
+                    FILL_WATER => [0.28, 0.48, 0.9],
+                    FILL_EMBER => [1.0, 0.42, 0.12],
+                    _ => [0.75, 0.75, 0.75],
+                };
+                self.drops.puff(origin, color);
+                self.rebuild_drops();
             }
         }
         self.chunk_bake.touch(cell.x, cell.z);
@@ -6597,10 +6661,12 @@ impl State {
 
     /// Look at a waterlogged copper grate with cyan outline, then quit with a PNG.
     pub fn arm_compound_shot(&mut self, path: std::path::PathBuf) {
-        let ember = path
+        let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.contains("ember"));
+            .unwrap_or("");
+        let ember = name.contains("ember");
+        let flow = name.contains("flow");
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6641,42 +6707,80 @@ impl State {
                 }
             }
         }
-        // Row of hosts: water grate, empty fence (transfer target), ember glass, leaves.
-        changes.push(CellChange {
-            x: gx,
-            y: gy,
-            z: gz,
-            block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
-        });
-        changes.push(CellChange {
-            x: gx + 1,
-            y: gy,
-            z: gz,
-            block: Block::new("fence", 0),
-        });
-        changes.push(CellChange {
-            x: gx + 2,
-            y: gy,
-            z: gz,
-            block: Block::new("glass", 0).with_fill(FILL_EMBER),
-        });
-        changes.push(CellChange {
-            x: gx + 3,
-            y: gy,
-            z: gz,
-            block: Block::new("leaves", 0).with_fill(FILL_EMBER),
-        });
-        changes.push(CellChange {
-            x: gx + 1,
-            y: gy,
-            z: gz + 1,
-            block: Block::new("oak_stairs", 0).with_fill(FILL_WATER),
-        });
+        if flow {
+            // Pipe of fences: source fill at the west end, empty hosts east.
+            let fill = if ember { FILL_EMBER } else { FILL_WATER };
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(fill),
+            });
+            for step in 1..=4 {
+                changes.push(CellChange {
+                    x: gx + step,
+                    y: gy,
+                    z: gz,
+                    block: Block::new("fence", 0),
+                });
+            }
+        } else {
+            // Row of hosts: water grate, empty fence, ember glass, leaves.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("fence", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: Block::new("glass", 0).with_fill(FILL_EMBER),
+            });
+            changes.push(CellChange {
+                x: gx + 3,
+                y: gy,
+                z: gz,
+                block: Block::new("leaves", 0).with_fill(FILL_EMBER),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz + 1,
+                block: Block::new("oak_stairs", 0).with_fill(FILL_WATER),
+            });
+        }
         apply_changes(&mut self.world, &changes);
+        if flow {
+            // Advance a few seeps so the PNG shows mid-pipe flow.
+            for _ in 0..3 {
+                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
+            }
+        }
         for change in &changes {
             self.chunk_bake.touch(change.x, change.z);
         }
-        let (eye, focus) = if ember {
+        self.chunk_bake.touch(gx + 4, gz);
+        let (eye, focus) = if flow {
+            let held = if ember { "ember_charge" } else { "water_bucket" };
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack(held);
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 1.7 + body::EYE_HEIGHT,
+                    gz as f32 - 3.2,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.5),
+            )
+        } else if ember {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("ember_charge");
             (
@@ -11131,6 +11235,7 @@ impl State {
         self.flush_chest();
         self.gui.stoke(dt);
         self.gui.age_chat(dt);
+        self.tick_compound_flow(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_blast_heat();

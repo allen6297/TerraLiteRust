@@ -28,6 +28,7 @@ mod cluster;
 mod edit;
 mod error;
 mod fixture;
+mod flow;
 mod hooks;
 mod ids;
 mod light;
@@ -55,6 +56,7 @@ pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};
 pub use error::Error;
 pub use fixture::{synthetic_chunk, synthetic_cluster, synthetic_cluster_sized, synthetic_region};
+pub use flow::{apply_compound_seeps, plan_compound_seeps};
 pub use hooks::{
     AfterBreak, AfterPlace, BeforeBreak, BeforePlace, BreakVerdict, EntityClock, Hooks,
     PLAYER_SPAWN, TestHook, TestHookEvent, apply_authoritative,
