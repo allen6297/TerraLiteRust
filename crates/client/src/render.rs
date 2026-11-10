@@ -813,6 +813,9 @@ pub struct State {
     /// False when a dedicated server owns the square.
     local: bool,
     quit: bool,
+    /// One-shot window capture aimed at the zombie, then quit.
+    shot_path: Option<std::path::PathBuf>,
+    shot_frames: u32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1620,6 +1623,8 @@ impl State {
             audio: crate::audio::Audio::new(),
             local,
             quit: false,
+            shot_path: None,
+            shot_frames: 0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -4662,6 +4667,56 @@ impl State {
 
     pub fn window(&self) -> &Window {
         &self.window
+    }
+
+    /// Auto-Play, freeze the zombie at home, and aim the camera for a proof shot.
+    pub fn arm_zombie_shot(&mut self, path: std::path::PathBuf) {
+        self.shot_path = Some(path);
+        self.shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Proven clear stairs drop; zombie on the path under the crosshair.
+        self.camera = crate::camera::Camera::drop_by_the_stairs();
+        let at = [8.5_f32, 1.0, 13.2];
+        self.zombie.rouse(at);
+        self.zombie.hold();
+        self.zombie.face(0.0);
+        let eye = self.camera.eye;
+        let target = glam::Vec3::new(at[0], at[1] + 1.0, at[2]);
+        self.camera = crate::camera::Camera::looking_at(eye, target);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.posed_eye = self.camera.eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.rebuild_zombie();
+        let _ = self.window.focus_window();
+    }
+
+    fn poll_zombie_shot(&mut self) {
+        let Some(path) = self.shot_path.clone() else {
+            return;
+        };
+        self.shot_frames = self.shot_frames.saturating_add(1);
+        if self.shot_frames < 150 || self.zombie_count < 3 {
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("shot wrote {}", path.display());
+                self.shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("shot failed: {err}");
+                if self.shot_frames > 200 {
+                    self.shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
     }
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -8146,7 +8201,201 @@ impl State {
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
+        self.poll_zombie_shot();
     }
+}
+
+#[cfg(windows)]
+fn capture_window_png(window: &Window, path: &std::path::Path) -> Result<(), String> {
+    use std::ptr;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetClientRect(hwnd: *mut core::ffi::c_void, rect: *mut [i32; 4]) -> i32;
+        fn ClientToScreen(hwnd: *mut core::ffi::c_void, point: *mut [i32; 2]) -> i32;
+        fn GetDC(hwnd: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn ReleaseDC(hwnd: *mut core::ffi::c_void, hdc: *mut core::ffi::c_void) -> i32;
+        fn SetForegroundWindow(hwnd: *mut core::ffi::c_void) -> i32;
+        fn ShowWindow(hwnd: *mut core::ffi::c_void, cmd: i32) -> i32;
+    }
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateCompatibleDC(hdc: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn CreateCompatibleBitmap(
+            hdc: *mut core::ffi::c_void,
+            width: i32,
+            height: i32,
+        ) -> *mut core::ffi::c_void;
+        fn SelectObject(
+            hdc: *mut core::ffi::c_void,
+            obj: *mut core::ffi::c_void,
+        ) -> *mut core::ffi::c_void;
+        fn BitBlt(
+            dst: *mut core::ffi::c_void,
+            x: i32,
+            y: i32,
+            w: i32,
+            h: i32,
+            src: *mut core::ffi::c_void,
+            sx: i32,
+            sy: i32,
+            rop: u32,
+        ) -> i32;
+        fn GetDIBits(
+            hdc: *mut core::ffi::c_void,
+            bitmap: *mut core::ffi::c_void,
+            start: u32,
+            lines: u32,
+            bits: *mut u8,
+            info: *mut BITMAPINFO,
+            usage: u32,
+        ) -> i32;
+        fn DeleteObject(obj: *mut core::ffi::c_void) -> i32;
+        fn DeleteDC(hdc: *mut core::ffi::c_void) -> i32;
+    }
+
+    #[repr(C)]
+    struct BITMAPINFOHEADER {
+        size: u32,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bit_count: u16,
+        compression: u32,
+        size_image: u32,
+        x_pels: i32,
+        y_pels: i32,
+        clr_used: u32,
+        clr_important: u32,
+    }
+    #[repr(C)]
+    struct BITMAPINFO {
+        header: BITMAPINFOHEADER,
+        colors: [u32; 1],
+    }
+
+    let handle = window
+        .window_handle()
+        .map_err(|err| format!("window handle: {err}"))?;
+    let hwnd = match handle.as_raw() {
+        RawWindowHandle::Win32(win) => win.hwnd.get() as *mut core::ffi::c_void,
+        _ => return Err("not a Win32 window".into()),
+    };
+    if hwnd.is_null() {
+        return Err("null hwnd".into());
+    }
+    unsafe {
+        ShowWindow(hwnd, 9); // SW_RESTORE
+        SetForegroundWindow(hwnd);
+    }
+    // Let the DXGI present land on screen before we blit.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let mut rect = [0i32; 4];
+    if unsafe { GetClientRect(hwnd, &mut rect) } == 0 {
+        return Err("GetClientRect failed".into());
+    }
+    let width = rect[2] - rect[0];
+    let height = rect[3] - rect[1];
+    if width <= 8 || height <= 8 {
+        return Err(format!("client too small {width}x{height}"));
+    }
+    let mut origin = [0i32; 2];
+    if unsafe { ClientToScreen(hwnd, &mut origin) } == 0 {
+        return Err("ClientToScreen failed".into());
+    }
+    // Blit the presented swapchain from the screen DC (PrintWindow often misses wgpu).
+    let screen = unsafe { GetDC(ptr::null_mut()) };
+    if screen.is_null() {
+        return Err("GetDC failed".into());
+    }
+    let mem = unsafe { CreateCompatibleDC(screen) };
+    let bmp = unsafe { CreateCompatibleBitmap(screen, width, height) };
+    if mem.is_null() || bmp.is_null() {
+        unsafe {
+            if !bmp.is_null() {
+                DeleteObject(bmp);
+            }
+            if !mem.is_null() {
+                DeleteDC(mem);
+            }
+            ReleaseDC(ptr::null_mut(), screen);
+        }
+        return Err("GDI alloc failed".into());
+    }
+    unsafe { SelectObject(mem, bmp) };
+    const SRCCOPY: u32 = 0x00CC_0020;
+    if unsafe { BitBlt(mem, 0, 0, width, height, screen, origin[0], origin[1], SRCCOPY) } == 0 {
+        unsafe {
+            DeleteObject(bmp);
+            DeleteDC(mem);
+            ReleaseDC(ptr::null_mut(), screen);
+        }
+        return Err("BitBlt failed".into());
+    }
+    let mut info = BITMAPINFO {
+        header: BITMAPINFOHEADER {
+            size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            width,
+            height: -height,
+            planes: 1,
+            bit_count: 32,
+            compression: 0,
+            size_image: 0,
+            x_pels: 0,
+            y_pels: 0,
+            clr_used: 0,
+            clr_important: 0,
+        },
+        colors: [0],
+    };
+    let mut bgra = vec![0u8; (width * height * 4) as usize];
+    let got = unsafe {
+        GetDIBits(
+            mem,
+            bmp,
+            0,
+            height as u32,
+            bgra.as_mut_ptr(),
+            &mut info,
+            0,
+        )
+    };
+    unsafe {
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        ReleaseDC(ptr::null_mut(), screen);
+    }
+    if got == 0 {
+        return Err("GetDIBits failed".into());
+    }
+    let mut rgba = vec![0u8; bgra.len()];
+    for (dst, src) in rgba.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+        dst[3] = 255;
+    }
+    // Reject empty/black captures so we keep retrying.
+    let lit = rgba.chunks(4).filter(|px| px[0] > 8 || px[1] > 8 || px[2] > 8).count();
+    if lit < 200 {
+        return Err(format!("capture too dark ({lit} lit px)"));
+    }
+    let file = std::fs::File::create(path).map_err(|err| err.to_string())?;
+    let mut encoder = png::Encoder::new(file, width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|err| err.to_string())?;
+    writer
+        .write_image_data(&rgba)
+        .map_err(|err| err.to_string())?;
+    let _ = ptr::null::<()>();
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn capture_window_png(_window: &Window, _path: &std::path::Path) -> Result<(), String> {
+    Err("window shot is Windows-only".into())
 }
 
 fn eye_cell(eye: glam::Vec3) -> [i32; 3] {

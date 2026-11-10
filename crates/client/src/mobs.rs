@@ -529,6 +529,18 @@ impl Zombie {
         self.flash = 0.0;
     }
 
+    /// Freeze in place (proof shots / shove recovery).
+    pub fn hold(&mut self) {
+        self.loose = 10_000;
+        self.moving = false;
+        self.attacking = false;
+    }
+
+    /// Point the Blockbench +Z face along yaw (radians).
+    pub fn face(&mut self, yaw: f32) {
+        self.yaw = yaw;
+    }
+
     /// Decay the hit flash, or stand back up after a knockdown.
     ///
     /// True while the mesh should rebuild: flash frames, or the rise frame.

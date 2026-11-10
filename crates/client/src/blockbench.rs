@@ -255,6 +255,7 @@ fn skin_of(root: &serde_json::Map<String, Value>) -> Option<Skin> {
             // Entity models live under models/entity/; block models under models/block/.
             for model in [
                 "assets/terralite/models/entity/player.bbmodel",
+                "assets/terralite/models/entity/zombie.bbmodel",
                 "assets/terralite/models/block/model.bbmodel",
             ] {
                 if let Some(path) = join_pack_relative(model, relative) {
@@ -275,8 +276,61 @@ fn skin_of(root: &serde_json::Map<String, Value>) -> Option<Skin> {
                 }
             }
         }
+        // Blockbench often embeds the PNG as a data URL when the file is internal.
+        if let Some(source) = obj.get("source").and_then(Value::as_str) {
+            if let Some(bytes) = decode_data_url(source) {
+                if let Some(skin) = decode_skin(&bytes) {
+                    return Some(skin);
+                }
+            }
+        }
     }
     None
+}
+
+fn decode_data_url(source: &str) -> Option<Vec<u8>> {
+    const MARK: &str = "base64,";
+    let at = source.find(MARK)?;
+    let b64 = source[at + MARK.len()..].trim();
+    // Minimal base64 decode without an extra crate.
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = b64.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        let (a, b, c, d) = (
+            val(bytes[i])?,
+            val(bytes[i + 1])?,
+            if bytes[i + 2] == b'=' {
+                0
+            } else {
+                val(bytes[i + 2])?
+            },
+            if bytes[i + 3] == b'=' {
+                0
+            } else {
+                val(bytes[i + 3])?
+            },
+        );
+        out.push((a << 2) | (b >> 4));
+        if bytes[i + 2] != b'=' {
+            out.push((b << 4) | (c >> 2));
+        }
+        if bytes[i + 3] != b'=' {
+            out.push((c << 6) | d);
+        }
+        i += 4;
+    }
+    Some(out)
 }
 
 fn join_pack_relative(model_path: &str, relative: &str) -> Option<String> {
@@ -1009,38 +1063,40 @@ mod tests {
             "../../../resourcepacks/terralite/assets/terralite/models/entity/zombie.bbmodel"
         ))
         .expect("zombie model");
-        let pants = |time: f32| {
+        let legs = |time: f32| {
             let posed = mesh(&figure, "walk", time, 0.0, [0.0, 0.0, 0.0], &[]);
             let legs: Vec<_> = posed
                 .into_iter()
-                .filter(|vertex| vertex.color[2] > vertex.color[1] && vertex.color[0] < 0.3)
+                .filter(|vertex| vertex.position[1] < 0.75 && vertex.position[0].abs() < 0.35)
                 .collect();
             span_z(&legs)
         };
-        let hands = |time: f32| {
+        let hand_y = |time: f32| {
             mesh(&figure, "attack", time, 0.0, [0.0, 0.0, 0.0], &[])
                 .into_iter()
-                .filter(|vertex| {
-                    vertex.color[1] > vertex.color[0] && vertex.color[1] > 0.45
-                })
+                .filter(|vertex| vertex.position[1] > 1.1 && vertex.position[0].abs() > 0.25)
                 .map(|vertex| vertex.position[1])
                 .fold(f32::MIN, f32::max)
         };
         assert!(
-            pants(0.0) > pants(0.2) + 0.05,
+            legs(0.0) > legs(0.2) + 0.04,
             "walk swings the feet apart, open {} closed {}",
-            pants(0.0),
-            pants(0.2)
+            legs(0.0),
+            legs(0.2)
         );
-        let strike = (hands(0.15) - hands(0.0)).abs();
+        let strike = (hand_y(0.15) - hand_y(0.0)).abs();
         assert!(strike > 0.04, "attack pumps the arms, delta {strike}");
         let verts = mesh(&figure, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
-        assert!(verts.len() > 36, "the body has several cubes");
+        assert!(verts.len() > 100, "textured mesh has many face pixels");
         let top = verts
             .iter()
             .map(|vertex| vertex.position[1])
             .fold(f32::MIN, f32::max);
         assert!(top > 1.7, "the figure stands near two blocks tall, top {top}");
+        assert!(
+            verts.iter().any(|vertex| vertex.color[1] > vertex.color[0] + 0.05),
+            "skin samples should read green"
+        );
     }
 
     #[test]
