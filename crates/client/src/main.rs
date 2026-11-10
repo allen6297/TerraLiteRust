@@ -7,6 +7,7 @@ mod skins;
 mod arrows;
 mod audio;
 mod fireballs;
+mod wither_shots;
 mod pearls;
 mod splash;
 mod blockbench;
@@ -301,8 +302,11 @@ struct Args {
     shot_fire_charge: Option<std::path::PathBuf>,
     /// Fortress wither skeleton mid-swing, then quit.
     shot_wither: Option<std::path::PathBuf>,
+    /// Summoned wither boss over soul sand, then quit.
+    shot_wither_boss: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
+
 
 
 
@@ -585,6 +589,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_strength: args.shot_strength,
         shot_fire_charge: args.shot_fire_charge,
         shot_wither: args.shot_wither,
+        shot_wither_boss: args.shot_wither_boss,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
         shot_frog: args.shot_frog,
@@ -750,6 +755,7 @@ struct App {
     shot_strength: Option<std::path::PathBuf>,
     shot_fire_charge: Option<std::path::PathBuf>,
     shot_wither: Option<std::path::PathBuf>,
+    shot_wither_boss: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
     shot_frog: Option<std::path::PathBuf>,
@@ -1121,6 +1127,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_wither.take() {
                     state.arm_wither_skeleton_shot(path);
+                }
+                if let Some(path) = self.shot_wither_boss.take() {
+                    state.arm_wither_boss_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -1505,6 +1514,7 @@ where
         shot_strength: None,
         shot_fire_charge: None,
         shot_wither: None,
+        shot_wither_boss: None,
         shot_keybinds: None,
         shot_axolotl: None,
         shot_frog: None,
@@ -2133,6 +2143,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-wither".to_string())?;
                 parsed.shot_wither = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-wither-boss" | "--shot-boss" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-wither-boss".to_string())?;
+                parsed.shot_wither_boss = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter

@@ -5491,6 +5491,232 @@ impl WitherSkeleton {
     }
 }
 
+const WITHER_BOSS_HEARTS: i32 = 20;
+const WITHER_BOSS_HOVER: f32 = 4.5;
+const WITHER_BOSS_STEP: f32 = 0.07;
+const WITHER_BOSS_SHOOT_EVERY: u32 = 28;
+const WITHER_BOSS_HOME_Y: f32 = 3.2;
+
+/// Three skull cells that complete a soul-sand summon row, when the last skull
+/// sits at `at`. Soul sand must sit under each skull. Row runs along X or Z.
+pub fn wither_ritual_row(
+    world: &Cluster,
+    at: [i32; 3],
+) -> Option<[[i32; 3]; 3]> {
+    let [x, y, z] = at;
+    if world.block_at(x, y, z).id != "wither_skull" {
+        return None;
+    }
+    for axis in 0..2 {
+        for start in -2..=0 {
+            let cells = if axis == 0 {
+                [
+                    [x + start, y, z],
+                    [x + start + 1, y, z],
+                    [x + start + 2, y, z],
+                ]
+            } else {
+                [
+                    [x, y, z + start],
+                    [x, y, z + start + 1],
+                    [x, y, z + start + 2],
+                ]
+            };
+            if !cells.contains(&at) {
+                continue;
+            }
+            let ready = cells.iter().all(|c| {
+                world.block_at(c[0], c[1], c[2]).id == "wither_skull"
+                    && world.block_at(c[0], c[1] - 1, c[2]).id == "soul_sand"
+            });
+            if ready {
+                return Some(cells);
+            }
+        }
+    }
+    None
+}
+
+/// Floating three-headed wither boss. Shoots black skulls; does not revive.
+pub struct Wither {
+    origin: [f32; 3],
+    home: [f32; 3],
+    swing: u32,
+    hearts: i32,
+    /// True after a kill until the next ritual summons it again.
+    spent: bool,
+}
+
+impl Wither {
+    pub fn new() -> Self {
+        Self {
+            origin: [0.0, -8.0, 0.0],
+            home: [0.0, -8.0, 0.0],
+            swing: 0,
+            hearts: 0,
+            spent: true,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0 && !self.spent
+    }
+
+    /// Rise above a ritual center.
+    pub fn summon(&mut self, at: [f32; 3]) {
+        let home = [at[0], at[1] + WITHER_BOSS_HOME_Y, at[2]];
+        self.origin = home;
+        self.home = home;
+        self.hearts = WITHER_BOSS_HEARTS;
+        self.swing = 0;
+        self.spent = false;
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.summon([at[0], at[1] - WITHER_BOSS_HOME_Y, at[2]]);
+        self.origin = at;
+        self.home = at;
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if !self.alive() {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.9, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=9.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 1.4
+    }
+
+    /// Spend hearts. True when this hit drops the wither.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if !self.alive() || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.spent = true;
+        true
+    }
+
+    /// Drift and queue skull shots. True when a projectile is due.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if !self.alive() {
+            return false;
+        }
+        let mut shot = false;
+        for _ in 0..count {
+            let dx = player[0] - self.origin[0];
+            let dz = player[2] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            self.origin[1] = self.home[1] + (self.swing as f32 * 0.09).sin() * 0.18;
+            if dist > WITHER_BOSS_HOVER + 1.5 && dist > 0.05 {
+                let step = WITHER_BOSS_STEP.min(dist - WITHER_BOSS_HOVER);
+                self.origin[0] += dx / dist * step;
+                self.origin[2] += dz / dist * step;
+            } else if dist < WITHER_BOSS_HOVER - 1.0 && dist > 0.05 {
+                self.origin[0] -= dx / dist * WITHER_BOSS_STEP;
+                self.origin[2] -= dz / dist * WITHER_BOSS_STEP;
+            } else if dist > 18.0 {
+                let hx = self.home[0] - self.origin[0];
+                let hz = self.home[2] - self.origin[2];
+                let hd = (hx * hx + hz * hz).sqrt();
+                if hd > 0.05 {
+                    self.origin[0] += hx / hd * WITHER_BOSS_STEP;
+                    self.origin[2] += hz / hd * WITHER_BOSS_STEP;
+                }
+            }
+            self.swing = self.swing.wrapping_add(1);
+            if (3.0..20.0).contains(&dist) && self.swing % WITHER_BOSS_SHOOT_EVERY == 0 {
+                shot = true;
+            }
+        }
+        shot
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if !self.alive() {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.85, y, z - 0.45], [x + 0.85, y + 2.1, z + 0.45])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if !self.alive() {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bob = (self.swing as f32 * 0.11).sin() * 0.05;
+        let body = [0.14, 0.12, 0.11];
+        let dark = [0.08, 0.07, 0.06];
+        let eye = [0.9, 0.55, 0.12];
+        let mut out = Vec::new();
+        // Wide torso.
+        push_box(
+            &mut out,
+            [x, y + 0.85 + bob, z],
+            [0.55, 0.55, 0.28],
+            body,
+        );
+        // Three skulls across the shoulders.
+        for (ox, oy) in [(-0.55f32, 1.55), (0.0, 1.75), (0.55, 1.55)] {
+            push_box(
+                &mut out,
+                [x + ox, y + oy + bob, z],
+                [0.22, 0.2, 0.2],
+                dark,
+            );
+            push_box(
+                &mut out,
+                [x + ox - 0.08, y + oy + 0.02 + bob, z + 0.18],
+                [0.04, 0.04, 0.03],
+                eye,
+            );
+            push_box(
+                &mut out,
+                [x + ox + 0.08, y + oy + 0.02 + bob, z + 0.18],
+                [0.04, 0.04, 0.03],
+                eye,
+            );
+        }
+        // Stub legs / underglow.
+        push_box(
+            &mut out,
+            [x - 0.28, y + 0.2 + bob, z],
+            [0.12, 0.22, 0.12],
+            dark,
+        );
+        push_box(
+            &mut out,
+            [x + 0.28, y + 0.2 + bob, z],
+            [0.12, 0.22, 0.12],
+            dark,
+        );
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5712,6 +5938,37 @@ mod tests {
         assert!(wither.vertices().is_empty());
         assert!(wither.rest(10.0));
         assert!(wither.alive());
+    }
+
+    #[test]
+    fn three_skulls_on_soul_sand_summon_a_wither() {
+        let mut blocks = Vec::new();
+        for x in 4..=6u8 {
+            blocks.push((x, 1u16, 5, Block::new("soul_sand", 0)));
+            blocks.push((x, 2, 5, Block::new("wither_skull", 0)));
+        }
+        let world =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap();
+        let row = wither_ritual_row(&world, [5, 2, 5]).expect("ritual row");
+        assert_eq!(row.len(), 3);
+        assert!(wither_ritual_row(&world, [5, 2, 6]).is_none());
+
+        let mut boss = Wither::new();
+        assert!(!boss.alive());
+        boss.summon([5.5, 2.0, 5.5]);
+        assert!(boss.alive());
+        assert!(!boss.vertices().is_empty());
+        let home = boss.origin();
+        let mut fired = false;
+        for _ in 0..WITHER_BOSS_SHOOT_EVERY {
+            if boss.tick_near(1, [home[0] + 6.0, home[1], home[2]]) {
+                fired = true;
+            }
+        }
+        assert!(fired, "wither should queue a skull shot");
+        assert!(boss.hurt(20));
+        assert!(!boss.alive());
+        assert!(boss.vertices().is_empty());
     }
 
     #[test]

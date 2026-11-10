@@ -1666,6 +1666,13 @@ pub struct State {
     wither_count: u32,
     /// Hand over wither skull / coal once inventory has room.
     wither_due: bool,
+    wither_boss: crate::mobs::Wither,
+    wither_boss_buf: Option<wgpu::Buffer>,
+    wither_boss_count: u32,
+    /// Flying wither skull projectiles.
+    wither_shots: crate::wither_shots::WitherShots,
+    /// Hand over a nether star once inventory has room.
+    nether_star_due: bool,
 
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
@@ -2826,6 +2833,11 @@ impl State {
             wither_buf: None,
             wither_count: 0,
             wither_due: false,
+            wither_boss: crate::mobs::Wither::new(),
+            wither_boss_buf: None,
+            wither_boss_count: 0,
+            wither_shots: crate::wither_shots::WitherShots::new(),
+            nether_star_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
             bee_count: 0,
@@ -2910,6 +2922,7 @@ impl State {
         state.rebuild_iron_golem();
         state.rebuild_blaze();
         state.rebuild_wither();
+        state.rebuild_wither_boss();
 
         state.rebuild_bee();
         state.rebuild_fox();
@@ -4722,6 +4735,7 @@ impl State {
         vertices.extend(self.arrows.vertices());
         vertices.extend(self.splash.vertices());
         vertices.extend(self.fireballs.vertices());
+        vertices.extend(self.wither_shots.vertices());
         vertices.extend(self.pearls.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
@@ -5058,6 +5072,65 @@ impl State {
         self.wither_count = vertices.len() as u32;
     }
 
+    fn rebuild_wither_boss(&mut self) {
+        let vertices = self.wither_boss.vertices();
+        if vertices.is_empty() {
+            self.wither_boss_buf = None;
+            self.wither_boss_count = 0;
+            return;
+        }
+        self.wither_boss_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("wither_boss"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.wither_boss_count = vertices.len() as u32;
+    }
+
+    /// After a wither skull lands, check for three-in-a-row on soul sand.
+    fn try_summon_wither(&mut self, at: [i32; 3]) {
+        let Some(row) = crate::mobs::wither_ritual_row(&self.world, at) else {
+            return;
+        };
+        let changes: Vec<CellChange> = row
+            .iter()
+            .map(|c| CellChange {
+                x: c[0],
+                y: c[1],
+                z: c[2],
+                block: Block::new("air", 0),
+            })
+            .collect();
+        apply_changes(&mut self.world, &changes);
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+            self.send_edit(
+                encode_place(
+                    change.x,
+                    change.y,
+                    change.z,
+                    change.block,
+                    PlayerBox { min, max },
+                ),
+                TAG_PLACE,
+                None,
+            );
+        }
+        let mid = row[1];
+        let center = [mid[0] as f32 + 0.5, mid[1] as f32, mid[2] as f32 + 0.5];
+        self.wither_boss.summon(center);
+        self.rebuild_wither_boss();
+        self.play_world(crate::audio::Sound::Gust, center);
+        self.drops.puff(center, [0.2, 0.15, 0.12]);
+        self.drops.embers([center[0], center[1] + 1.5, center[2]]);
+        self.rebuild_drops();
+        self.gui.push_chat("wither");
+        let _ = self.advancements.unlock("wither");
+    }
+
     fn rebuild_bee(&mut self) {
         let vertices = self.bee.vertices();
         if vertices.is_empty() {
@@ -5275,11 +5348,18 @@ impl State {
             && !breeze_aimed
             && !blaze_aimed
             && self.wither.aimed(eye, forward);
+        let wither_boss_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && !wither_aimed
+            && self.wither_boss.aimed(eye, forward);
         let guest_index = if zombie_aimed
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
             || wither_aimed
+            || wither_boss_aimed
         {
             None
         } else {
@@ -5344,6 +5424,15 @@ impl State {
             }
             dropped
         };
+        let dropped_wither_boss = wither_boss_aimed && {
+            let origin = self.wither_boss.origin();
+            let dropped =
+                self.hurt_mob("wither", amount, origin, |s, n| s.wither_boss.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_guest = if let Some(index) = guest_index {
             let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
@@ -5362,12 +5451,14 @@ impl State {
             || breeze_aimed
             || blaze_aimed
             || wither_aimed
+            || wither_boss_aimed
             || guest_index.is_some();
         let dropped = dropped_zombie
             || dropped_night
             || dropped_breeze
             || dropped_blaze
             || dropped_wither
+            || dropped_wither_boss
             || dropped_guest;
         let word = if !aimed {
             "swing"
@@ -5410,6 +5501,9 @@ impl State {
         if dropped_wither {
             self.grant_wither_loot();
         }
+        if dropped_wither_boss {
+            self.grant_nether_star();
+        }
         if self.hotbar.slot(slot).is_none() {
             self.gui.push_chat("the mace breaks");
         }
@@ -5417,6 +5511,7 @@ impl State {
         self.rebuild_breeze();
         self.rebuild_blaze();
         self.rebuild_wither();
+        self.rebuild_wither_boss();
     }
 
     fn holding_horn(&self) -> bool {
@@ -5971,6 +6066,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_wither();
+                return true;
+            }
+            let wither_boss = self.wither_boss.origin();
+            let (wbmin, wbmax) = self.wither_boss.bounds();
+            if point_in_box(tip, wbmin, wbmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("wither", amount, wither_boss, |s, n| s.wither_boss.hurt(n));
+                if dropped {
+                    self.grant_xp_at(wither_boss, true);
+                    self.grant_nether_star();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_wither_boss();
                 return true;
             }
             if let Some(index) = self.guests.iter().position(|guest| {
@@ -7690,6 +7801,24 @@ impl State {
         self.gui.push_chat("blaze rod");
     }
 
+    /// Hand over a nether star. A full bar leaves the debt for a later tick.
+    fn grant_nether_star(&mut self) {
+        if !self.hotbar.room_for("nether_star") && !self.bag.room_for("nether_star") {
+            if !self.nether_star_due {
+                self.gui.push_chat("full");
+            }
+            self.nether_star_due = true;
+            return;
+        }
+        if !self.hotbar.collect("nether_star") {
+            self.bag.collect("nether_star");
+            self.bag_dirty = true;
+        }
+        self.hotbar_dirty = true;
+        self.nether_star_due = false;
+        self.gui.push_chat("nether star");
+    }
+
     /// Hand over a wither skull and coal. A full bar leaves the debt for later.
     fn grant_wither_loot(&mut self) {
         let mut owed = false;
@@ -8034,6 +8163,18 @@ impl State {
                             self.grant_wither_loot();
                         }
                         self.rebuild_wither();
+                        hit = true;
+                    }
+                    let wither_boss = self.wither_boss.origin();
+                    if crate::splash::in_radius(burst.center, wither_boss) {
+                        let dropped = self.hurt_mob("wither", amount, wither_boss, |s, n| {
+                            s.wither_boss.hurt(n)
+                        });
+                        if dropped {
+                            self.grant_xp_at(wither_boss, true);
+                            self.grant_nether_star();
+                        }
+                        self.rebuild_wither_boss();
                         hit = true;
                     }
                     let guest_hits: Vec<(usize, String, [f32; 3])> = self
@@ -8816,6 +8957,94 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Summoned wither boss over a soul-sand skull row, mid-shot, then quit with a PNG.
+    pub fn arm_wither_boss_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.16);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        // Open chamber pad — soul sand row under a clear three-head silhouette.
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: px - 1,
+                    y: fy,
+                    z: pz,
+                    block: Block::new("soul_sand", 0),
+                },
+                CellChange {
+                    x: px,
+                    y: fy,
+                    z: pz,
+                    block: Block::new("soul_sand", 0),
+                },
+                CellChange {
+                    x: px + 1,
+                    y: fy,
+                    z: pz,
+                    block: Block::new("soul_sand", 0),
+                },
+            ],
+        );
+        for dx in -1..=1 {
+            self.chunk_bake.touch(px + dx, pz);
+        }
+        self.wither_boss
+            .summon([px as f32 + 0.5, fy as f32 + 1.0, pz as f32 + 0.5]);
+        let origin = self.wither_boss.origin();
+        // Mid-flight black skull between boss and camera.
+        self.wither_shots.pin(
+            [origin[0] + 1.6, origin[1] + 0.55, origin[2] + 1.3],
+            [2.0, 0.2, 1.6],
+        );
+        self.rebuild_wither_boss();
+        self.rebuild_drops();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("wither");
+        self.gui.push_chat("wither skull");
+
+        let focus = glam::Vec3::new(origin[0], origin[1] + 1.1, origin[2]);
+        let eye = glam::Vec3::new(origin[0] + 5.0, origin[1] + 1.4, origin[2] + 4.2);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("mace");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -10505,7 +10734,9 @@ impl State {
             ("breeze", self.breeze.bounds()),
             ("blaze", self.blaze.bounds()),
             ("wither_skeleton", self.wither.bounds()),
+            ("wither", self.wither_boss.bounds()),
             ("copper_golem", self.golem.bounds()),
+
 
             ("wolf", self.wolf.bounds()),
             ("cat", self.cat.bounds()),
@@ -10597,6 +10828,9 @@ impl State {
         }
         if self.wither.aimed(eye, forward) {
             return Some("wither_skeleton");
+        }
+        if self.wither_boss.aimed(eye, forward) {
+            return Some("wither");
         }
         if self.fox.aimed(eye, forward) {
             return Some("fox");
@@ -11176,6 +11410,9 @@ impl State {
                     self.rebuild_golem();
                     self.gui.push_chat("golem");
                 }
+            }
+            if cell.block.id == "wither_skull" && before.id != "wither_skull" {
+                self.try_summon_wither([cell.x, cell.y, cell.z]);
             }
             if let Some(slot) = pending.and_then(|edit| edit.slot) {
                 let buffer_level_changed = is_buffer(cell.block.id)
@@ -25887,6 +26124,28 @@ impl State {
             if !fire_bursts.is_empty() {
                 drops_dirty = true;
             }
+            let (wither_dirty, wither_bursts, wither_hit) =
+                self.wither_shots.tick(dt, &self.world, eye);
+            if wither_dirty {
+                drops_dirty = true;
+            }
+            for at in &wither_bursts {
+                self.drops.embers(*at);
+                self.drops.puff(*at, [0.2, 0.12, 0.1]);
+            }
+            if wither_hit {
+                let blocked = self.try_shield_block();
+                let amount = body::bite_hearts(
+                    blocked,
+                    crate::wither_shots::HIT_HEARTS,
+                    self.armor_soak(),
+                );
+                self.apply_damage(amount);
+                self.gui.push_chat(if blocked { "block" } else { "wither" });
+            }
+            if !wither_bursts.is_empty() {
+                drops_dirty = true;
+            }
             let (splash_dirty, bursts) = self.splash.tick(dt, &self.world);
             if splash_dirty {
                 drops_dirty = true;
@@ -27050,6 +27309,9 @@ impl State {
             if self.wither_due {
                 self.grant_wither_loot();
             }
+            if self.nether_star_due {
+                self.grant_nether_star();
+            }
             if self.horn_due {
                 self.grant_horn();
             }
@@ -27095,6 +27357,17 @@ impl State {
                 }
                 self.rebuild_wither();
             }
+            if self.wither_boss.tick_near(steps, eye3) {
+                let from = self.wither_boss.origin();
+                let muzzle = [from[0], from[1] + 1.6, from[2]];
+                self.wither_shots.shoot(muzzle, eye3);
+                self.play_world(crate::audio::Sound::Gust, muzzle);
+                self.drops.embers(muzzle);
+                self.gui.push_chat("wither skull");
+                self.rebuild_drops();
+            }
+            self.rebuild_wither_boss();
+
             if let Some(chore) = self.golem.tick(steps, &self.world) {
                 match chore {
                     crate::mobs::Chore::Press(at) => {
@@ -27961,6 +28234,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, wither.slice(..));
                     pass.draw(0..self.wither_count, 0..1);
+                }
+            }
+            if let Some(wither_boss) = &self.wither_boss_buf {
+                if self.wither_boss_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, wither_boss.slice(..));
+                    pass.draw(0..self.wither_boss_count, 0..1);
                 }
             }
             if let Some(bee) = &self.bee_buf {
