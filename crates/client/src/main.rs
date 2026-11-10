@@ -122,6 +122,8 @@ struct Args {
     shot_swim: Option<std::path::PathBuf>,
     /// Idle boat vs rowing FOV stitch, then quit.
     shot_boat: Option<std::path::PathBuf>,
+    /// Cooling vs ready attack crosshair stitch, then quit.
+    shot_attack: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -197,6 +199,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_sprint: args.shot_sprint,
         shot_swim: args.shot_swim,
         shot_boat: args.shot_boat,
+        shot_attack: args.shot_attack,
         state: None,
         last_frame: Instant::now(),
     };
@@ -221,6 +224,7 @@ struct App {
     shot_sprint: Option<std::path::PathBuf>,
     shot_swim: Option<std::path::PathBuf>,
     shot_boat: Option<std::path::PathBuf>,
+    shot_attack: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -284,6 +288,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_boat.take() {
                     state.arm_boat_shot(path);
+                }
+                if let Some(path) = self.shot_attack.take() {
+                    state.arm_attack_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -432,6 +439,7 @@ where
         shot_sprint: None,
         shot_swim: None,
         shot_boat: None,
+        shot_attack: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -497,6 +505,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-boat-row".to_string())?;
                 parsed.shot_boat = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-attack-cd" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-attack-cd".to_string())?;
+                parsed.shot_attack = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

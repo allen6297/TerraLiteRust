@@ -5192,28 +5192,77 @@ pub fn look_label(id: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+/// Center crosshair. `ready` is `0` just swung through `1` fully charged.
+///
+/// Cooling shrinks the arms so the wait reads like a Minecraft attack meter
+/// without a separate HUD ring.
+pub fn cross_quads(width: f32, height: f32, ready: f32) -> Vec<Quad> {
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let ready = ready.clamp(0.0, 1.0);
+    let cx = width * 0.5;
+    let cy = height * 0.5;
+    let arm = 2.0 + 4.0 * ready;
+    let edge = 1.0 + arm;
+    let ink = if ready >= 0.98 { INK } else { EDGE };
+    vec![
+        pixel_quad(
+            width,
+            height,
+            cx - 1.0,
+            cy - edge,
+            cx + 2.0,
+            cy + edge,
+            EDGE,
+        ),
+        pixel_quad(
+            width,
+            height,
+            cx - edge,
+            cy - 1.0,
+            cx + edge,
+            cy + 2.0,
+            EDGE,
+        ),
+        pixel_quad(
+            width,
+            height,
+            cx,
+            cy - arm,
+            cx + 1.0,
+            cy + arm,
+            ink,
+        ),
+        pixel_quad(
+            width,
+            height,
+            cx - arm,
+            cy,
+            cx + arm,
+            cy + 1.0,
+            ink,
+        ),
+    ]
+}
+
 /// A small cross at the center. `id` is the looked-at block, entity, or fluid.
 /// `held` is the selected hotbar item. The look name sits bottom-right; the held
 /// name stays above the hotbar. `held_override` replaces the hotbar name when a
-/// place shape is armed.
+/// place shape is armed. `attack_ready` shrinks the cross while a swing cools.
 pub fn look_quads(
     width: f32,
     height: f32,
     id: Option<&str>,
     held: Option<&str>,
     held_override: Option<&str>,
+    attack_ready: f32,
 ) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
     let cx = width * 0.5;
-    let cy = height * 0.5;
-    let mut quads = vec![
-        pixel_quad(width, height, cx - 1.0, cy - 7.0, cx + 2.0, cy + 7.0, EDGE),
-        pixel_quad(width, height, cx - 7.0, cy - 1.0, cx + 7.0, cy + 2.0, EDGE),
-        pixel_quad(width, height, cx, cy - 6.0, cx + 1.0, cy + 6.0, INK),
-        pixel_quad(width, height, cx - 6.0, cy, cx + 6.0, cy + 1.0, INK),
-    ];
+    let mut quads = cross_quads(width, height, attack_ready);
     if let Some(label) = id.and_then(look_label) {
         let plate_w = measure(&label, 1.0) + 12.0;
         // Bottom-right tip: clear of the centered hotbar and the left status stack.
@@ -7937,15 +7986,15 @@ mod tests {
         assert_eq!(look_label("iron_pickaxe").as_deref(), Some("Iron Pickaxe"));
         assert!(look_label("air").is_none());
         assert!(look_label("").is_none());
-        let bare = look_quads(200.0, 100.0, None, None, None);
+        let bare = look_quads(200.0, 100.0, None, None, None, 1.0);
         assert_eq!(bare.len(), 4);
         assert!(bare.iter().all(|quad| quad.color != WELL));
         assert!(
-            look_quads(200.0, 100.0, Some("air"), None, None)
+            look_quads(200.0, 100.0, Some("air"), None, None, 1.0)
                 .iter()
                 .all(|quad| quad.color != WELL)
         );
-        let named = look_quads(200.0, 100.0, Some("oak_log"), None, None);
+        let named = look_quads(200.0, 100.0, Some("oak_log"), None, None, 1.0);
         let plate = named
             .iter()
             .find(|quad| quad.color == WELL)
@@ -7958,7 +8007,7 @@ mod tests {
         );
         assert!(named.iter().any(|quad| quad.color == LIP));
         assert!(named.iter().any(|quad| quad.color == INK));
-        let held = look_quads(200.0, 400.0, None, Some("cobblestone"), None);
+        let held = look_quads(200.0, 400.0, None, Some("cobblestone"), None, 1.0);
         let held_plate = held
             .iter()
             .find(|quad| quad.color == WELL)
@@ -7970,10 +8019,21 @@ mod tests {
         assert!((held_plate.min[0] + held_plate.max[0]).abs() < 0.05);
         assert!(held.iter().any(|quad| quad.color == LIP));
         assert!(held.iter().any(|quad| quad.color == INK));
-        let both = look_quads(200.0, 400.0, Some("pig"), Some("dirt"), None);
+        let both = look_quads(200.0, 400.0, Some("pig"), Some("dirt"), None, 1.0);
         assert_eq!(both.iter().filter(|quad| quad.color == WELL).count(), 2);
-        assert!(look_quads(0.0, 100.0, Some("stone"), Some("dirt"), None).is_empty());
-        let shaped = look_quads(200.0, 400.0, None, Some("stone"), Some("Stone Stairs · stairs"));
+        assert!(look_quads(0.0, 100.0, Some("stone"), Some("dirt"), None, 1.0).is_empty());
+        let shaped = look_quads(
+            200.0,
+            400.0,
+            None,
+            Some("stone"),
+            Some("Stone Stairs · stairs"),
+            1.0,
+        );
+        assert!(cross_quads(200.0, 100.0, 0.0).len() == 4);
+        assert!(cross_quads(200.0, 100.0, 1.0)
+            .iter()
+            .any(|quad| quad.color == INK));
         assert!(shaped.iter().any(|quad| quad.color == WELL));
         let picker = shape_picker_quads(400.0, 300.0, &["block", "slab", "stairs"], 1);
         assert!(picker.iter().any(|quad| quad.color == SELECT));
@@ -8161,7 +8221,7 @@ mod tests {
             10,
             [None; 3],
         );
-        let look = look_quads(gw, gh, Some("oak_log"), Some("cobblestone"), None);
+        let look = look_quads(gw, gh, Some("oak_log"), Some("cobblestone"), None, 1.0);
         // First four quads are the center cross; later INK/EDGE are tip glyphs.
         assert!(look.len() >= 4);
         let cross = &look[..4];

@@ -870,6 +870,14 @@ pub struct State {
     boat_shot_eye: glam::Vec3,
     boat_shot_yaw: f32,
     boat_shot_pitch: f32,
+    /// One-shot cooling vs ready attack crosshair stitch, then quit.
+    attack_shot_path: Option<std::path::PathBuf>,
+    attack_shot_frames: u32,
+    attack_shot_phase: AttackShotPhase,
+    attack_shot_cool: Option<CapturedRgba>,
+    attack_shot_eye: glam::Vec3,
+    attack_shot_yaw: f32,
+    attack_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1743,6 +1751,13 @@ impl State {
             boat_shot_eye: glam::Vec3::ZERO,
             boat_shot_yaw: 0.0,
             boat_shot_pitch: 0.0,
+            attack_shot_path: None,
+            attack_shot_frames: 0,
+            attack_shot_phase: AttackShotPhase::Idle,
+            attack_shot_cool: None,
+            attack_shot_eye: glam::Vec3::ZERO,
+            attack_shot_yaw: 0.0,
+            attack_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -2671,6 +2686,7 @@ impl State {
             return;
         }
         self.mace_wait = wait;
+        self.hit_kick = self.hit_kick.max(0.55);
         let falling = !self.camera.on_ground && self.camera.velocity_y < 0.0;
         let smash = Pack::builtin().mace_smash(self.hotbar.slot(slot).unwrap_or(""));
         let eye = self.camera.eye.to_array();
@@ -5611,6 +5627,71 @@ impl State {
         }
     }
 
+    /// Cooling crosshair then ready crosshair with a held mace, stitched side by side.
+    pub fn arm_attack_shot(&mut self, path: std::path::PathBuf) {
+        self.attack_shot_path = Some(path);
+        self.attack_shot_frames = 0;
+        self.attack_shot_phase = AttackShotPhase::WaitingCool;
+        self.attack_shot_cool = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.35);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let _ = self.hotbar.select_digit(1);
+        let _ = self.hotbar.give_stack("mace");
+        self.mace_wait = body::MACE_WAIT;
+        self.hit_kick = 0.0;
+
+        let eye = glam::Vec3::new(8.5, 2.0 + body::EYE_HEIGHT, 12.5);
+        let target = glam::Vec3::new(11.0, 2.4, 13.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.attack_shot_eye = eye;
+        self.attack_shot_yaw = yaw;
+        self.attack_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_attack_shot_camera(&mut self) {
+        if self.attack_shot_path.is_none() {
+            return;
+        }
+        let _ = self.hotbar.select_digit(1);
+        if self.hotbar.slot(0) != Some("mace") {
+            let _ = self.hotbar.give_stack("mace");
+        }
+        self.camera.restore(
+            self.attack_shot_eye,
+            self.attack_shot_yaw,
+            self.attack_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.attack_shot_eye;
+        self.posed_yaw = self.attack_shot_yaw;
+        self.posed_pitch = self.attack_shot_pitch;
+        self.pose_dirty = true;
+        match self.attack_shot_phase {
+            AttackShotPhase::WaitingCool | AttackShotPhase::Idle => {
+                self.mace_wait = body::MACE_WAIT;
+                self.hit_kick = 0.35;
+            }
+            AttackShotPhase::WaitingReady => {
+                self.mace_wait = 0.0;
+                self.hit_kick = 0.0;
+            }
+        }
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -5982,6 +6063,75 @@ impl State {
                 }
             }
             BoatShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_attack_shot(&mut self) {
+        let Some(path) = self.attack_shot_path.clone() else {
+            return;
+        };
+        self.pin_attack_shot_camera();
+        self.attack_shot_frames = self.attack_shot_frames.saturating_add(1);
+        if self.attack_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.attack_shot_frames > 600 {
+                eprintln!("attack shot timed out");
+                self.attack_shot_path = None;
+                self.attack_shot_phase = AttackShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.attack_shot_phase {
+            AttackShotPhase::WaitingCool => match capture_window_rgba(&self.window) {
+                Ok(cool) => {
+                    self.attack_shot_cool = Some(cool);
+                    self.attack_shot_frames = 0;
+                    self.attack_shot_phase = AttackShotPhase::WaitingReady;
+                }
+                Err(err) => {
+                    eprintln!("attack cool capture failed: {err}");
+                    if self.attack_shot_frames > 400 {
+                        self.attack_shot_path = None;
+                        self.attack_shot_phase = AttackShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            AttackShotPhase::WaitingReady => {
+                let Some(cool) = self.attack_shot_cool.take() else {
+                    self.attack_shot_path = None;
+                    self.attack_shot_phase = AttackShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(ready) => match stitch_held_light_proof(&cool, &ready, &path) {
+                        Ok(()) => {
+                            eprintln!("attack shot wrote {}", path.display());
+                            self.attack_shot_path = None;
+                            self.attack_shot_phase = AttackShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("attack stitch failed: {err}");
+                            self.attack_shot_path = None;
+                            self.attack_shot_phase = AttackShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("attack ready capture failed: {err}");
+                        self.attack_shot_cool = Some(cool);
+                        if self.attack_shot_frames > 400 {
+                            self.attack_shot_path = None;
+                            self.attack_shot_phase = AttackShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            AttackShotPhase::Idle => {}
         }
     }
 
@@ -8594,6 +8744,7 @@ impl State {
         self.pin_sprint_shot_camera();
         self.pin_swim_shot_camera();
         self.pin_boat_shot_camera();
+        self.pin_attack_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -9656,12 +9807,18 @@ impl State {
             let held = self.hotbar.slot(self.hotbar.selected());
             self.shape_pick.clamp_to(held);
             let held_override = held.and_then(|id| self.shape_pick.held_label(id));
+            let attack_ready = if self.holding_mace() {
+                (1.0 - self.mace_wait / body::MACE_WAIT).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
             quads.extend(gui::look_quads(
                 gui_w,
                 gui_h,
                 looked.as_deref(),
                 held,
                 held_override.as_deref(),
+                attack_ready,
             ));
             if self.shape_pick.open {
                 if let Some(held) = held {
@@ -9834,6 +9991,7 @@ impl State {
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
+        self.poll_attack_shot();
     }
 }
 
@@ -9863,6 +10021,13 @@ enum BoatShotPhase {
     Idle,
     WaitingIdle,
     WaitingRow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttackShotPhase {
+    Idle,
+    WaitingCool,
+    WaitingReady,
 }
 
 struct CapturedRgba {
