@@ -831,6 +831,9 @@ pub struct State {
     settings_shot_frames: u32,
     keybinds_shot_path: Option<std::path::PathBuf>,
     keybinds_shot_frames: u32,
+    /// One-shot creative inventory (flow compound tab), then quit.
+    creative_shot_path: Option<std::path::PathBuf>,
+    creative_shot_frames: u32,
     /// One-shot night corridor: dirt hand vs torch, then quit.
     held_light_shot_path: Option<std::path::PathBuf>,
     held_light_shot_frames: u32,
@@ -1865,6 +1868,8 @@ impl State {
             settings_shot_frames: 0,
             keybinds_shot_path: None,
             keybinds_shot_frames: 0,
+            creative_shot_path: None,
+            creative_shot_frames: 0,
             held_light_shot_path: None,
             held_light_shot_frames: 0,
             held_light_shot_phase: HeldLightShotPhase::Idle,
@@ -6634,6 +6639,16 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open creative inventory on the `flow` compound tab and capture a PNG.
+    pub fn arm_creative_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+        self.gui.open_creative_tab("flow");
+        let _ = self.window.focus_window();
+    }
+
     /// Midnight outdoor horde in view, then quit with a PNG.
     pub fn arm_night_spawn_shot(&mut self, path: std::path::PathBuf) {
         self.night_spawn_shot_path = Some(path);
@@ -7343,6 +7358,11 @@ impl State {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("");
+        // Creative palette shots open the flow tab instead of a world vignette.
+        if name.contains("creative") || name.contains("palette") {
+            self.arm_creative_shot(path);
+            return;
+        }
         let ember = name.contains("ember");
         let flow = name.contains("flow");
         let pipes = name.contains("pipe") || name.contains("wire");
@@ -9077,6 +9097,31 @@ impl State {
                 eprintln!("settings shot failed: {err}");
                 if self.settings_shot_frames > 120 {
                     self.settings_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    fn poll_creative_shot(&mut self) {
+        let Some(path) = self.creative_shot_path.clone() else {
+            return;
+        };
+        self.creative_shot_frames = self.creative_shot_frames.saturating_add(1);
+        if self.creative_shot_frames < 40 {
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("creative shot wrote {}", path.display());
+                self.creative_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("creative shot failed: {err}");
+                if self.creative_shot_frames > 120 {
+                    self.creative_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -13918,6 +13963,7 @@ impl State {
         self.poll_zombie_shot();
         self.poll_settings_shot();
         self.poll_keybinds_shot();
+        self.poll_creative_shot();
         self.poll_held_light_shot();
         self.poll_night_spawn_shot();
         self.poll_bed_sleep_shot();

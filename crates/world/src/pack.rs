@@ -2470,6 +2470,16 @@ impl Pack {
         self.drains.iter().any(|drain| drain.id == id)
     }
 
+    /// Compound fill item ids (ember_charge, …), in data-pack order.
+    pub fn fill_ids(&self) -> Vec<String> {
+        self.fills.iter().map(|fill| fill.id.clone()).collect()
+    }
+
+    /// Compound drain tool ids (drain_sponge, …), in data-pack order.
+    pub fn drain_ids(&self) -> Vec<String> {
+        self.drains.iter().map(|drain| drain.id.clone()).collect()
+    }
+
     /// Bucket ids, in data-pack order.
     pub fn bucket_ids(&self) -> Vec<String> {
         self.buckets

@@ -92,7 +92,25 @@ const CREATIVE_CELL: f32 = 32.0;
 const CREATIVE_GAP: f32 = 4.0;
 const TAB_H: f32 = 20.0;
 /// Creative groups. `all` is the whole catalog. Tab cycles them.
-const TABS: [&str; 6] = ["all", "build", "nature", "ore", "light", "more"];
+/// `flow` is the compound fluid/energy palette (pipes, tanks, generators, …).
+const TABS: [&str; 7] = ["all", "build", "nature", "ore", "light", "flow", "more"];
+
+/// Preferred order inside the `flow` creative tab.
+const FLOW_ORDER: [&str; 13] = [
+    "pipe",
+    "wire",
+    "pump",
+    "tank",
+    "battery",
+    "generator",
+    "lamp",
+    "spout",
+    "drain",
+    "copper_grate",
+    "water_bucket",
+    "ember_charge",
+    "drain_sponge",
+];
 const CHEST_COLS: usize = 3;
 
 /// Three-wide rows, top to bottom. The high bit is the left column.
@@ -1196,6 +1214,20 @@ impl Gui {
         self.catalog_on = true;
     }
 
+    /// Open creative inventory on the named tab (`flow`, `build`, …).
+    pub fn open_creative_tab(&mut self, name: &str) {
+        let tab = TABS.iter().position(|tab| *tab == name).unwrap_or(0);
+        self.bag_open = true;
+        self.bag_selected = 0;
+        self.catalog_at = 0;
+        self.catalog_tab = tab;
+        self.catalog_query.clear();
+        self.catalog_on = !catalog().is_empty();
+        self.open = false;
+        self.extra = None;
+        self.built_at = None;
+    }
+
     /// Step category tabs (`true` = next / `>` , `false` = prev / `<`).
     pub fn cycle_catalog_tab(&mut self, forward: bool) {
         let last = TABS.len() - 1;
@@ -1213,6 +1245,11 @@ impl Gui {
     /// Number of creative category tabs.
     pub fn catalog_tab_count() -> usize {
         TABS.len()
+    }
+
+    /// Name of creative category tab `index` (`all`, `flow`, …).
+    pub fn catalog_tab_name(index: usize) -> &'static str {
+        TABS.get(index).copied().unwrap_or("all")
     }
 
     pub fn catalog_query(&self) -> &str {
@@ -5948,6 +5985,16 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.fill_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
+    for id in pack.drain_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.saddle_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
@@ -6031,6 +6078,13 @@ fn creative_view(tab: usize, query: &str) -> Vec<String> {
             };
             rank(left).cmp(&rank(right))
         });
+    } else if name == "flow" {
+        hits.sort_by_key(|id| {
+            FLOW_ORDER
+                .iter()
+                .position(|want| *want == id.as_str())
+                .unwrap_or(FLOW_ORDER.len())
+        });
     }
     hits
 }
@@ -6074,7 +6128,24 @@ fn creative_empty_line(query: &str) -> &'static str {
 }
 
 fn tab_of(id: &str) -> &'static str {
-    if id.contains("ore") {
+    if matches!(
+        id,
+        "pipe"
+            | "wire"
+            | "pump"
+            | "tank"
+            | "battery"
+            | "generator"
+            | "lamp"
+            | "spout"
+            | "drain"
+            | "copper_grate"
+            | "water_bucket"
+            | "ember_charge"
+            | "drain_sponge"
+    ) {
+        "flow"
+    } else if id.contains("ore") {
         "ore"
     } else if id == "lantern"
         || id == "torch"
@@ -6209,7 +6280,6 @@ fn tab_of(id: &str) -> &'static str {
             | "target"
             | "trial_spawner"
             | "copper_bulb"
-            | "copper_grate"
             | "copper_door"
             | "copper_trapdoor"
             | "decorated_pot"
@@ -9396,6 +9466,18 @@ mod tests {
         assert_eq!(creative_empty_line("zzzz"), "nothing matches");
         assert_eq!(CREATIVE_COLS, 10);
         assert_eq!(Gui::catalog_tab_count(), TABS.len());
+        let flow = TABS.iter().position(|tab| *tab == "flow").expect("flow tab");
+        let flow_ids = creative_view(flow, "");
+        for want in FLOW_ORDER {
+            assert!(
+                flow_ids.iter().any(|id| id == want),
+                "flow tab missing {want}"
+            );
+            assert_eq!(tab_of(want), "flow", "{want} should be flow");
+        }
+        assert_eq!(flow_ids.first().map(String::as_str), Some("pipe"));
+        assert!(flow_ids.iter().position(|id| id == "pipe")
+            < flow_ids.iter().position(|id| id == "drain_sponge"));
         let mut cycle = Gui::from_screen(shipped());
         cycle.cycle_catalog_tab(false);
         assert_eq!(cycle.catalog_tab(), TABS.len() - 1);
@@ -9433,6 +9515,23 @@ mod tests {
             items.craft_job(),
             Some(("stone".to_string(), vec!["cobblestone".to_string()]))
         );
+    }
+
+    #[test]
+    fn flow_creative_tab_lists_compound_palette() {
+        assert!(TABS.contains(&"flow"));
+        let flow = TABS.iter().position(|tab| *tab == "flow").expect("flow");
+        let ids = creative_view(flow, "");
+        for want in FLOW_ORDER {
+            assert!(ids.iter().any(|id| id == want), "flow tab missing {want}");
+            assert_eq!(tab_of(want), "flow");
+        }
+        assert_eq!(ids.first().map(String::as_str), Some("pipe"));
+        let mut gui = Gui::from_screen(shipped());
+        gui.open_creative_tab("flow");
+        assert!(gui.bag_open());
+        assert_eq!(gui.catalog_tab(), flow);
+        assert_eq!(gui.creative_pick().as_deref(), Some("pipe"));
     }
 
     #[test]

@@ -1030,7 +1030,6 @@ fn draw_creative_panel(
     panel_w: f32,
     grid_h: f32,
 ) {
-    let tabs = ["all", "build", "nature", "ore", "light", "more"];
     let grid_w = grid_pitch(CREATIVE_COLS);
     // Pin the grid band in points so parent Frames / horizontal rows cannot
     // collapse the viewport to content height (~2 rows). Always ≥8 rows.
@@ -1048,10 +1047,11 @@ fn draw_creative_panel(
             if category_arrow(ui, "<").clicked() {
                 gui.cycle_catalog_tab(false);
             }
-            for (index, name) in tabs.iter().enumerate() {
+            for index in 0..Gui::catalog_tab_count() {
+                let name = Gui::catalog_tab_name(index);
                 let selected = gui.catalog_tab() == index;
                 let fill = if selected { SELECT } else { BUTTON };
-                let tab = egui::Button::new(RichText::new(*name).size(13.0).color(
+                let tab = egui::Button::new(RichText::new(name).size(13.0).color(
                     if selected {
                         Color32::from_rgb(20, 18, 12)
                     } else {
@@ -2119,7 +2119,7 @@ mod tests {
     fn creative_grid_is_ten_wide_with_hotbar() {
         assert_eq!(CREATIVE_COLS, 10);
         assert_eq!(hotbar::SLOTS, 10);
-        assert_eq!(Gui::catalog_tab_count(), 6);
+        assert_eq!(Gui::catalog_tab_count(), 7);
     }
 
     #[test]
