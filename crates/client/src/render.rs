@@ -1162,6 +1162,8 @@ pub struct State {
     patter_at: Option<[f32; 3]>,
     /// Once: stood under wet leaves and heard the rain patter.
     found_patter: bool,
+    /// Once: stood by a furnace / smoker / blast and heard the heat crackle.
+    found_heat: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2206,6 +2208,7 @@ impl State {
             patter_mix: 0.0,
             patter_at: None,
             found_patter: false,
+            found_heat: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -13241,6 +13244,106 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Furnace heat crackle plate, then quit with a PNG.
+    pub fn arm_furnace_heat_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let fx = 11;
+        let fy = 2;
+        let fz = 17;
+        let mut changes = Vec::new();
+        for z in (fz - 1)..=(fz + 1) {
+            for x in (fx - 1)..=(fx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: fx,
+            y: fy,
+            z: fz,
+            block: Block::new("furnace", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let source = [fx as f32 + 0.5, fy as f32 + 0.55, fz as f32 + 0.5];
+        self.crackle_at = Some(source);
+        self.crackle_mix = 1.0;
+        self.found_heat = true;
+        self.drops = crate::drops::Drops::new();
+        self.drops.smoke([source[0], source[1] + 0.45, source[2]]);
+        self.rebuild_drops();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("heat");
+        self.play_world(crate::audio::Sound::Crackle, source);
+
+        let focus = glam::Vec3::new(fx as f32 + 0.5, fy as f32 + 0.7, fz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            fx as f32 + 0.5,
+            fy as f32 + 0.2 + body::EYE_HEIGHT,
+            fz as f32 - 2.3,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(fx + dx * 8, fz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Wet leaf canopy with rain patter, then quit with a PNG.
     pub fn arm_rain_leaves_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17925,8 +18028,18 @@ impl State {
             self.rain_told = false;
         }
         let (fire_mix, fire_at) = nearest_campfire(&self.world, eye);
-        self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
-        self.crackle_at = fire_at;
+        let (heat_mix, heat_at) = nearest_furnace(&self.world, eye);
+        let want_crackle = fire_mix.max(heat_mix);
+        self.crackle_mix += (want_crackle - self.crackle_mix) * (dt * 2.4).min(1.0);
+        self.crackle_at = if heat_mix > fire_mix {
+            heat_at
+        } else {
+            fire_at
+        };
+        if heat_mix > 0.35 && !self.found_heat {
+            self.found_heat = true;
+            self.gui.push_chat("heat");
+        }
         let (lamp_mix, lamp_at) = nearest_lantern(&self.world, eye);
         self.hiss_mix += (lamp_mix - self.hiss_mix) * (dt * 2.2).min(1.0);
         self.hiss_at = lamp_at;
@@ -17940,20 +18053,23 @@ impl State {
         self.rustle_wait = (self.rustle_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
-            if let Some(source) = self.crackle_at {
-                let at = [source[0], source[1] + 0.35, source[2]];
-                if self.smoke_wait <= 0.0 {
-                    self.smoke_wait = 0.32;
-                    self.drops.smoke(at);
-                    self.rebuild_drops();
-                }
-                if self.ember_wait <= 0.0 {
-                    self.ember_wait = 0.18;
-                    self.drops.embers(at);
-                    self.rebuild_drops();
-                    if !self.found_embers {
-                        self.found_embers = true;
-                        self.gui.push_chat("embers");
+            // Smoke and embers stay campfire-only; furnaces crackle without sparks.
+            if fire_mix > 0.05 {
+                if let Some(source) = fire_at {
+                    let at = [source[0], source[1] + 0.35, source[2]];
+                    if self.smoke_wait <= 0.0 {
+                        self.smoke_wait = 0.32;
+                        self.drops.smoke(at);
+                        self.rebuild_drops();
+                    }
+                    if self.ember_wait <= 0.0 {
+                        self.ember_wait = 0.18;
+                        self.drops.embers(at);
+                        self.rebuild_drops();
+                        if !self.found_embers {
+                            self.found_embers = true;
+                            self.gui.push_chat("embers");
+                        }
                     }
                 }
             }
@@ -20549,6 +20665,41 @@ fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
     }
 }
 
+/// Soft proximity to a furnace, smoker, or blast furnace. Mix is `0` outside
+/// ~10 blocks, rising to `1` at the block. Feeds the shared crackle ambience.
+fn nearest_furnace(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 8;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 3)..=(cy + 2) {
+                let id = world.block_at(x, y, z).id;
+                if id != "furnace" && id != "smoker" && id != "blast_furnace" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.55, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 10.0 => {
+            let t = ((10.0 - dist) / 10.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// One drop from the camp chest, read from the data pack. Any other cell is
 /// `None`. The same cell always yields the same item. `omen` uses the richer
 /// list. `None` also means the file could not be read.
@@ -21109,6 +21260,25 @@ mod tests {
             }],
         );
         assert!(!super::open_sky(&cluster, eye));
+    }
+
+    #[test]
+    fn furnace_heat_mix_rises_beside_a_furnace() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        let eye = [0.5, 2.5, 0.5];
+        assert_eq!(super::nearest_furnace(&cluster, eye).0, 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[rebuild_world::CellChange {
+                x: 1,
+                y: 2,
+                z: 0,
+                block: rebuild_world::Block::new("furnace", 0),
+            }],
+        );
+        let (mix, at) = super::nearest_furnace(&cluster, eye);
+        assert!(mix > 0.3, "furnace mix {mix}");
+        assert!(at.is_some());
     }
 
     #[test]
