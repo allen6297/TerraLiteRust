@@ -7979,6 +7979,20 @@ impl State {
             let fallen = self.air_peak - self.camera.eye.y;
             let drop = fallen.max(0.0).floor() as i32;
             self.note_land(drop);
+            // Camera punch on any real landing; hurt still owns deadly falls.
+            if fallen > 0.55 {
+                let punch = (fallen / 3.5).clamp(0.3, 1.0);
+                self.hit_kick = self.hit_kick.max(punch);
+                if crate::body::fall_hurt(fallen) == 0 {
+                    let feet = [
+                        self.camera.eye.x,
+                        self.camera.eye.y - body::EYE_HEIGHT,
+                        self.camera.eye.z,
+                    ];
+                    let ground = body::ground_id(&self.world, self.camera.eye);
+                    self.play_world_soft(crate::audio::step_for(ground), feet, 0.45);
+                }
+            }
             let amount = crate::body::fall_hurt(fallen);
             if amount > 0 {
                 self.hurt(amount);
@@ -8681,7 +8695,7 @@ impl State {
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
-            self.hit_kick,
+            self.hit_kick * bob_scale,
         );
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);

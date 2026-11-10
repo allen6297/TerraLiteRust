@@ -267,9 +267,9 @@ pub fn crouch_drop(amount: f32) -> f32 {
 /// Degrees the view widens at a full sprint (before view-bob scale).
 pub const SPRINT_FOV: f32 = 10.0;
 
-/// Sprint widens the view. A hit tightens it. A spyglass stays narrow.
+/// Sprint widens the view. A hit or landing tightens it. A spyglass stays narrow.
 ///
-/// `sprint` is already scaled by the view-bob setting (off → no punch).
+/// `sprint` and `hit` are already scaled by the view-bob setting (off → no punch).
 pub fn punched_fov(base: f32, sprint: f32, hit: f32) -> f32 {
     if base < LOOK_FOV - 1.0 {
         return base;
