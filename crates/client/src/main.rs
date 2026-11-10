@@ -3,6 +3,7 @@ mod statistics;
 mod resource_packs;
 mod datapacks;
 mod mods;
+mod skins;
 mod arrows;
 mod audio;
 mod pearls;
@@ -245,6 +246,8 @@ struct Args {
     shot_datapack_picker: Option<std::path::PathBuf>,
     /// Mods enable list screen, then quit.
     shot_mods_enable_list: Option<std::path::PathBuf>,
+    /// Player skin picker screen, then quit.
+    shot_player_skin_picker: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -510,6 +513,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_resource_pack_picker: args.shot_resource_pack_picker,
         shot_datapack_picker: args.shot_datapack_picker,
         shot_mods_enable_list: args.shot_mods_enable_list,
+        shot_player_skin_picker: args.shot_player_skin_picker,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -653,6 +657,7 @@ struct App {
     shot_resource_pack_picker: Option<std::path::PathBuf>,
     shot_datapack_picker: Option<std::path::PathBuf>,
     shot_mods_enable_list: Option<std::path::PathBuf>,
+    shot_player_skin_picker: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -947,6 +952,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_mods_enable_list.take() {
                     state.arm_mods_enable_list_shot(path);
+                }
+                if let Some(path) = self.shot_player_skin_picker.take() {
+                    state.arm_player_skin_picker_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1320,6 +1328,7 @@ where
         shot_resource_pack_picker: None,
         shot_datapack_picker: None,
         shot_mods_enable_list: None,
+        shot_player_skin_picker: None,
         name: None,
         host: false,
         join: false,
@@ -1786,6 +1795,15 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-mods-enable-list".to_string())?;
                 parsed.shot_mods_enable_list = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-player-skin-picker"
+            | "--shot-skin-picker"
+            | "--shot-player-skin"
+            | "--shot-skin" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-player-skin-picker".to_string())?;
+                parsed.shot_player_skin_picker = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2457,6 +2475,17 @@ mod tests {
         assert_eq!(
             args.shot_mods_enable_list.as_deref(),
             Some(std::path::Path::new("mods-enable-list.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-player-skin-picker".into(),
+            "player-skin-picker.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_player_skin_picker.as_deref(),
+            Some(std::path::Path::new("player-skin-picker.png"))
         );
     }
 }

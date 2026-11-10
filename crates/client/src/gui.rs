@@ -4352,6 +4352,12 @@ pub enum MenuAction {
     ToggleMod,
     /// Mods enable list: persist disabled list (next world load).
     ApplyMods,
+    /// Skin picker: select a PNG (or default).
+    SelectSkin,
+    /// Skin picker: open a file dialog.
+    BrowseSkin,
+    /// Skin picker: persist and paint the local player mesh.
+    ApplySkin,
 }
 
 /// How an egui settings row draws its control (toggle vs discrete slider).
@@ -4391,6 +4397,7 @@ enum MenuPage {
     ResourcePacks,
     DataPacks,
     Mods,
+    Skins,
     Worlds,
     Pause,
     Closed,
@@ -4417,12 +4424,16 @@ pub struct Menu {
     datapacks_return: MenuPage,
     /// Mods screen returns here (settings / pause / closed).
     mods_return: MenuPage,
+    /// Skins screen returns here (settings / pause / closed).
+    skins_return: MenuPage,
     /// Pack id waiting for [`MenuAction::TogglePack`].
     pending_pack_toggle: Option<String>,
     /// Datapack id waiting for [`MenuAction::ToggleDataPack`].
     pending_datapack_toggle: Option<String>,
     /// Mod id waiting for [`MenuAction::ToggleMod`].
     pending_mod_toggle: Option<String>,
+    /// Skin path waiting for [`MenuAction::SelectSkin`] (`""` = default).
+    pending_skin_select: Option<String>,
     selected: usize,
     size: rebuild_world::WorldSize,
     muted: bool,
@@ -4462,9 +4473,11 @@ impl Menu {
             resource_packs_return: MenuPage::Settings,
             datapacks_return: MenuPage::Settings,
             mods_return: MenuPage::Settings,
+            skins_return: MenuPage::Settings,
             pending_pack_toggle: None,
             pending_datapack_toggle: None,
             pending_mod_toggle: None,
+            pending_skin_select: None,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4498,9 +4511,11 @@ impl Menu {
             resource_packs_return: MenuPage::Settings,
             datapacks_return: MenuPage::Settings,
             mods_return: MenuPage::Settings,
+            skins_return: MenuPage::Settings,
             pending_pack_toggle: None,
             pending_datapack_toggle: None,
             pending_mod_toggle: None,
+            pending_skin_select: None,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4593,6 +4608,12 @@ impl Menu {
                 title: "Controls".into(),
                 detail: "keys and mouse".into(),
                 options: vec!["keybinds".into()],
+            },
+            SettingsCategory {
+                id: "player".into(),
+                title: "Player".into(),
+                detail: "local look".into(),
+                options: vec!["player_skin".into()],
             },
             SettingsCategory {
                 id: "packs".into(),
@@ -4691,6 +4712,7 @@ impl Menu {
             "resource_packs" => "folders and zips under resourcepacks/".to_string(),
             "datapacks" => "folders and zips under datapacks/".to_string(),
             "mods" => "RoseGold scripts and folders under mods/".to_string(),
+            "player_skin" => "classic/slim PNG under skins/".to_string(),
             "back" => "return to the menu".to_string(),
             _ => rebuild_world::Pack::builtin()
                 .settings()
@@ -4777,6 +4799,9 @@ impl Menu {
                 caption: "Open…",
             },
             "mods" => SettingsControl::Link {
+                caption: "Open…",
+            },
+            "player_skin" => SettingsControl::Link {
                 caption: "Open…",
             },
             _ => {
@@ -5017,6 +5042,7 @@ impl Menu {
             MenuPage::ResourcePacks => "RESOURCE PACKS",
             MenuPage::DataPacks => "DATAPACKS",
             MenuPage::Mods => "MODS",
+            MenuPage::Skins => "PLAYER SKIN",
             MenuPage::Worlds => "WORLDS",
             MenuPage::Pause => "PAUSED",
             MenuPage::Closed => "",
@@ -5045,6 +5071,7 @@ impl Menu {
             "resource_packs" => "enable overlays, then Apply".to_string(),
             "datapacks" => "enable overlays, then Apply".to_string(),
             "mods" => "enable RoseGold mods, then Apply".to_string(),
+            "player_skin" => "pick a PNG skin, then Apply".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
             "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
@@ -5057,6 +5084,10 @@ impl Menu {
             "apply" if self.page == MenuPage::Mods => {
                 "save enable list — next world load".to_string()
             }
+            "apply" if self.page == MenuPage::Skins => {
+                "paint local player mesh now".to_string()
+            }
+            "browse" => "open a PNG from disk".to_string(),
             "apply" => "reload textures from enabled packs".to_string(),
             "world" if self.size_locked => format!(
                 "server {}, {} by {} chunks",
@@ -5162,6 +5193,16 @@ impl Menu {
                     MenuAction::None
                 }
             }
+            MenuPage::Skins => {
+                let back = self.skins_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
             MenuPage::Worlds => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5186,6 +5227,7 @@ impl Menu {
                 | MenuPage::ResourcePacks
                 | MenuPage::DataPacks
                 | MenuPage::Mods
+                | MenuPage::Skins
         ) {
             let _ = self.escape();
         }
@@ -5302,6 +5344,10 @@ impl Menu {
                 self.open_mods(MenuPage::Settings);
                 MenuAction::None
             }
+            MenuPage::Settings if label == "player_skin" => {
+                self.open_skins(MenuPage::Settings);
+                MenuAction::None
+            }
             MenuPage::Settings => {
                 self.back();
                 MenuAction::None
@@ -5403,6 +5449,18 @@ impl Menu {
                 }
             }
             MenuPage::Mods if label == "apply" => MenuAction::ApplyMods,
+            MenuPage::Skins if label == "back" => {
+                let back = self.skins_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
+            MenuPage::Skins if label == "apply" => MenuAction::ApplySkin,
+            MenuPage::Skins if label == "browse" => MenuAction::BrowseSkin,
             MenuPage::Worlds if label == "back" => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5635,6 +5693,31 @@ impl Menu {
         self.pending_mod_toggle.take()
     }
 
+    pub fn is_skins(&self) -> bool {
+        self.page == MenuPage::Skins
+    }
+
+    fn open_skins(&mut self, back: MenuPage) {
+        self.skins_return = back;
+        self.page = MenuPage::Skins;
+        self.selected = 0;
+        self.pending_skin_select = None;
+    }
+
+    /// Open skin picker (proof shots).
+    pub fn show_skins(&mut self) {
+        self.open_skins(MenuPage::Closed);
+    }
+
+    pub fn request_skin_select(&mut self, path: &str) -> MenuAction {
+        self.pending_skin_select = Some(path.to_string());
+        MenuAction::SelectSkin
+    }
+
+    pub fn take_skin_select(&mut self) -> Option<String> {
+        self.pending_skin_select.take()
+    }
+
     fn make_world(&mut self) {
         let name = crate::net::fresh_world_name(&self.worlds);
         if crate::net::ensure_world(&name).is_err() {
@@ -5661,6 +5744,11 @@ impl Menu {
             MenuPage::ResourcePacks => vec!["apply".to_string(), "back".to_string()],
             MenuPage::DataPacks => vec!["apply".to_string(), "back".to_string()],
             MenuPage::Mods => vec!["apply".to_string(), "back".to_string()],
+            MenuPage::Skins => vec![
+                "browse".to_string(),
+                "apply".to_string(),
+                "back".to_string(),
+            ],
             MenuPage::Pause => {
                 let mut rows = self.pause.labels.clone();
                 // Older pause.json packs may omit rows — keep screens reachable.
@@ -5707,6 +5795,7 @@ impl Menu {
             "resource_packs" => "enable overlays, then Apply".to_string(),
             "datapacks" => "enable overlays, then Apply".to_string(),
             "mods" => "enable RoseGold mods, then Apply".to_string(),
+            "player_skin" => "pick a PNG skin, then Apply".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
             "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
@@ -5719,6 +5808,10 @@ impl Menu {
             "apply" if self.page == MenuPage::Mods => {
                 "save enable list — next world load".to_string()
             }
+            "apply" if self.page == MenuPage::Skins => {
+                "paint local player mesh now".to_string()
+            }
+            "browse" => "open a PNG from disk".to_string(),
             "apply" => "reload textures from enabled packs".to_string(),
             "world" if self.size_locked => format!(
                 "server {}, {} by {} chunks",
@@ -5814,7 +5907,7 @@ const FALLBACK_SETTINGS: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "resource_packs", "datapacks", "mods", "back"]
+  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "player_skin", "resource_packs", "datapacks", "mods", "back"]
 }"#;
 
 const FALLBACK_PAUSE: &str = r#"{

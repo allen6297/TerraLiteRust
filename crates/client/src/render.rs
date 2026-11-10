@@ -1271,6 +1271,7 @@ pub struct State {
     pack_picker: crate::resource_packs::PackPicker,
     datapack_picker: crate::datapacks::DataPackPicker,
     mod_picker: crate::mods::ModPicker,
+    skin_picker: crate::skins::SkinPicker,
     /// F is down on a held spyglass.
     zoom_key: bool,
     /// Seconds until a held goat horn can sound again.
@@ -2470,6 +2471,7 @@ impl State {
             pack_picker: crate::resource_packs::PackPicker::load(),
             datapack_picker: crate::datapacks::DataPackPicker::load(),
             mod_picker: crate::mods::ModPicker::load(),
+            skin_picker: crate::skins::SkinPicker::load(),
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
@@ -16657,6 +16659,52 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Player skin picker with demo-magenta selected (draft), then quit with a PNG.
+    pub fn arm_player_skin_picker_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        self.third_person = true;
+        self.skin_picker.refresh_from_disk();
+        self.skin_picker.select_path(std::path::PathBuf::from(
+            r"C:\CODE\TerraLite\skins\demo-magenta.png",
+        ));
+        self.menu.show_skins();
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Mods enable list with craft-story toggled off (draft), then quit with a PNG.
     pub fn arm_mods_enable_list_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -21574,6 +21622,28 @@ impl State {
                     self.gui.push_chat(&format!("mods: {err}"));
                 }
             },
+            gui::MenuAction::SelectSkin => {
+                if let Some(path) = self.menu.take_skin_select() {
+                    if path.is_empty() {
+                        self.skin_picker.select_default();
+                    } else {
+                        self.skin_picker
+                            .select_path(std::path::PathBuf::from(path));
+                    }
+                }
+            }
+            gui::MenuAction::BrowseSkin => {
+                self.skin_picker.browse();
+            }
+            gui::MenuAction::ApplySkin => match self.skin_picker.apply() {
+                Ok(()) => {
+                    self.gui.push_chat("player skin applied");
+                }
+                Err(err) => {
+                    eprintln!("skin: {err}");
+                    self.gui.push_chat(&format!("skin: {err}"));
+                }
+            },
             gui::MenuAction::Resume | gui::MenuAction::None => {}
         }
     }
@@ -25305,6 +25375,9 @@ impl State {
             let mod_rows = self.mod_picker.rows();
             let mod_note = self.mod_picker.note().to_string();
             let mod_dirty = self.mod_picker.dirty();
+            let skin_rows = self.skin_picker.rows();
+            let skin_note = self.skin_picker.note().to_string();
+            let skin_dirty = self.skin_picker.dirty();
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -25327,6 +25400,9 @@ impl State {
                 &mod_rows,
                 &mod_note,
                 mod_dirty,
+                &skin_rows,
+                &skin_note,
+                skin_dirty,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();

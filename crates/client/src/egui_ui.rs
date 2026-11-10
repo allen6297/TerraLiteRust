@@ -26,6 +26,7 @@ use crate::advancements::{AdvancementRow, ToastView};
 use crate::datapacks::DataPackRow;
 use crate::mods::ModRow;
 use crate::resource_packs::PackRow;
+use crate::skins::SkinRow;
 use crate::statistics::StatRow;
 use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab, SettingsControl};
@@ -240,6 +241,9 @@ impl EguiHost {
         mod_rows: &[ModRow],
         mod_note: &str,
         mod_dirty: bool,
+        skin_rows: &[SkinRow],
+        skin_note: &str,
+        skin_dirty: bool,
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
@@ -268,6 +272,9 @@ impl EguiHost {
                     mod_rows,
                     mod_note,
                     mod_dirty,
+                    skin_rows,
+                    skin_note,
+                    skin_dirty,
                 );
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
@@ -471,6 +478,237 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
         .corner_radius(CornerRadius::same(4))
         .min_size(Vec2::new(ui.available_width().max(280.0), 34.0));
     ui.add(btn)
+}
+
+fn draw_skins_screen(
+    ui: &mut Ui,
+    menu: &mut Menu,
+    rows: &[SkinRow],
+    note: &str,
+    dirty: bool,
+) -> MenuAction {
+    let mut action = MenuAction::None;
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show(ui, |ui| {
+            let avail = ui.available_size();
+            let panel_w = (avail.x * 0.82).clamp(520.0, 760.0);
+            let panel_h = (avail.y * 0.80).clamp(380.0, 620.0);
+            let top_pad = ((avail.y - panel_h) * 0.30).clamp(6.0, avail.y * 0.1);
+            ui.vertical_centered(|ui| {
+                ui.add_space(top_pad);
+                show_panel(ui, panel_w, |ui| {
+                    ui.set_min_height(panel_h);
+                    ui.horizontal(|ui| {
+                        title_label(ui, "PLAYER SKIN");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let back =
+                                egui::Button::new(RichText::new("Back").size(14.0).color(INK))
+                                    .fill(BUTTON)
+                                    .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                    .corner_radius(CornerRadius::same(4))
+                                    .min_size(Vec2::new(88.0, 30.0));
+                            if ui.add(back).clicked() {
+                                if let Some(index) =
+                                    menu.menu_rows().iter().position(|label| label == "back")
+                                {
+                                    action = menu.activate_row(index);
+                                }
+                            }
+                            let apply_fill = if dirty { SELECT } else { BUTTON };
+                            let apply_ink = if dirty {
+                                Color32::from_rgb(20, 18, 12)
+                            } else {
+                                INK
+                            };
+                            let apply = egui::Button::new(
+                                RichText::new("Apply").size(14.0).color(apply_ink).strong(),
+                            )
+                            .fill(apply_fill)
+                            .stroke(Stroke::new(1.0, if dirty { SELECT } else { SLOT_EDGE }))
+                            .corner_radius(CornerRadius::same(4))
+                            .min_size(Vec2::new(88.0, 30.0));
+                            if ui.add(apply).clicked() {
+                                action = MenuAction::ApplySkin;
+                            }
+                            let browse =
+                                egui::Button::new(RichText::new("Browse…").size(14.0).color(INK))
+                                    .fill(BUTTON)
+                                    .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                    .corner_radius(CornerRadius::same(4))
+                                    .min_size(Vec2::new(96.0, 30.0));
+                            if ui.add(browse).clicked() {
+                                action = MenuAction::BrowseSkin;
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    let status = if note.is_empty() {
+                        "classic/slim 64×64 PNG under skins/ · Apply paints the local mesh".to_string()
+                    } else {
+                        note.to_string()
+                    };
+                    ui.label(RichText::new(status).size(13.0).color(MUTED));
+                    ui.add_space(10.0);
+                    let dock_w = (panel_w * 0.28).clamp(140.0, 200.0);
+                    let body_h = (panel_h - 100.0).max(220.0);
+                    ui.horizontal(|ui| {
+                        ui.set_min_height(body_h);
+                        Frame::new()
+                            .fill(TITLE_PLATE)
+                            .stroke(Stroke::new(1.0, SLOT_EDGE))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(Margin::symmetric(8, 8))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.set_width(dock_w);
+                                    ui.set_min_height(body_h);
+                                    ui.label(
+                                        RichText::new("LOOK")
+                                            .size(11.0)
+                                            .color(MUTED)
+                                            .strong(),
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        RichText::new(
+                                            "Pick a PNG from skins/ or Browse for any classic/slim player sheet.",
+                                        )
+                                        .size(12.0)
+                                        .color(INK),
+                                    );
+                                    ui.add_space(10.0);
+                                    ui.label(
+                                        RichText::new(
+                                            "Apply paints the local third-person mesh and saves saves/skin.json.",
+                                        )
+                                        .size(12.0)
+                                        .color(MUTED),
+                                    );
+                                });
+                            });
+                        ui.add_space(10.0);
+                        Frame::new()
+                            .fill(WELL)
+                            .stroke(Stroke::new(1.0, SLOT_EDGE))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(Margin::symmetric(10, 8))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.set_width((panel_w - dock_w - 48.0).max(280.0));
+                                    ui.set_min_height(body_h);
+                                    ui.label(
+                                        RichText::new("AVAILABLE")
+                                            .size(11.0)
+                                            .color(MUTED)
+                                            .strong(),
+                                    );
+                                    ui.add_space(6.0);
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("player_skin_list")
+                                        .max_height(body_h - 28.0)
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            for row in rows {
+                                                Frame::new()
+                                                    .fill(ROW)
+                                                    .stroke(Stroke::new(
+                                                        1.0,
+                                                        if row.selected {
+                                                            SELECT
+                                                        } else {
+                                                            SLOT_EDGE
+                                                        },
+                                                    ))
+                                                    .corner_radius(CornerRadius::same(5))
+                                                    .inner_margin(Margin::symmetric(10, 8))
+                                                    .show(ui, |ui| {
+                                                        ui.horizontal(|ui| {
+                                                            ui.vertical(|ui| {
+                                                                ui.label(
+                                                                    RichText::new(&row.id)
+                                                                        .size(15.0)
+                                                                        .color(INK)
+                                                                        .strong(),
+                                                                );
+                                                                let kind = if row.custom {
+                                                                    format!("{} · file", row.model)
+                                                                } else {
+                                                                    row.model.to_string()
+                                                                };
+                                                                ui.label(
+                                                                    RichText::new(kind)
+                                                                        .size(12.0)
+                                                                        .color(MUTED),
+                                                                );
+                                                            });
+                                                            ui.with_layout(
+                                                                Layout::right_to_left(
+                                                                    Align::Center,
+                                                                ),
+                                                                |ui| {
+                                                                    let label = if row.selected {
+                                                                        "ON"
+                                                                    } else {
+                                                                        "USE"
+                                                                    };
+                                                                    let fill = if row.selected {
+                                                                        SELECT
+                                                                    } else {
+                                                                        BUTTON
+                                                                    };
+                                                                    let ink = if row.selected {
+                                                                        Color32::from_rgb(
+                                                                            20, 18, 12,
+                                                                        )
+                                                                    } else {
+                                                                        INK
+                                                                    };
+                                                                    let btn = egui::Button::new(
+                                                                        RichText::new(label)
+                                                                            .size(13.0)
+                                                                            .color(ink)
+                                                                            .strong(),
+                                                                    )
+                                                                    .fill(fill)
+                                                                    .stroke(Stroke::new(
+                                                                        1.0, SLOT_EDGE,
+                                                                    ))
+                                                                    .corner_radius(
+                                                                        CornerRadius::same(3),
+                                                                    )
+                                                                    .min_size(Vec2::new(64.0, 28.0));
+                                                                    if ui.add(btn).clicked() {
+                                                                        let path = if row
+                                                                            .path
+                                                                            .as_os_str()
+                                                                            .is_empty()
+                                                                        {
+                                                                            String::new()
+                                                                        } else {
+                                                                            row.path
+                                                                                .display()
+                                                                                .to_string()
+                                                                        };
+                                                                        action = menu
+                                                                            .request_skin_select(
+                                                                                &path,
+                                                                            );
+                                                                    }
+                                                                },
+                                                            );
+                                                        });
+                                                    });
+                                                ui.add_space(6.0);
+                                            }
+                                        });
+                                });
+                            });
+                    });
+                });
+            });
+        });
+    action
 }
 
 fn draw_mods_screen(
@@ -1570,6 +1808,9 @@ fn draw_menu(
     mod_rows: &[ModRow],
     mod_note: &str,
     mod_dirty: bool,
+    skin_rows: &[SkinRow],
+    skin_note: &str,
+    skin_dirty: bool,
 ) -> MenuAction {
     if menu.is_keybinds() {
         return draw_keybinds(ui, menu, binds);
@@ -1591,6 +1832,9 @@ fn draw_menu(
     }
     if menu.is_mods() {
         return draw_mods_screen(ui, menu, mod_rows, mod_note, mod_dirty);
+    }
+    if menu.is_skins() {
+        return draw_skins_screen(ui, menu, skin_rows, skin_note, skin_dirty);
     }
     let mut action = MenuAction::None;
     let title = menu.page_title();
@@ -2850,14 +3094,16 @@ fn player_preview_texture(
     ctx: &Context,
     icons: &mut HashMap<String, TextureHandle>,
 ) -> TextureId {
-    if let Some(handle) = icons.get(PREVIEW_KEY) {
+    let key = format!("{PREVIEW_KEY}:{}", player::preview_generation());
+    if let Some(handle) = icons.get(&key) {
         return handle.id();
     }
+    icons.retain(|name, _| !name.starts_with(PREVIEW_KEY));
     let rgba = player::preview_rgba(PREVIEW_W, PREVIEW_H);
     let image = egui::ColorImage::from_rgba_unmultiplied([PREVIEW_W, PREVIEW_H], &rgba);
-    let handle = ctx.load_texture(PREVIEW_KEY, image, TextureOptions::LINEAR);
+    let handle = ctx.load_texture(key.clone(), image, TextureOptions::LINEAR);
     let tex = handle.id();
-    icons.insert(PREVIEW_KEY.to_string(), handle);
+    icons.insert(key, handle);
     tex
 }
 

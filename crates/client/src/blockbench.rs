@@ -25,11 +25,123 @@ pub struct Figure {
     skin: Option<Skin>,
 }
 
+/// Classic (4px arm) or slim (3px arm) Minecraft player sheet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkinModel {
+    Classic,
+    Slim,
+}
+
 #[derive(Clone, Debug)]
-struct Skin {
+pub struct Skin {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+}
+
+impl Skin {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Heuristic: classic-only outer arm column empty → slim Alex layout.
+    pub fn detect_model(&self) -> SkinModel {
+        if self.width < 64 || self.height < 32 {
+            return SkinModel::Classic;
+        }
+        // Classic right-arm outer column (u=50 and u=54, v=20..32). Slim sheets leave these clear.
+        let mut opaque = 0u32;
+        let mut total = 0u32;
+        for y in 20..32 {
+            for x in [50, 54] {
+                total += 1;
+                if let Some(px) = skin_texel(self, x, y) {
+                    if px[3] > 0.45 {
+                        opaque += 1;
+                    }
+                }
+            }
+        }
+        if total > 0 && opaque * 3 < total {
+            SkinModel::Slim
+        } else {
+            SkinModel::Classic
+        }
+    }
+}
+
+impl Figure {
+    /// Swap the painted sheet. Geometry stays classic unless [`Self::fit_arms`] runs.
+    pub fn set_skin(&mut self, skin: Skin) {
+        self.skin = Some(skin);
+    }
+
+    pub fn clear_skin(&mut self) {
+        self.skin = None;
+    }
+
+    pub fn skin(&self) -> Option<&Skin> {
+        self.skin.as_ref()
+    }
+
+    /// Narrow arm cubes toward 3px when the sheet is slim.
+    pub fn fit_arms(&mut self, model: SkinModel) {
+        let scale = match model {
+            SkinModel::Classic => 1.0,
+            SkinModel::Slim => 0.75,
+        };
+        for bone in &mut self.bones {
+            if bone.name != "arm_l" && bone.name != "arm_r" {
+                continue;
+            }
+            let mid = (bone.from[0] + bone.to[0]) * 0.5;
+            let half = (bone.to[0] - bone.from[0]).abs() * 0.5 * scale;
+            bone.from[0] = mid - half;
+            bone.to[0] = mid + half;
+            for face in &mut bone.faces {
+                for corner in &mut face.corners {
+                    let dx = corner[0] - mid;
+                    corner[0] = mid + dx * scale;
+                }
+            }
+        }
+    }
+}
+
+/// Decode a player PNG (64×64 classic/slim, or legacy 64×32 doubled).
+pub fn load_skin_png(bytes: &[u8]) -> Result<Skin, String> {
+    let mut skin = decode_skin(bytes).ok_or_else(|| "not a readable PNG skin".to_string())?;
+    if skin.width == 64 && skin.height == 32 {
+        skin = double_skin_height(skin);
+    }
+    if skin.width != 64 || (skin.height != 64 && skin.height != 32) {
+        return Err(format!(
+            "skin must be 64×64 (or 64×32), got {}×{}",
+            skin.width, skin.height
+        ));
+    }
+    Ok(skin)
+}
+
+fn double_skin_height(skin: Skin) -> Skin {
+    let mut rgba = vec![0u8; 64 * 64 * 4];
+    let row = 64 * 4;
+    for y in 0..32 {
+        let src = y * row;
+        let dst_top = y * row;
+        let dst_bot = (y + 32) * row;
+        rgba[dst_top..dst_top + row].copy_from_slice(&skin.rgba[src..src + row]);
+        rgba[dst_bot..dst_bot + row].copy_from_slice(&skin.rgba[src..src + row]);
+    }
+    Skin {
+        width: 64,
+        height: 64,
+        rgba,
+    }
 }
 
 #[derive(Clone, Debug)]

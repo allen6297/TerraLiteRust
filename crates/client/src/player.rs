@@ -5,7 +5,10 @@
 //! `idle`, `walk`, and `dig` are the clips. Parts may be `head`/`body`/`arm_l`…
 //! or Blockbench names `Head`/`Body`/`Larm`/`Rarm`/`Lleg`/`Rleg`.
 
-use crate::blockbench::{self, Figure};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+use crate::blockbench::{self, Figure, Skin, SkinModel};
 use crate::body::EYE_HEIGHT;
 use crate::mesh::Vertex;
 
@@ -72,12 +75,12 @@ impl Pose {
     pub fn vertices(&self, eye: [f32; 3], hide_head: bool) -> Vec<Vertex> {
         let feet = [eye[0], eye[1] - EYE_HEIGHT, eye[2]];
         let hide: &[&str] = if hide_head { &["head"] } else { &[] };
-        blockbench::mesh(figure(), self.clip(), self.pose, self.yaw, feet, hide)
+        let figure = active_figure();
+        blockbench::mesh(&figure, self.clip(), self.pose, self.yaw, feet, hide)
     }
 }
 
-fn figure() -> &'static Figure {
-    use std::sync::OnceLock;
+fn base_figure() -> &'static Figure {
     static FIGURE: OnceLock<Figure> = OnceLock::new();
     FIGURE.get_or_init(|| {
         blockbench::parse(include_str!(
@@ -87,6 +90,86 @@ fn figure() -> &'static Figure {
     })
 }
 
+fn skin_override() -> &'static Mutex<Option<(PathBuf, Skin, SkinModel)>> {
+    static STATE: OnceLock<Mutex<Option<(PathBuf, Skin, SkinModel)>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn preview_epoch() -> &'static Mutex<u64> {
+    static EPOCH: OnceLock<Mutex<u64>> = OnceLock::new();
+    EPOCH.get_or_init(|| Mutex::new(0))
+}
+
+/// Bumps when the local skin changes so egui can drop the cached preview.
+pub fn preview_generation() -> u64 {
+    *preview_epoch()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
+fn bump_preview() {
+    let mut epoch = preview_epoch()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    *epoch = epoch.saturating_add(1);
+}
+
+fn active_figure() -> Figure {
+    let mut figure = base_figure().clone();
+    if let Some((_, skin, model)) = skin_override()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+    {
+        figure.set_skin(skin);
+        figure.fit_arms(model);
+    }
+    figure
+}
+
+/// Tests and callers that need the static base (no override).
+#[cfg(test)]
+fn figure() -> Figure {
+    active_figure()
+}
+
+/// Path of the installed custom skin, if any.
+pub fn installed_skin_path() -> Option<PathBuf> {
+    skin_override()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .as_ref()
+        .map(|(path, _, _)| path.clone())
+}
+
+pub fn installed_skin_model() -> Option<SkinModel> {
+    skin_override()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .as_ref()
+        .map(|(_, _, model)| *model)
+}
+
+/// Paint a PNG onto the local player mesh (and inventory preview).
+pub fn install_skin_path(path: &Path) -> Result<SkinModel, String> {
+    let bytes = std::fs::read(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let skin = blockbench::load_skin_png(&bytes)?;
+    let model = skin.detect_model();
+    *skin_override()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = Some((path.to_path_buf(), skin, model));
+    bump_preview();
+    Ok(model)
+}
+
+/// Clear custom skin and restore the pack default mesh paint.
+pub fn clear_skin() {
+    *skin_override()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    bump_preview();
+}
+
 /// Mesh used by remote peers facing `yaw` (Blockbench +Z convention).
 ///
 /// `swinging` plays the dig clip; `pose` is the clip clock in seconds.
@@ -94,7 +177,8 @@ pub fn peer_mesh(eye: [f32; 3], yaw: f32, swinging: bool, pose: f32) -> Vec<Vert
     let feet = [eye[0], eye[1] - EYE_HEIGHT, eye[2]];
     let clip = if swinging { "dig" } else { "idle" };
     let t = if swinging { pose } else { 0.0 };
-    blockbench::mesh(figure(), clip, t, yaw, feet, &[])
+    let figure = active_figure();
+    blockbench::mesh(&figure, clip, t, yaw, feet, &[])
 }
 
 /// Soft-render the idle body for an egui inventory preview (third-person style).
@@ -106,7 +190,8 @@ pub fn preview_rgba(width: usize, height: usize) -> Vec<u8> {
     let width = width.max(8);
     let height = height.max(8);
     // Mid-idle so the arms breathe; yaw keeps the face toward the camera (+Z).
-    let vertices = blockbench::mesh(figure(), "idle", 0.35, 0.0, [0.0, 0.0, 0.0], &[]);
+    let figure = active_figure();
+    let vertices = blockbench::mesh(&figure, "idle", 0.35, 0.0, [0.0, 0.0, 0.0], &[]);
     soft_project(&vertices, width, height)
 }
 
@@ -203,8 +288,8 @@ mod tests {
     #[test]
     fn idle_breathes_the_arms_and_walk_swings_the_legs() {
         let figure = figure();
-        let rest = blockbench::mesh(figure, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
-        let mid = blockbench::mesh(figure, "idle", 1.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        let rest = blockbench::mesh(&figure, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        let mid = blockbench::mesh(&figure, "idle", 1.0, 0.0, [0.0, 0.0, 0.0], &[]);
         // Idle swings each arm on X; track the left arm tip's mean Z.
         let left_tip_z = |vertices: &[Vertex]| {
             let tips: Vec<_> = vertices
@@ -224,7 +309,7 @@ mod tests {
             "idle breathes the arms"
         );
         let span_z = |time: f32| {
-            let posed = blockbench::mesh(figure, "walk", time, 0.0, [0.0, 0.0, 0.0], &[]);
+            let posed = blockbench::mesh(&figure, "walk", time, 0.0, [0.0, 0.0, 0.0], &[]);
             let legs: Vec<_> = posed
                 .into_iter()
                 .filter(|vertex| vertex.position[1] < 0.75 && vertex.position[0].abs() < 0.35)
@@ -271,8 +356,8 @@ mod tests {
     #[test]
     fn dig_raises_the_right_arm() {
         let figure = figure();
-        let rest = blockbench::mesh(figure, "dig", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
-        let raised = blockbench::mesh(figure, "dig", 0.2, 0.0, [0.0, 0.0, 0.0], &[]);
+        let rest = blockbench::mesh(&figure, "dig", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        let raised = blockbench::mesh(&figure, "dig", 0.2, 0.0, [0.0, 0.0, 0.0], &[]);
         // Character right is -X; keep above the feet so legs are not the tip.
         let hand = |vertices: &[Vertex]| {
             vertices
