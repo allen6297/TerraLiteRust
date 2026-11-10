@@ -212,6 +212,8 @@ struct Args {
     shot_note: Option<std::path::PathBuf>,
     /// Camp hanging-sign path tip, then quit.
     shot_hang: Option<std::path::PathBuf>,
+    /// Mine-mouth lodestone + linked compass, then quit.
+    shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
     shot_jukebox: Option<std::path::PathBuf>,
     /// Shrine bell ring, then quit.
@@ -381,6 +383,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_map_clay: args.shot_map_clay,
         shot_note: args.shot_note,
         shot_hang: args.shot_hang,
+        shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
         shot_lectern: args.shot_lectern,
@@ -474,6 +477,7 @@ struct App {
     shot_map_clay: Option<std::path::PathBuf>,
     shot_note: Option<std::path::PathBuf>,
     shot_hang: Option<std::path::PathBuf>,
+    shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
     shot_lectern: Option<std::path::PathBuf>,
@@ -694,6 +698,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_hang.take() {
                     state.arm_hang_shot(path);
+                }
+                if let Some(path) = self.shot_lodestone.take() {
+                    state.arm_lodestone_shot(path);
                 }
                 if let Some(path) = self.shot_jukebox.take() {
                     state.arm_jukebox_shot(path);
@@ -955,6 +962,7 @@ where
         shot_map_clay: None,
         shot_note: None,
         shot_hang: None,
+        shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
         shot_lectern: None,
@@ -1309,6 +1317,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-hang".to_string())?;
                 parsed.shot_hang = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-lodestone" | "--shot-compass-link" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-lodestone".to_string())?;
+                parsed.shot_lodestone = Some(std::path::PathBuf::from(value));
             }
             "--shot-jukebox" | "--shot-disc" => {
                 let value = iter

@@ -379,6 +379,9 @@ pub const SHAFT_LADDER: (i32, i32) = (SHAFT_MOUTH.0, SHAFT_MOUTH.1 - 1);
 /// Midpoint of the short rail spur east of the mine apron.
 pub const SHAFT_RAIL: (i32, i32) = (SHAFT_MOUTH.0 + 7, SHAFT_MOUTH.1);
 
+/// Lodestone northwest of the mouth — link a compass here.
+pub const SHAFT_LODESTONE: (i32, i32) = (SHAFT_MOUTH.0 - 1, SHAFT_MOUTH.1 + 2);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Broken stone-brick shrine, southeast of the demo pad.
@@ -634,6 +637,11 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     let anvil_x = (SHAFT_ANVIL.0 - chunk_x * 16) as u8;
     let anvil_z = (SHAFT_ANVIL.1 - chunk_z * 16) as u8;
     blocks.push((anvil_x, floor, anvil_z, Block::new("anvil", 0)));
+    // Northwest of the mouth: link a compass for the way back.
+    let stone_x = (SHAFT_LODESTONE.0 - chunk_x * 16) as u8;
+    let stone_z = (SHAFT_LODESTONE.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == stone_x && *z == stone_z && *y >= floor));
+    blocks.push((stone_x, floor, stone_z, Block::new("lodestone", 0)));
     // East of the apron: a short rail spur for a minecart ride.
     let rail_z = (SHAFT_MOUTH.1 - chunk_z * 16) as u8;
     for dx in 4..=7 {
@@ -1203,6 +1211,22 @@ mod tests {
         assert_eq!(
             (-2 * 16 + i32::from(local_x + 7), 2 * 16 + i32::from(local_z)),
             SHAFT_RAIL
+        );
+        assert_eq!(
+            shaft.block(
+                (SHAFT_LODESTONE.0 - (-2 * 16)) as u8,
+                post,
+                (SHAFT_LODESTONE.1 - 2 * 16) as u8
+            )
+            .id,
+            "lodestone"
+        );
+        assert_eq!(
+            (
+                -2 * 16 + (SHAFT_LODESTONE.0 - (-2 * 16)),
+                2 * 16 + (SHAFT_LODESTONE.1 - 2 * 16)
+            ),
+            SHAFT_LODESTONE
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;

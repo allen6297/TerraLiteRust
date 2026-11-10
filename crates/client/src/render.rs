@@ -1184,6 +1184,8 @@ pub struct State {
     found_chime: bool,
     /// Once: brushed a pottery sherd from the shrine altar pot.
     found_sherd: bool,
+    /// Once: found the mine-mouth lodestone.
+    found_lodestone: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2239,6 +2241,7 @@ impl State {
             found_grind: false,
             found_chime: false,
             found_sherd: false,
+            found_lodestone: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -4044,6 +4047,15 @@ impl State {
         if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
             self.found_mine = true;
             self.gui.push_chat("a mine — ladder into the pit");
+        }
+        if !self.found_lodestone
+            && near(
+                rebuild_world::SHAFT_LODESTONE.0,
+                rebuild_world::SHAFT_LODESTONE.1,
+            )
+        {
+            self.found_lodestone = true;
+            self.gui.push_chat("a lodestone — link a compass");
         }
         if !self.found_rails && near(rebuild_world::SHAFT_RAIL.0, rebuild_world::SHAFT_RAIL.1) {
             self.found_rails = true;
@@ -12420,6 +12432,88 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Link a compass to the mine-mouth lodestone, then quit with a PNG.
+    pub fn arm_lodestone_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (lx, lz) = rebuild_world::SHAFT_LODESTONE;
+        let mut ly = None;
+        for y in 0..80 {
+            if self.world.block_at(lx, y, lz).id == "lodestone" {
+                ly = Some(y);
+                break;
+            }
+        }
+        let ly = ly.unwrap_or_else(|| {
+            // Fall back to the mine mouth floor height if a save wiped the stamp.
+            let (mx, mz) = rebuild_world::SHAFT_MOUTH;
+            let mut floor = 4;
+            for y in (0..80).rev() {
+                let id = self.world.block_at(mx + 1, y, mz).id;
+                if id == "oak_log" || id == "chest" || id == "anvil" {
+                    floor = y;
+                    break;
+                }
+            }
+            floor
+        });
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: lx,
+                y: ly,
+                z: lz,
+                block: Block::new("lodestone", 0),
+            }],
+        );
+        self.chunk_bake.touch(lx, lz);
+        self.lodestone = Some([lx, ly, lz]);
+        self.found_mine = true;
+        self.found_lodestone = true;
+
+        let focus = glam::Vec3::new(lx as f32 + 0.5, ly as f32 + 0.7, lz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            lx as f32 + 2.4,
+            ly as f32 + 0.85 + body::EYE_HEIGHT,
+            lz as f32 - 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("compass");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("a lodestone — link a compass");
+        self.gui.push_chat("linked");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(lx + dx * 8, lz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Insert a disc into the camp jukebox mid-melody mote, then quit with a PNG.
     pub fn arm_jukebox_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17159,6 +17253,11 @@ impl State {
             return "need a lodestone";
         }
         self.lodestone = Some(at);
+        if !self.found_lodestone {
+            self.found_lodestone = true;
+            self.gui.push_chat("a lodestone — link a compass");
+        }
+        self.gui.push_chat("linked");
         "linked"
     }
 
