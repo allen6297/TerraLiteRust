@@ -603,13 +603,28 @@ fn pump(
         }
         match tag {
             Some(TAG_POSE) => {
-                let Ok(frame) = read_frame(&mut stream) else {
+                // Server may write pending peer chat frames, then the pose list.
+                let mut got_peers = false;
+                for _ in 0..8 {
+                    let Ok(frame) = read_frame(&mut stream) else {
+                        break;
+                    };
+                    if let Ok(list) = decode_peers(&frame) {
+                        if peers.send(list).is_err() {
+                            return;
+                        }
+                        got_peers = true;
+                        break;
+                    }
+                    if let Ok(ClientRequest::Chat { text }) = decode_client(&frame) {
+                        if chat.send(text).is_err() {
+                            return;
+                        }
+                        continue;
+                    }
                     break;
-                };
-                let Ok(list) = decode_peers(&frame) else {
-                    break;
-                };
-                if peers.send(list).is_err() {
+                }
+                if !got_peers {
                     break;
                 }
             }
@@ -628,10 +643,8 @@ fn pump(
                 let Ok(frame) = read_frame(&mut stream) else {
                     break;
                 };
-                let Ok(ClientRequest::Chat { text }) = decode_client(&frame) else {
-                    break;
-                };
-                if chat.send(text).is_err() {
+                // Sender already painted the line; drain the server echo.
+                if decode_client(&frame).is_err() {
                     break;
                 }
             }

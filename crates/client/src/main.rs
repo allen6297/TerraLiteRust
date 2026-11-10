@@ -82,7 +82,7 @@ I opens the inventory, nine slots past the hotbar. Letters search that grid by n
 Keys 1 through 9 and 0 while it is open stash one from that hotbar slot. Those nine
 slots, the hotbar, and where you stand are written into the same save. G opens the guide.
 C lists registered commands. Enter runs the selected one.
-T opens chat. Enter sends a line of letters. On a joined server the line comes back.
+T opens chat. Enter sends a line of letters; solo echoes into the HUD log, and on a Host/Join listen peers see the line too.
 Joined players show as another body. A long fall spends hearts, and at none you
 respawn by the stairs. F opens a chest, a crafting table, or a furnace. Settings world size also changes a
 dedicated server.
@@ -192,6 +192,8 @@ struct Args {
     shot_creative_flight: Option<std::path::PathBuf>,
     /// Main-menu Host + Join localhost proof, then quit.
     shot_localhost_join: Option<std::path::PathBuf>,
+    /// In-world chat overlay (field + HUD log), then quit.
+    shot_localhost_chat: Option<std::path::PathBuf>,
     /// Start a private localhost listen, then join as host.
     host: bool,
     /// Join an existing localhost listen.
@@ -433,6 +435,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_grass_wind: args.shot_grass_wind,
         shot_creative_flight: args.shot_creative_flight,
         shot_localhost_join: args.shot_localhost_join,
+        shot_localhost_chat: args.shot_localhost_chat,
         host: args.host,
         join: args.join,
         creative: args.creative,
@@ -553,6 +556,7 @@ struct App {
     shot_grass_wind: Option<std::path::PathBuf>,
     shot_creative_flight: Option<std::path::PathBuf>,
     shot_localhost_join: Option<std::path::PathBuf>,
+    shot_localhost_chat: Option<std::path::PathBuf>,
     host: bool,
     join: bool,
     creative: bool,
@@ -777,6 +781,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_localhost_join.take() {
                     state.arm_localhost_join_shot(path);
+                }
+                if let Some(path) = self.shot_localhost_chat.take() {
+                    state.arm_localhost_chat_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1128,6 +1135,7 @@ where
         shot_grass_wind: None,
         shot_creative_flight: None,
         shot_localhost_join: None,
+        shot_localhost_chat: None,
         host: false,
         join: false,
         creative: false,
@@ -1455,6 +1463,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-localhost-join".to_string())?;
                 parsed.shot_localhost_join = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-localhost-chat" | "--shot-chat" | "--shot-host-chat" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-localhost-chat".to_string())?;
+                parsed.shot_localhost_chat = Some(std::path::PathBuf::from(value));
             }
             "--host" | "--listen" => {
                 parsed.host = true;
@@ -1875,6 +1889,17 @@ mod tests {
         assert_eq!(
             args.shot_localhost_join.as_deref(),
             Some(std::path::Path::new("localhost-join.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-localhost-chat".into(),
+            "localhost-chat.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_localhost_chat.as_deref(),
+            Some(std::path::Path::new("localhost-chat.png"))
         );
     }
 }

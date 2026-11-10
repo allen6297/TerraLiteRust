@@ -2810,6 +2810,80 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// In-world chat overlay: HUD log + open field (solo echo / Host-Join).
+    pub fn arm_localhost_chat_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        // Suppress landmark tips so the HUD log stays chat-only.
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("host");
+        self.gui.push_chat("hello there");
+        let _ = self.gui.open_chat();
+        for code in [
+            winit::keyboard::KeyCode::KeyJ,
+            winit::keyboard::KeyCode::KeyO,
+            winit::keyboard::KeyCode::KeyI,
+            winit::keyboard::KeyCode::KeyN,
+            winit::keyboard::KeyCode::Space,
+            winit::keyboard::KeyCode::KeyM,
+            winit::keyboard::KeyCode::KeyE,
+        ] {
+            let _ = self.gui.on_press(code);
+        }
+        self.clear_motion();
+        self.set_capture(false);
+
+        let eye = glam::Vec3::new(8.5, 3.2 + crate::body::EYE_HEIGHT, 14.2);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     fn install_cluster(&mut self, cluster: Cluster) {
         self.job_epoch = self.job_epoch.wrapping_add(1);
         self.world = cluster;
@@ -18807,8 +18881,9 @@ impl State {
         if line.is_empty() {
             return;
         }
+        // Always paint the HUD locally (solo echo + Host/Join sender).
+        self.gui.push_chat(&line);
         if self.local {
-            self.gui.push_chat(&line);
             return;
         }
         if self.link.send(encode_chat(&line)).is_err() {

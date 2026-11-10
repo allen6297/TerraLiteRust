@@ -170,12 +170,68 @@ struct LivePlayer {
     yaw: f32,
 }
 
+/// One chat line waiting for other Host/Join peers.
+struct PendingChat {
+    seq: u64,
+    from: u32,
+    text: String,
+}
+
 struct ServeState {
     world: Cluster,
     changes: Vec<CellChange>,
     peers: Vec<LivePlayer>,
     next_id: u32,
+    /// Monotonic chat sequence; each peer tracks how far it has drained.
+    next_chat: u64,
+    /// Recent chat lines for peer fan-out (sender already echoed locally).
+    chat_log: Vec<PendingChat>,
     hooks: Hooks,
+}
+
+fn empty_state(world: Cluster, changes: Vec<CellChange>, hooks: Hooks) -> ServeState {
+    ServeState {
+        world,
+        changes,
+        peers: Vec::new(),
+        next_id: 1,
+        next_chat: 1,
+        chat_log: Vec::new(),
+        hooks,
+    }
+}
+
+/// Write chat lines this peer has not seen yet (skip lines they authored).
+fn deliver_chats(
+    stream: &mut impl io::Write,
+    state: &ServeState,
+    id: u32,
+    last_chat: &mut u64,
+) -> io::Result<()> {
+    for entry in &state.chat_log {
+        if entry.seq <= *last_chat {
+            continue;
+        }
+        *last_chat = entry.seq;
+        if entry.from == id {
+            continue;
+        }
+        write_frame(stream, &encode_chat(&entry.text))?;
+    }
+    Ok(())
+}
+
+fn note_chat(state: &mut ServeState, from: u32, text: String) {
+    if text.is_empty() {
+        return;
+    }
+    let seq = state.next_chat;
+    state.next_chat = state.next_chat.saturating_add(1);
+    state.chat_log.push(PendingChat { seq, from, text });
+    if state.chat_log.len() > 32 {
+        let extra = state.chat_log.len() - 32;
+        state.chat_log.drain(0..extra);
+    }
 }
 
 fn listen(
@@ -188,13 +244,7 @@ fn listen(
     let listener = TcpListener::bind(localhost(port))
         .map_err(|err| format!("could not listen on 127.0.0.1:{port}: {err}"))?;
     println!("listening on 127.0.0.1:{port}");
-    let state = Arc::new(Mutex::new(ServeState {
-        world,
-        changes,
-        peers: Vec::new(),
-        next_id: 1,
-        hooks,
-    }));
+    let state = Arc::new(Mutex::new(empty_state(world, changes, hooks)));
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
@@ -295,14 +345,40 @@ fn session(
     };
     let _leave = PeerLeave { state: &state, id };
     let mut spawned = false;
+    let mut last_chat = 0u64;
     let mut entities = EntityClock::new();
     loop {
         let request = decode_client(&read_frame(&mut stream)?).map_err(invalid)?;
         let mut guard = state.lock().map_err(|_| invalid("world lock"))?;
+        if let ClientRequest::Chat { text } = &request {
+            let line = chat_line(text);
+            // Echo so the sender's pump does not stall; queue for other peers.
+            note_chat(&mut guard, id, line.clone());
+            write_frame(&mut stream, &encode_chat(&line))?;
+            continue;
+        }
+        if let ClientRequest::Pose {
+            x,
+            y,
+            z,
+            yaw,
+            pitch,
+        } = &request
+        {
+            if let Some(path) = save.as_deref() {
+                store_pose(path, *x, *y, *z, *yaw, *pitch);
+            }
+            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw);
+            // Peer chat rides ahead of the pose list; client drains TAG_CHAT then peers.
+            deliver_chats(&mut stream, &guard, id, &mut last_chat)?;
+            let others = other_peers(&guard.peers, id);
+            write_frame(&mut stream, &encode_peers(&others))?;
+            continue;
+        }
         let ServeState {
             world,
             changes,
-            peers,
+            peers: _,
             hooks,
             ..
         } = &mut *guard;
@@ -359,26 +435,8 @@ fn session(
                 }
                 continue;
             }
-            ClientRequest::Pose {
-                x,
-                y,
-                z,
-                yaw,
-                pitch,
-            } => {
-                if let Some(path) = save.as_deref() {
-                    store_pose(path, x, y, z, yaw, pitch);
-                }
-                note_peer(peers, id, x, y, z, yaw);
-                let others = other_peers(peers, id);
-                write_frame(&mut stream, &encode_peers(&others))?;
-                continue;
-            }
-            ClientRequest::Chat { text } => {
-                let line = chat_line(&text);
-                write_frame(&mut stream, &encode_chat(&line))?;
-                continue;
-            }
+            ClientRequest::Pose { .. } => continue,
+            ClientRequest::Chat { .. } => continue,
             ClientRequest::Chest { x, y, z, slots } => {
                 if let Some(path) = save.as_deref() {
                     let block = world.block_at(x, y, z);
@@ -584,7 +642,8 @@ mod tests {
     use super::*;
     use rebuild_world::{
         Block, PlayerBox, TAG_BREAK, TestHook, TestHookEvent, WorldSize, decode_cell, decode_peers,
-        decode_welcome, encode_break, encode_hello, encode_place, encode_pose, encode_world_size,
+        decode_client, decode_welcome, encode_break, encode_chat, encode_hello, encode_place,
+        encode_pose, encode_world_size, ClientRequest,
     };
     use std::net::TcpStream;
     use std::thread;
@@ -659,13 +718,11 @@ mod tests {
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             stream.set_nodelay(true).unwrap();
-            let state = Arc::new(Mutex::new(ServeState {
-                world: synthetic_cluster(),
-                changes: Vec::new(),
-                peers: Vec::new(),
-                next_id: 1,
-                hooks: Hooks::new(),
-            }));
+            let state = Arc::new(Mutex::new(empty_state(
+                synthetic_cluster(),
+                Vec::new(),
+                Hooks::new(),
+            )));
             let ended = session(Arc::clone(&state), None, stream);
             (state, ended)
         });
@@ -750,13 +807,11 @@ mod tests {
             let chunk =
                 rebuild_world::Chunk::from_blocks(0, 0, [(1, 1, 1, Block::new("stone", 0))])
                     .unwrap();
-            let state = Arc::new(Mutex::new(ServeState {
-                world: rebuild_world::Cluster::try_from_chunks(0, 0, [chunk]).unwrap(),
-                changes: Vec::new(),
-                peers: Vec::new(),
-                next_id: 1,
+            let state = Arc::new(Mutex::new(empty_state(
+                rebuild_world::Cluster::try_from_chunks(0, 0, [chunk]).unwrap(),
+                Vec::new(),
                 hooks,
-            }));
+            )));
             let ended = session(Arc::clone(&state), None, stream);
             (state, ended)
         });
@@ -871,13 +926,11 @@ mod tests {
 
     #[test]
     fn a_second_player_is_visible_and_settings_resize_the_square() {
-        let state = Arc::new(Mutex::new(ServeState {
-            world: synthetic_cluster(),
-            changes: Vec::new(),
-            peers: Vec::new(),
-            next_id: 1,
-            hooks: Hooks::new(),
-        }));
+        let state = Arc::new(Mutex::new(empty_state(
+            synthetic_cluster(),
+            Vec::new(),
+            Hooks::new(),
+        )));
         let listener = TcpListener::bind(localhost(0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let shared = Arc::clone(&state);
@@ -915,15 +968,24 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert!((seen[0].x - 8.5).abs() < 0.1);
 
+        // First player chats (echoed back); second receives it on the next pose poll.
+        write_frame(&mut first, &encode_chat("hello there")).unwrap();
+        let echo = decode_client(&read_frame(&mut first).unwrap()).unwrap();
+        assert!(matches!(echo, ClientRequest::Chat { text } if text == "hello there"));
+        write_frame(&mut second, &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0)).unwrap();
+        let chat_frame = read_frame(&mut second).unwrap();
+        let got = decode_client(&chat_frame).unwrap();
+        assert!(matches!(got, ClientRequest::Chat { text } if text == "hello there"));
+        let seen_again = decode_peers(&read_frame(&mut second).unwrap()).unwrap();
+        assert_eq!(seen_again.len(), 1);
+
         let save = std::env::temp_dir().join(format!("terralite-size-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&save);
-        let sized = Arc::new(Mutex::new(ServeState {
-            world: synthetic_cluster(),
-            changes: Vec::new(),
-            peers: Vec::new(),
-            next_id: 1,
-            hooks: Hooks::new(),
-        }));
+        let sized = Arc::new(Mutex::new(empty_state(
+            synthetic_cluster(),
+            Vec::new(),
+            Hooks::new(),
+        )));
         let listener = TcpListener::bind(localhost(0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let shared = Arc::clone(&sized);

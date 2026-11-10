@@ -2704,9 +2704,10 @@ impl Gui {
         if line.is_empty() {
             return;
         }
-        self.chat_log.push((line, 8.0));
-        if self.chat_log.len() > 4 {
-            let extra = self.chat_log.len() - 4;
+        // Short HUD log: keep the last six lines for Host/Join chatter.
+        self.chat_log.push((line, 10.0));
+        if self.chat_log.len() > 6 {
+            let extra = self.chat_log.len() - 6;
             self.chat_log.drain(0..extra);
         }
     }
@@ -2728,9 +2729,9 @@ impl Gui {
         let mut lines: Vec<String> = self.chat_log.iter().map(|(line, _)| line.clone()).collect();
         if self.chat_open {
             if self.chat_draft.is_empty() {
-                lines.push("say".to_string());
+                lines.push("> say".to_string());
             } else {
-                lines.push(self.chat_draft.clone());
+                lines.push(format!("> {}", self.chat_draft));
             }
         }
         if lines.is_empty() {
@@ -2742,16 +2743,22 @@ impl Gui {
         let row = 22.0;
         let panel_h = lines.len() as f32 * row + 12.0;
         let top = bottom + panel_h;
+        let panel_w = if self.chat_open { 420.0 } else { 340.0 };
         quads.push(
-            pixel_quad(width, height, 16.0, bottom, 320.0, top, PANEL).face(
+            pixel_quad(width, height, 16.0, bottom, panel_w, top, PANEL).face(
                 "stone",
-                304.0 / 16.0,
+                (panel_w - 16.0) / 16.0,
                 panel_h / 16.0,
             ),
         );
         for (index, line) in lines.iter().enumerate() {
             let y = top - 18.0 - index as f32 * row;
-            draw_text(&mut quads, width, height, 28.0, y, line, INK, 1.0);
+            let color = if self.chat_open && index + 1 == lines.len() {
+                SELECT
+            } else {
+                INK
+            };
+            draw_text(&mut quads, width, height, 28.0, y, line, color, 1.0);
         }
         quads
     }
@@ -10772,8 +10779,16 @@ fn main(): Int {
         assert!(!gui.chat_open());
         gui.push_chat("hello");
         assert!(!gui.chat_quads(1280.0, 720.0).is_empty());
-        gui.age_chat(9.0);
+        gui.age_chat(11.0);
         assert!(gui.chat_quads(1280.0, 720.0).is_empty());
+        assert!(gui.open_chat());
+        assert!(gui.on_press(KeyCode::KeyH));
+        assert!(gui.on_press(KeyCode::KeyI));
+        let field = gui.chat_quads(1280.0, 720.0);
+        assert!(
+            field.iter().any(|quad| quad.color == SELECT),
+            "open chat field uses the select ink"
+        );
     }
 
     #[test]
