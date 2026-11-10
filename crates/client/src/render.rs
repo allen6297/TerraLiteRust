@@ -1014,6 +1014,8 @@ pub struct State {
     crackle_mix: f32,
     /// World position of the campfire feeding `crackle_mix`, when nearby.
     crackle_at: Option<[f32; 3]>,
+    /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
+    wind_mix: f32,
     /// Seconds until a held mace can swing again.
     mace_wait: f32,
     /// The next trial key pays a richer drop.
@@ -1912,6 +1914,7 @@ impl State {
             bird_mix: 0.0,
             crackle_mix: 0.0,
             crackle_at: None,
+            wind_mix: 0.0,
             mace_wait: 0.0,
             omen: false,
             trial_at: None,
@@ -9628,13 +9631,20 @@ impl State {
             self.rain_wait = 1.6;
             self.audio.play(crate::audio::Sound::Rain);
         }
-        // Night insects, dawn birds, and campfire crackle; mute stays silent.
+        // Night insects, dawn birds, daytime wind, and campfire crackle; mute stays silent.
         let time = self.clock.time_of_day();
         let night = crate::daylight::night_fog(time);
         let dawn = crate::daylight::dawn_chorus(time);
+        let eye = self.camera.eye.to_array();
+        let open = if open_sky(&self.world, eye) {
+            crate::daylight::day_breeze(time)
+        } else {
+            0.0
+        };
         self.cricket_mix += (night - self.cricket_mix) * (dt * 0.7).min(1.0);
         self.bird_mix += (dawn - self.bird_mix) * (dt * 0.8).min(1.0);
-        let (fire_mix, fire_at) = nearest_campfire(&self.world, self.camera.eye.to_array());
+        self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
+        let (fire_mix, fire_at) = nearest_campfire(&self.world, eye);
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
         if self.playing && !self.menu.is_open() && !self.dead {
@@ -9650,6 +9660,12 @@ impl State {
                     crate::audio::Hearing::even(level),
                 );
             }
+            if let Some(level) = self.audio.wind_ready(dt, self.wind_mix) {
+                self.audio.play_heard(
+                    crate::audio::Sound::Wind,
+                    crate::audio::Hearing::even(level),
+                );
+            }
             if let Some(level) = self.audio.crackle_ready(dt, self.crackle_mix) {
                 if let Some(source) = self.crackle_at {
                     self.play_world_soft(crate::audio::Sound::Crackle, source, level);
@@ -9658,6 +9674,7 @@ impl State {
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
+            let _ = self.audio.wind_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
         }
         self.mace_wait = (self.mace_wait - dt).max(0.0);
@@ -11640,6 +11657,19 @@ fn camp_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::CAMP_CHEST
 }
 
+/// True when the column above the eye is clear of full cubes (~open sky).
+fn open_sky(world: &Cluster, eye: [f32; 3]) -> bool {
+    let x = eye[0].floor() as i32;
+    let z = eye[2].floor() as i32;
+    let start = eye[1].floor() as i32 + 1;
+    for y in start..(start + 16) {
+        if shape_of(world.block_at(x, y, z)).is_full_cube() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Soft proximity to the nearest campfire. Mix is `0` outside ~12 blocks,
 /// rising to `1` when standing over the flame. Returns the fire's center too.
 fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -12090,6 +12120,24 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_camp(true, x, z, false).is_none());
         assert!(super::fresh_camp(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn open_sky_is_clear_above_spawn_and_blocked_by_a_roof() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        rebuild_world::seed_terrain_ring(&mut cluster);
+        let eye = [0.5, 70.0, 0.5];
+        assert!(super::open_sky(&cluster, eye));
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[rebuild_world::CellChange {
+                x: 0,
+                y: 72,
+                z: 0,
+                block: rebuild_world::Block::new("stone", 0),
+            }],
+        );
+        assert!(!super::open_sky(&cluster, eye));
     }
 
     #[test]

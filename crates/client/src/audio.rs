@@ -59,6 +59,8 @@ pub enum Sound {
     Bird,
     /// A soft campfire crackle. Louder when standing close to the fire.
     Crackle,
+    /// A soft daytime wind hush under open sky.
+    Wind,
 }
 
 /// Seconds before the same horn can sound again.
@@ -249,6 +251,8 @@ pub struct Audio {
     bird_left: f32,
     /// Seconds until the next campfire crackle.
     crackle_left: f32,
+    /// Seconds until the next daytime wind hush.
+    wind_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -273,6 +277,7 @@ impl Audio {
             cricket_left: 0.0,
             bird_left: 0.0,
             crackle_left: 0.0,
+            wind_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -382,6 +387,24 @@ impl Audio {
         Some(0.16 + mix * 0.34)
     }
 
+    /// Loudness for the next daytime wind hush, or `None` this frame.
+    ///
+    /// `mix` is open-day amount. Night / cave resets the timer.
+    pub fn wind_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.wind_left = 0.0;
+            return None;
+        }
+        self.wind_left -= dt;
+        if self.wind_left > 0.0 {
+            return None;
+        }
+        // Sparse hush (~2.8s) at the edge; steadier (~1.6s) at full day.
+        self.wind_left = 2.8 - mix * 1.2;
+        Some(0.10 + mix * 0.18)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -432,6 +455,7 @@ impl Audio {
             Sound::Cricket => cricket_chirp(),
             Sound::Bird => bird_call(),
             Sound::Crackle => fire_crackle(),
+            Sound::Wind => wind_hush(),
         }
     }
 }
@@ -765,6 +789,23 @@ fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
     samples
 }
 
+/// A soft open-sky hush. Longer and quieter than a rain patter.
+fn wind_hush() -> Vec<i16> {
+    let seconds = 0.42;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 97u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let low = (t * 55.0 * std::f32::consts::TAU).sin() * 0.18;
+        let env = (t / 0.08).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.55 + low) * 0.07 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
 /// A soft fire pop. Noise burst with a short low snap under it.
 fn fire_crackle() -> Vec<i16> {
     let seconds = 0.12;
@@ -1027,6 +1068,21 @@ mod tests {
             .crackle_ready(10.0, 0.2)
             .expect("edge of range still pops");
         assert!(edge < level);
+    }
+
+    #[test]
+    fn day_wind_waits_for_open_sky_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.wind_ready(0.1, 0.0).is_none());
+        let level = audio
+            .wind_ready(0.1, 1.0)
+            .expect("full day breeze on the first beat");
+        assert!(level > 0.2 && level <= 0.35);
+        audio.play_heard(Sound::Wind, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Wind]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Wind, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Wind]);
     }
 
     #[test]

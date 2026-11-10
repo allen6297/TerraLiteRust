@@ -388,6 +388,20 @@ pub fn dawn_chorus(time_of_day: f32) -> f32 {
     }
 }
 
+/// Soft daytime breeze amount. `0` at night, full under open day sky.
+///
+/// Ducks a little under the dawn chorus so birds stay in front.
+pub fn day_breeze(time_of_day: f32) -> f32 {
+    let time = time_of_day.rem_euclid(1.0);
+    let night = night_fog(time);
+    if night >= 0.95 {
+        return 0.0;
+    }
+    let day = 1.0 - night;
+    let dawn = dawn_chorus(time);
+    day * (1.0 - dawn * 0.55)
+}
+
 /// Where the distance fog starts and ends, in blocks.
 ///
 /// Day stays long. The afternoon spell shortens it. Night shortens it again
@@ -468,6 +482,14 @@ mod tests {
         assert!(dawn_chorus(0.26) > 0.8);
         assert!(dawn_chorus(0.22) > 0.0 && dawn_chorus(0.22) < dawn_chorus(0.26));
         assert!(dawn_chorus(0.38) > 0.0 && dawn_chorus(0.38) < dawn_chorus(0.26));
+    }
+
+    #[test]
+    fn day_breeze_is_up_at_noon_and_quiet_at_midnight() {
+        assert_eq!(day_breeze(0.0), 0.0);
+        assert!(day_breeze(0.5) > 0.95);
+        assert!(day_breeze(0.26) < day_breeze(0.5));
+        assert!(day_breeze(0.86) < 0.9);
     }
 
     #[test]
