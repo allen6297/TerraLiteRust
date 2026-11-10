@@ -7,6 +7,7 @@
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -87,6 +88,80 @@ pub fn ensure_world(name: &str) -> Result<(), String> {
         return Ok(());
     }
     write_changes(&path, &[])
+}
+
+/// Owned `rebuild-server` child started by Host. Killed when dropped.
+pub struct HostProcess {
+    child: Child,
+    pub port: u16,
+}
+
+impl Drop for HostProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// True when something already answers hello-capable TCP on localhost:`port`.
+pub fn port_listening(port: u16) -> bool {
+    let address = SocketAddr::from(localhost(port));
+    TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
+}
+
+fn server_binary() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|err| format!("current exe: {err}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "current exe has no parent folder".to_string())?;
+    let names = if cfg!(windows) {
+        ["rebuild-server.exe", "rebuild-server-soft.exe"]
+    } else {
+        ["rebuild-server", "rebuild-server-soft"]
+    };
+    for name in names {
+        let path = dir.join(name);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "missing rebuild-server next to {}",
+        exe.display()
+    ))
+}
+
+/// Spawn a private localhost listen (`rebuild-server`) on `port`.
+///
+/// Returns once the port accepts connections, or errors if bind/start fails.
+pub fn start_host(port: u16) -> Result<HostProcess, String> {
+    if port_listening(port) {
+        return Err(format!("already listening on 127.0.0.1:{port}"));
+    }
+    let server = server_binary()?;
+    let child = Command::new(&server)
+        .arg("--port")
+        .arg(port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("could not start {}: {err}", server.display()))?;
+    let mut host = HostProcess { child, port };
+    for _ in 0..80 {
+        if port_listening(port) {
+            return Ok(host);
+        }
+        if let Ok(Some(status)) = host.child.try_wait() {
+            return Err(format!(
+                "host exited before listen ({status})"
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "host did not open 127.0.0.1:{port} in time"
+    ))
 }
 
 pub struct Link {
@@ -611,6 +686,20 @@ mod tests {
         );
         assert!(cluster.block_at(1, 0, 1).is_air());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn port_listening_tracks_a_bound_localhost_socket() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind(localhost(0)).expect("bind ephemeral");
+        let port = listener.local_addr().expect("addr").port();
+        assert!(port_listening(port), "open listener should answer");
+        drop(listener);
+        thread::sleep(Duration::from_millis(20));
+        assert!(
+            !port_listening(port),
+            "closed port should not answer"
+        );
     }
 
     #[test]

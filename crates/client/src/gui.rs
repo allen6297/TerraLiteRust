@@ -4296,6 +4296,8 @@ pub enum MenuAction {
     Quit,
     /// Try localhost. The menu stays up when nothing is listening.
     Join,
+    /// Start a private localhost listen, then join it as the host player.
+    Host,
     /// The settings world size changed. A joined server should grow or shrink.
     Resize,
     /// A script settings row flipped. The name is on the menu until `take_changed`.
@@ -4878,6 +4880,14 @@ impl Menu {
         self.page == MenuPage::Worlds
     }
 
+    /// Open the main menu with `label` selected (Host / Join / …).
+    pub fn open_on(&mut self, label: &str) {
+        self.open();
+        if let Some(index) = self.menu_rows().iter().position(|row| row == label) {
+            self.selected = index;
+        }
+    }
+
     pub fn open(&mut self) {
         self.page = MenuPage::Main;
         self.selected = 0;
@@ -4910,6 +4920,9 @@ impl Menu {
     pub fn row_detail(&self, label: &str) -> String {
         match label {
             "play" => format!("solo {}, {}", self.size.label(), self.world_name),
+            "host" if self.size_locked => "already on the server".to_string(),
+            "host" if !self.join_note.is_empty() => self.join_note.clone(),
+            "host" => "listen 127.0.0.1".to_string(),
             "join" if self.size_locked => "already on the server".to_string(),
             "join" if !self.join_note.is_empty() => self.join_note.clone(),
             "join" => "localhost".to_string(),
@@ -5104,6 +5117,8 @@ impl Menu {
                 self.page = MenuPage::Closed;
                 MenuAction::Resume
             }
+            MenuPage::Pause if label == "host" => MenuAction::Host,
+            MenuPage::Pause if label == "join" => MenuAction::Join,
             MenuPage::Pause if label == "settings" => {
                 self.open_settings(MenuPage::Pause);
                 MenuAction::None
@@ -5134,6 +5149,7 @@ impl Menu {
                 self.page = MenuPage::Closed;
                 MenuAction::Play
             }
+            MenuPage::Main if label == "host" => MenuAction::Host,
             MenuPage::Main if label == "join" => MenuAction::Join,
             MenuPage::Main if label == "settings" => {
                 self.open_settings(MenuPage::Main);
@@ -5279,6 +5295,9 @@ impl Menu {
         let label = rows.get(self.selected).map(String::as_str).unwrap_or("");
         match label {
             "play" => format!("solo {}, {}", self.size.label(), self.world_name),
+            "host" if self.size_locked => "already on the server".to_string(),
+            "host" if !self.join_note.is_empty() => self.join_note.clone(),
+            "host" => "listen 127.0.0.1".to_string(),
             "join" if self.size_locked => "already on the server".to_string(),
             "join" if !self.join_note.is_empty() => self.join_note.clone(),
             "join" => "localhost".to_string(),
@@ -5373,7 +5392,7 @@ const FALLBACK_MENU: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["play", "join", "settings", "worlds", "quit"]
+  "labels": ["play", "host", "join", "settings", "worlds", "quit"]
 }"#;
 
 const FALLBACK_SETTINGS: &str = r#"{
@@ -5391,7 +5410,7 @@ const FALLBACK_PAUSE: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["resume", "settings", "keybinds", "title"]
+  "labels": ["resume", "host", "join", "settings", "keybinds", "title"]
 }"#;
 
 const FALLBACK_WORLDS: &str = r#"{
@@ -10398,6 +10417,12 @@ mod tests {
         assert!(!menu.is_open());
 
         menu.open();
+        assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
+        assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Host);
+        assert!(
+            menu.is_open(),
+            "host leaves the menu up until listen/join finishes"
+        );
         assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Join);
         assert!(

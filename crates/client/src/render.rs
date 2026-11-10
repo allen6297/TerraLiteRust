@@ -942,6 +942,8 @@ pub struct State {
     audio: crate::audio::Audio,
     /// False when a dedicated server owns the square.
     local: bool,
+    /// Private localhost `rebuild-server` child when this client Hosted.
+    host: Option<crate::net::HostProcess>,
     quit: bool,
     /// One-shot window capture aimed at the zombie, then quit.
     shot_path: Option<std::path::PathBuf>,
@@ -949,6 +951,9 @@ pub struct State {
     /// One-shot capture of the Godot-style settings screen, then quit.
     settings_shot_path: Option<std::path::PathBuf>,
     settings_shot_frames: u32,
+    /// One-shot main-menu Host/Join localhost proof, then quit.
+    localhost_shot_path: Option<std::path::PathBuf>,
+    localhost_shot_frames: u32,
     keybinds_shot_path: Option<std::path::PathBuf>,
     keybinds_shot_frames: u32,
     /// One-shot creative inventory (flow compound tab), then quit.
@@ -2180,11 +2185,14 @@ impl State {
             loaded_world: crate::net::DEFAULT_WORLD.to_string(),
             audio: crate::audio::Audio::new(),
             local,
+            host: None,
             quit: false,
             shot_path: None,
             shot_frames: 0,
             settings_shot_path: None,
             settings_shot_frames: 0,
+            localhost_shot_path: None,
+            localhost_shot_frames: 0,
             keybinds_shot_path: None,
             keybinds_shot_frames: 0,
             creative_shot_path: None,
@@ -2727,7 +2735,7 @@ impl State {
         }
     }
 
-    fn join_localhost(&mut self) {
+    pub fn join_localhost(&mut self) {
         if !self.local {
             self.playing = true;
             self.menu.close_menu();
@@ -2748,6 +2756,58 @@ impl State {
             }
             Err(_) => self.menu.note_join("no server"),
         }
+    }
+
+    /// Keep a CLI-spawned listen alive for the life of this window.
+    pub fn attach_host(&mut self, host: crate::net::HostProcess) {
+        self.menu
+            .note_join(&format!("hosting 127.0.0.1:{}", host.port));
+        self.gui.push_chat("host");
+        self.host = Some(host);
+    }
+
+    /// Start a private localhost listen, then join it as the host player.
+    pub fn host_localhost(&mut self) {
+        if !self.local {
+            self.menu
+                .note_join(&format!("already on 127.0.0.1:{}", self.port));
+            return;
+        }
+        if self.host.is_some() || crate::net::port_listening(self.port) {
+            self.menu
+                .note_join(&format!("already hosting 127.0.0.1:{}", self.port));
+            // Second press / Join path: attach this client if still solo.
+            self.join_localhost();
+            return;
+        }
+        match crate::net::start_host(self.port) {
+            Ok(host) => {
+                self.host = Some(host);
+                self.menu
+                    .note_join(&format!("hosting 127.0.0.1:{}", self.port));
+                self.gui.push_chat("host");
+                self.join_localhost();
+                if self.local {
+                    // Join failed after listen — keep the process for a second client.
+                    self.menu.note_join(&format!(
+                        "listening 127.0.0.1:{} (join failed)",
+                        self.port
+                    ));
+                }
+            }
+            Err(err) => self.menu.note_join(&err),
+        }
+    }
+
+    /// Main-menu shot showing Host + Join rows for localhost multiplayer.
+    pub fn arm_localhost_join_shot(&mut self, path: std::path::PathBuf) {
+        self.localhost_shot_path = Some(path);
+        self.localhost_shot_frames = 0;
+        self.playing = false;
+        self.menu
+            .note_join(&format!("hosting 127.0.0.1:{}", self.port));
+        self.menu.open_on("host");
+        let _ = self.window.focus_window();
     }
 
     fn install_cluster(&mut self, cluster: Cluster) {
@@ -16348,6 +16408,31 @@ impl State {
         }
     }
 
+    fn poll_localhost_shot(&mut self) {
+        let Some(path) = self.localhost_shot_path.clone() else {
+            return;
+        };
+        self.localhost_shot_frames = self.localhost_shot_frames.saturating_add(1);
+        if self.localhost_shot_frames < 45 {
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("localhost shot wrote {}", path.display());
+                self.localhost_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("localhost shot failed: {err}");
+                if self.localhost_shot_frames > 120 {
+                    self.localhost_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_creative_shot(&mut self) {
         let Some(path) = self.creative_shot_path.clone() else {
             return;
@@ -18924,7 +19009,12 @@ impl State {
                 self.apply_chosen_size();
             }
             gui::MenuAction::Join => self.join_localhost(),
-            gui::MenuAction::Title => self.playing = false,
+            gui::MenuAction::Host => self.host_localhost(),
+            gui::MenuAction::Title => {
+                self.playing = false;
+                // Drop the owned listen so a later Host can bind again.
+                self.host = None;
+            }
             gui::MenuAction::Volume => {
                 self.audio.set_muted(self.menu.muted());
                 if !self.menu.muted() {
@@ -22476,6 +22566,7 @@ impl State {
         self.queue.present(surface_texture);
         self.poll_zombie_shot();
         self.poll_settings_shot();
+        self.poll_localhost_shot();
         self.poll_keybinds_shot();
         self.poll_creative_shot();
         self.poll_held_light_shot();

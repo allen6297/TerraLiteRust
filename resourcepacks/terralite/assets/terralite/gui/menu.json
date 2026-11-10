@@ -7,5 +7,5 @@
   "panel": "stone",
   "button": "cobblestone",
   "header": "deepslate",
-  "labels": ["play", "join", "settings", "worlds", "quit"]
+  "labels": ["play", "host", "join", "settings", "worlds", "quit"]
 }

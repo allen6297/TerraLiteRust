@@ -72,7 +72,7 @@ afternoon is a separate gray spell. A lantern still lights the faces it
 reaches and is not covered by that shadow. The season changes every day
 and repeats every four days.
 The window needs a display. A menu opens first. Up and down move the row.
-Enter or Space picks it. Play starts the solo world. Join connects to 127.0.0.1 and stays on the menu when nothing is listening. Settings chooses
+Enter or Space picks it. Play starts the solo world. Host spawns a private rebuild-server listen on 127.0.0.1 then joins it. Join connects to that address and stays on the menu when nothing is listening. CLI --host / --join do the same after the window opens. Settings chooses
 the world size, a southern or northern sun, sound, view bob (full, low, or off), and trace (on or off). Worlds loads a named
 save. Quit closes the window. Click to capture the mouse.
 WASD walks, mouse looks, Space jumps, Ctrl is faster, Shift crouches. F5 toggles a third-person look so you can see your Blockbench body walk and dig. A small cross marks the center, and the block under it is named just below. Stepping into water splashes, and swimming is a stroke. An axolotl pauses, then swims the marsh just south of the stairs, at (8, 32). Right-click it and it pathfinds through water to stay near you as a companion. A chicken pecks the grass west of the oak, at (3, 8). It stands and pecks, walks one side of the yard, and steps back when you stand close. Right-click the egg and it hands you raw food. A Blockbench zombie idles by the ore line at (11, 13), walks in to bite, and flashes red when the mace hits. Esc releases the mouse,
@@ -190,6 +190,12 @@ struct Args {
     shot_grass_wind: Option<std::path::PathBuf>,
     /// Creative flight mid-air, then quit.
     shot_creative_flight: Option<std::path::PathBuf>,
+    /// Main-menu Host + Join localhost proof, then quit.
+    shot_localhost_join: Option<std::path::PathBuf>,
+    /// Start a private localhost listen, then join as host.
+    host: bool,
+    /// Join an existing localhost listen.
+    join: bool,
     /// Start with creative mode on (double-tap Space to fly).
     creative: bool,
     /// Southeast shrine ruin, then quit.
@@ -322,6 +328,22 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // --host: spawn private listen before the first connect so this process joins it.
+    let early_host = if args.host {
+        match net::start_host(args.port) {
+            Ok(host) => {
+                eprintln!("hosting 127.0.0.1:{}", args.port);
+                Some(host)
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                tell_user(&err);
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
     let (cluster, link, source) = match net::connect_or_local(args.port) {
         Ok(loaded) => loaded,
         Err(err) => {
@@ -410,6 +432,9 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_rain_splash: args.shot_rain_splash,
         shot_grass_wind: args.shot_grass_wind,
         shot_creative_flight: args.shot_creative_flight,
+        shot_localhost_join: args.shot_localhost_join,
+        host: args.host,
+        join: args.join,
         creative: args.creative,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
@@ -466,6 +491,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_hitch: args.shot_hitch,
         shot_stable: args.shot_stable,
         shot_pollen: args.shot_pollen,
+        early_host,
         state: None,
         last_frame: Instant::now(),
     };
@@ -481,6 +507,8 @@ struct App {
     link: Option<Link>,
     local: bool,
     port: u16,
+    /// Owned listen started by `--host` before the window opens.
+    early_host: Option<net::HostProcess>,
     shot: Option<std::path::PathBuf>,
     shot_settings: Option<std::path::PathBuf>,
     shot_held_light: Option<std::path::PathBuf>,
@@ -524,6 +552,9 @@ struct App {
     shot_rain_splash: Option<std::path::PathBuf>,
     shot_grass_wind: Option<std::path::PathBuf>,
     shot_creative_flight: Option<std::path::PathBuf>,
+    shot_localhost_join: Option<std::path::PathBuf>,
+    host: bool,
+    join: bool,
     creative: bool,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
@@ -743,6 +774,16 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_creative_flight.take() {
                     state.arm_creative_flight_shot(path);
+                }
+                if let Some(path) = self.shot_localhost_join.take() {
+                    state.arm_localhost_join_shot(path);
+                }
+                if let Some(host) = self.early_host.take() {
+                    state.attach_host(host);
+                } else if self.host {
+                    state.host_localhost();
+                } else if self.join {
+                    state.join_localhost();
                 }
                 if self.creative {
                     state.enable_creative();
@@ -1086,6 +1127,9 @@ where
         shot_rain_splash: None,
         shot_grass_wind: None,
         shot_creative_flight: None,
+        shot_localhost_join: None,
+        host: false,
+        join: false,
         creative: false,
         shot_shrine: None,
         shot_mine: None,
@@ -1405,6 +1449,18 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-creative-flight".to_string())?;
                 parsed.shot_creative_flight = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-localhost-join" | "--shot-host-join" | "--shot-localhost" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-localhost-join".to_string())?;
+                parsed.shot_localhost_join = Some(std::path::PathBuf::from(value));
+            }
+            "--host" | "--listen" => {
+                parsed.host = true;
+            }
+            "--join" | "--join-localhost" => {
+                parsed.join = true;
             }
             "--creative" | "--creative-mode" => {
                 parsed.creative = true;
@@ -1796,5 +1852,29 @@ mod tests {
             parse_args(["--help".to_string()]).unwrap(),
             Parsed::Help
         ));
+    }
+
+    #[test]
+    fn host_join_and_localhost_shot_flags() {
+        let Parsed::Run(args) = parse_args(["--host".into()]).unwrap() else {
+            panic!("expected run args");
+        };
+        assert!(args.host);
+        assert!(!args.join);
+        let Parsed::Run(args) = parse_args(["--join".into()]).unwrap() else {
+            panic!("expected run args");
+        };
+        assert!(args.join);
+        let Parsed::Run(args) = parse_args([
+            "--shot-localhost-join".into(),
+            "localhost-join.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_localhost_join.as_deref(),
+            Some(std::path::Path::new("localhost-join.png"))
+        );
     }
 }
