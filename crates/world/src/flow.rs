@@ -613,8 +613,9 @@ pub fn plan_water_spouts(
             });
             placed = true;
         }
-        // Pressurized tank spray: one more cell along facing.
-        if pressure > 1 {
+        // Pressurized tank spray (level > 0): one more cell along facing.
+        // Pipe pressure is 1 and does not spray; only tanks do.
+        if is_tank(intake.id) && pressure > 0 {
             let sx = ox + dir[0];
             let sy = oy + dir[1];
             let sz = oz + dir[2];
@@ -1058,6 +1059,26 @@ mod tests {
         assert_eq!(cluster.block_at(3, 1, 1).id, "water");
         assert_eq!(cluster.block_at(4, 1, 1).id, "water");
         assert_eq!(tank_level(cluster.block_at(1, 1, 1)), 3);
+    }
+
+    #[test]
+    fn tank_level_one_still_sprays() {
+        use crate::chunk::{pump_meta, tank_at};
+        let planned = plan_water_spouts(
+            &world(&[
+                (1, 1, 1, tank_at(FILL_WATER, 1)),
+                (2, 1, 1, Block::new("spout", pump_meta(0, true))),
+            ]),
+            [2, 1, 1],
+            8,
+            2,
+        );
+        assert!(planned.iter().any(|c| c.x == 3 && c.block.id == "water"));
+        assert!(
+            planned.iter().any(|c| c.x == 4 && c.block.id == "water"),
+            "tank level > 0 sprays"
+        );
+        assert!(planned.iter().any(|c| c.x == 1 && c.block.id == "tank" && c.block.fill == FILL_NONE));
     }
 
     #[test]

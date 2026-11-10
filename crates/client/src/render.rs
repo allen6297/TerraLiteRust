@@ -19,7 +19,7 @@ use rebuild_world::{
     encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind, fill_name,
     held_light_of, is_battery, is_buffer, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire,
     lamp_at, lamp_on, load_dir, plan_compound_seeps, plan_ember_lamps, plan_pump_pushes,
-    plan_water_spouts, pump_meta, pump_on, shape_of, tank_at, tank_level,
+    plan_water_spouts, pump_dir, pump_meta, pump_on, shape_of, tank_at, tank_level,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -5645,7 +5645,7 @@ impl State {
                 target.block[1] - dir[1],
                 target.block[2] - dir[2],
             );
-            let spray = is_tank(intake.id) && intake.fill == FILL_WATER && tank_level(intake) > 1;
+            let spray = is_tank(intake.id) && intake.fill == FILL_WATER && tank_level(intake) > 0;
             return Some(if spray && pump_on(block.metadata) {
                 format!("Spout  {power}  spray")
             } else {
