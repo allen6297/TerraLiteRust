@@ -14,6 +14,8 @@ pub struct Pose {
     yaw: f32,
     walking: bool,
     digging: bool,
+    /// Right-click shield raise — dig clip frozen mid-lift.
+    blocking: bool,
 }
 
 impl Pose {
@@ -23,17 +25,32 @@ impl Pose {
             yaw: 0.0,
             walking: false,
             digging: false,
+            blocking: false,
         }
     }
 
     /// Advance the clip clock and face the look on the ground plane.
-    pub fn tick(&mut self, dt: f32, look_x: f32, look_z: f32, walking: bool, digging: bool) {
-        self.pose = (self.pose + dt.max(0.0)).rem_euclid(64.0);
+    pub fn tick(
+        &mut self,
+        dt: f32,
+        look_x: f32,
+        look_z: f32,
+        walking: bool,
+        digging: bool,
+        blocking: bool,
+    ) {
         if look_x * look_x + look_z * look_z > 1.0e-8 {
             self.yaw = look_x.atan2(look_z);
         }
         self.walking = walking;
         self.digging = digging;
+        self.blocking = blocking;
+        if blocking {
+            // Dig mid-swing reads as a raised block arm.
+            self.pose = 0.22;
+        } else {
+            self.pose = (self.pose + dt.max(0.0)).rem_euclid(64.0);
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -42,7 +59,7 @@ impl Pose {
     }
 
     fn clip(&self) -> &'static str {
-        if self.digging {
+        if self.blocking || self.digging {
             "dig"
         } else if self.walking {
             "walk"
@@ -227,6 +244,31 @@ mod tests {
     }
 
     #[test]
+    fn shield_block_freezes_a_raised_dig_arm() {
+        let hand = |vertices: &[Vertex]| {
+            vertices
+                .iter()
+                .filter(|vertex| {
+                    vertex.position[0] < -0.35
+                        && vertex.position[1] > 0.4
+                        && vertex.position[1] < 1.6
+                })
+                .map(|vertex| vertex.position[1])
+                .fold(f32::MAX, f32::min)
+        };
+        let mut pose = Pose::new();
+        pose.tick(0.05, 0.0, 1.0, false, false, true);
+        let blocked_y = hand(&pose.vertices([0.0, EYE_HEIGHT, 0.0], false));
+        pose.tick(0.05, 0.0, 1.0, false, false, false);
+        let idle_y = hand(&pose.vertices([0.0, EYE_HEIGHT, 0.0], false));
+        assert!(blocked_y.is_finite() && idle_y.is_finite());
+        assert!(
+            blocked_y > idle_y + 0.1,
+            "block raise lifts the right hand (idle {idle_y} block {blocked_y})"
+        );
+    }
+
+    #[test]
     fn dig_raises_the_right_arm() {
         let figure = figure();
         let rest = blockbench::mesh(figure, "dig", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
@@ -258,7 +300,7 @@ mod tests {
     #[test]
     fn a_look_toward_plus_z_keeps_the_head_in_front() {
         let mut pose = Pose::new();
-        pose.tick(0.05, 0.0, 1.0, false, false);
+        pose.tick(0.05, 0.0, 1.0, false, false, false);
         let body = pose.vertices([8.0, 1.0 + EYE_HEIGHT, 8.0], false);
         let head_z = body
             .iter()
@@ -277,7 +319,7 @@ mod tests {
     #[test]
     fn first_person_can_hide_the_head() {
         let mut pose = Pose::new();
-        pose.tick(0.0, 1.0, 0.0, false, false);
+        pose.tick(0.0, 1.0, 0.0, false, false, false);
         let full = pose.vertices([0.0, EYE_HEIGHT, 0.0], false);
         let bare = pose.vertices([0.0, EYE_HEIGHT, 0.0], true);
         assert!(bare.len() < full.len());

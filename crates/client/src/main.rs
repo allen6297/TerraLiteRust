@@ -207,6 +207,8 @@ struct Args {
     shot_xp_orbs: Option<std::path::PathBuf>,
     /// Loot magnet mid-home, then quit.
     shot_loot_magnet: Option<std::path::PathBuf>,
+    /// Shield block raise pose, then quit.
+    shot_shield_block: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -457,6 +459,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_death_respawn: args.shot_death_respawn,
         shot_xp_orbs: args.shot_xp_orbs,
         shot_loot_magnet: args.shot_loot_magnet,
+        shot_shield_block: args.shot_shield_block,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -585,6 +588,7 @@ struct App {
     shot_death_respawn: Option<std::path::PathBuf>,
     shot_xp_orbs: Option<std::path::PathBuf>,
     shot_loot_magnet: Option<std::path::PathBuf>,
+    shot_shield_block: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -834,6 +838,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_loot_magnet.take() {
                     state.arm_loot_magnet_shot(path);
+                }
+                if let Some(path) = self.shot_shield_block.take() {
+                    state.arm_shield_block_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1192,6 +1199,7 @@ where
         shot_death_respawn: None,
         shot_xp_orbs: None,
         shot_loot_magnet: None,
+        shot_shield_block: None,
         name: None,
         host: false,
         join: false,
@@ -1562,6 +1570,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-loot-magnet".to_string())?;
                 parsed.shot_loot_magnet = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-shield-block" | "--shot-shield" | "--shot-block" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-shield-block".to_string())?;
+                parsed.shot_shield_block = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2068,6 +2082,17 @@ mod tests {
         assert_eq!(
             args.shot_loot_magnet.as_deref(),
             Some(std::path::Path::new("loot-magnet.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-shield-block".into(),
+            "shield-block.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_shield_block.as_deref(),
+            Some(std::path::Path::new("shield-block.png"))
         );
     }
 }

@@ -833,9 +833,15 @@ impl Hotbar {
         }
     }
 
+    /// True when the selected slot is a usable shield.
+    pub fn holding_shield(&self) -> bool {
+        self.item(self.selected)
+            .is_some_and(|item| Pack::builtin().is_shield(item.id) && item.uses > 0)
+    }
+
     /// Spend one use of the selected shield. True when that bite is blocked.
     ///
-    /// The shield has to be the selected slot. At zero uses the slot clears.
+    /// Call only while the shield is raised. At zero uses the slot clears.
     /// Mining does not spend these uses.
     pub fn block_bite(&mut self) -> bool {
         let index = self.selected;
@@ -2020,13 +2026,16 @@ mod tests {
         assert!(bar.give_stack("shield"));
         assert_eq!(bar.count(3), 4);
         assert_eq!(bar.selected_block(), None);
+        assert!(bar.holding_shield());
         assert!(!bar.wear(3, "stone"));
         assert!(bar.block_bite());
         assert_eq!(bar.count(3), 3);
+        assert!(bar.holding_shield());
         assert!(bar.block_bite());
         assert!(bar.block_bite());
         assert!(bar.block_bite());
         assert!(bar.slot(3).is_none());
+        assert!(!bar.holding_shield());
         assert!(!bar.block_bite());
         assert!(bar.collect("bucket"));
         let bucket = (0..SLOTS)

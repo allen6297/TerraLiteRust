@@ -5643,6 +5643,11 @@ pub fn crouch_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "sneak")
 }
 
+/// Plate while a shield is raised (right-click hold).
+pub fn shield_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "block")
+}
+
 /// A small plate above the hotbar while Ctrl-sprint is held.
 pub fn sprint_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "sprint")
@@ -8818,6 +8823,9 @@ mod tests {
                 && (quad.color[2] - 0.32).abs() < 0.02
         }));
         assert!(xp_bar_quads(0.0, 720.0, 1, 0.5).is_empty());
+        let block = shield_quads(400.0, 300.0, 1.0);
+        assert!(!block.is_empty());
+        assert!(shield_quads(400.0, 300.0, 0.0).is_empty());
     }
 
     #[test]

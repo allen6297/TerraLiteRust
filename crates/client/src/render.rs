@@ -1218,6 +1218,10 @@ pub struct State {
     lodestone: Option<[i32; 3]>,
     /// Right mouse is down on a held spyglass.
     zoom_mouse: bool,
+    /// Right mouse is held on a shield — block is raised.
+    shield_raised: bool,
+    /// HUD plate amount for the shield block cue, `0`..`1`.
+    shield_show: f32,
     /// Control key is down (trackpad Ctrl+click secondary place).
     ctrl_mod: bool,
     /// Last place/use click time — collapses WindowEvent + DeviceEvent doubles.
@@ -2395,6 +2399,8 @@ impl State {
             bell_return: None,
             lodestone: None,
             zoom_mouse: false,
+            shield_raised: false,
+            shield_show: 0.0,
             ctrl_mod: false,
             place_click_at: None,
             compound_flow_wait: 0.35,
@@ -2905,6 +2911,90 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Shield raised in third person with the block plate, then quit with a PNG.
+    pub fn arm_shield_block_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([9.2, 1.0, 10.4]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("shield");
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        // Third-person overlook so the raised arm + shield hotbar read.
+        self.third_person = true;
+        let eye = glam::Vec3::new(7.2, 2.1 + crate::body::EYE_HEIGHT, 13.4);
+        let focus = glam::Vec3::new(8.6, 1.55, 10.8);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.shield_raised = true;
+        self.shield_show = 1.0;
+        self.slot_punch = 0.7;
+        // Quiet other feel plates so the "block" cue is the one that reads.
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        self.player.tick(0.0, 0.0, -1.0, false, false, true);
+        self.rebuild_player();
+        self.rebuild_drops();
         let _ = self.window.focus_window();
     }
 
@@ -3601,6 +3691,7 @@ impl State {
     fn press_place(&mut self, pressed: bool) {
         if !pressed {
             self.release_spyglass();
+            self.release_shield();
             return;
         }
         if self.is_dead() || self.screen_open() || self.menu_open() {
@@ -4374,6 +4465,32 @@ impl State {
 
     pub fn release_spyglass(&mut self) {
         self.zoom_mouse = false;
+    }
+
+    fn holding_shield(&self) -> bool {
+        self.hotbar.holding_shield()
+    }
+
+    fn release_shield(&mut self) {
+        self.shield_raised = false;
+    }
+
+    /// Spend a raised shield against a melee/projectile hit. Plays a thud.
+    fn try_shield_block(&mut self) -> bool {
+        if !self.shield_raised || !self.holding_shield() {
+            return false;
+        }
+        if !self.hotbar.block_bite() {
+            self.shield_raised = false;
+            return false;
+        }
+        self.hotbar_dirty = true;
+        let source = self.camera.eye.to_array();
+        self.play_world(crate::audio::Sound::Thunk, source);
+        self.gui.push_chat("blocked");
+        // Keep the raise readable for a beat after the thud.
+        self.slot_punch = self.slot_punch.max(0.85);
+        true
     }
 
     fn holding_compass(&self) -> bool {
@@ -8166,6 +8283,10 @@ impl State {
         }
         if self.holding_spyglass() {
             self.zoom_mouse = true;
+            return;
+        }
+        if self.holding_shield() {
+            self.shield_raised = true;
             return;
         }
         if self.try_equip()
@@ -21923,7 +22044,17 @@ impl State {
                 look.z,
                 moving && self.camera.on_ground,
                 self.dig.is_held(),
+                self.shield_raised && self.holding_shield(),
             );
+            let shield_goal = if self.shield_raised && self.holding_shield() {
+                1.0
+            } else {
+                0.0
+            };
+            self.shield_show += (shield_goal - self.shield_show) * (dt * 14.0).min(1.0);
+            if !self.holding_shield() {
+                self.shield_raised = false;
+            }
         }
         match self.hunger.tick(
             dt,
@@ -22028,11 +22159,7 @@ impl State {
             let to = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
             let clear = look::clear_between(from, to, &self.world);
             if self.zombie.tick_near(steps, feet, clear, &self.world) {
-                let blocked = self.hotbar.block_bite();
-                if blocked {
-                    self.hotbar_dirty = true;
-                    self.gui.push_chat("blocked");
-                }
+                let blocked = self.try_shield_block();
                 let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                 self.apply_damage(amount);
             }
@@ -22053,11 +22180,7 @@ impl State {
                     horde.tick(dt, steps, player, night, held, world, &mut clear_of)
                 };
                 if night_bite {
-                    let blocked = self.hotbar.block_bite();
-                    if blocked {
-                        self.hotbar_dirty = true;
-                        self.gui.push_chat("blocked");
-                    }
+                    let blocked = self.try_shield_block();
                     let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                     self.apply_damage(amount);
                 }
@@ -22085,11 +22208,7 @@ impl State {
                 }
             }
             if guest_bite {
-                let blocked = self.hotbar.block_bite();
-                if blocked {
-                    self.hotbar_dirty = true;
-                    self.gui.push_chat("blocked");
-                }
+                let blocked = self.try_shield_block();
                 let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                 self.apply_damage(amount);
             }
@@ -23037,6 +23156,9 @@ impl State {
         }
         if self.crouch > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::crouch_quads(gui_w, gui_h, self.crouch));
+        }
+        if self.shield_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::shield_quads(gui_w, gui_h, self.shield_show));
         }
         if self.sprint_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sprint_quads(gui_w, gui_h, self.sprint_show));
