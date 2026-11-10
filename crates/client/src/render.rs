@@ -7829,6 +7829,21 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Craft tab + EMI focused on the craft-story shapeless paver recipe.
+    pub fn arm_mod_recipe_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+        self.gui.open_player_craft();
+        self.gui.set_inv_tab(crate::gui::PlayerInvTab::Craft);
+        self.gui.set_emi_query("paver");
+        self.gui.select_emi("craft:paver");
+        let _ = self.gui.ghost_fill_emi();
+        self.gui.push_chat("mod recipe: craft:paver");
+        let _ = self.window.focus_window();
+    }
+
     /// Open inventory on PLAYER with CRAFT tab strip, then quit with a PNG.
     pub fn arm_tabs_shot(&mut self, path: std::path::PathBuf) {
         self.creative_shot_path = Some(path);
