@@ -1042,6 +1042,8 @@ pub struct State {
     told_pump: bool,
     /// Once: look at a tank — tip that it buffers fill.
     told_tank: bool,
+    /// Once: look at a battery — tip that it stores ember charge.
+    told_battery: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1998,6 +2000,7 @@ impl State {
             told_shape_pot: false,
             told_pump: false,
             told_tank: false,
+            told_battery: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3708,6 +3711,29 @@ impl State {
             self.gui.push_chat("tank stores fill");
         } else {
             self.gui.push_chat(&format!("tank {level}/{TANK_MAX}"));
+        }
+    }
+
+    /// Once: look at a battery — tip that it stores ember charge.
+    fn tell_battery(&mut self) {
+        if self.told_battery || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "battery" {
+            return;
+        }
+        self.told_battery = true;
+        let level = battery_level(block);
+        if level == 0 {
+            self.gui.push_chat("battery stores ember");
+        } else {
+            self.gui.push_chat(&format!("battery {level}/{BATTERY_MAX}"));
         }
     }
 
@@ -11897,6 +11923,7 @@ impl State {
         self.tell_cook_heat();
         self.tell_pump();
         self.tell_tank();
+        self.tell_battery();
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();

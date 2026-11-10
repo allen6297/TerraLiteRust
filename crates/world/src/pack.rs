@@ -1968,10 +1968,18 @@ impl Pack {
             return Some(light);
         }
         // Ember energy occupying a compound host glows warm through the solid.
+        // Batteries brighten with stored charge (dim at 1, near-torch at max).
         if block.fill == FILL_EMBER {
+            let level = if crate::chunk::is_battery(block.id) {
+                let units = crate::chunk::battery_level(block).max(1);
+                let max = crate::chunk::BATTERY_MAX.max(1);
+                6 + ((9u16 * u16::from(units)) / u16::from(max)) as u8
+            } else {
+                11
+            };
             return Some(Light {
                 color: [1.0, 0.42, 0.1],
-                level: 11,
+                level: level.min(15),
             });
         }
         None
@@ -5937,6 +5945,14 @@ mod tests {
         assert_eq!(pack.shape_of(Block::new("end_rod", 1)).boxes()[0].min[0], 0);
         assert!(pack.light_of(Block::new("stone", 0)).is_none());
         assert!(pack.light_of(Block::new(SIGN, 0)).is_none());
+        let low = pack
+            .light_of(crate::chunk::battery_at(1))
+            .expect("battery glow");
+        let high = pack
+            .light_of(crate::chunk::battery_at(crate::chunk::BATTERY_MAX))
+            .expect("full battery glow");
+        assert!(low.level < high.level, "battery brightens with charge");
+        assert!(high.level >= 14);
         assert_eq!(held_light_of(&pack, "torch"), Some(torch));
         assert_eq!(held_light_of(&pack, "lantern"), Some(lantern));
         assert_eq!(held_light_of(&pack, "glowstone"), Some(glowstone));
