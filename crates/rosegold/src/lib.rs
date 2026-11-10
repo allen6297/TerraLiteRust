@@ -30,9 +30,11 @@
 //! warm light `1..=15`. `item.stack(id, count)` sets the hotbar limit `1..=64`.
 //! A script block places from the hotbar, and `world.set_block` writes it. A
 //! script item is not a block.
-//! `events.entity_spawn` is `fn(kind: String, x: Int, y: Int, z: Int)`
+//! `events.entity_spawn` is `fn(kind: String, x: Int, y: Int, z: Int): Bool`
 //! and runs once for `"player"`, then for the demo `"pig"` and `"zombie"`.
+//! False cancels that spawn (demo/player join still continue other kinds).
 //! `events.entity_hurt` is `fn(kind: String, amount: Int): Bool`.
+//! `events.entity_death` is `fn(kind: String, x: Int, y: Int, z: Int): Bool`.
 //! `events.entity_tick` is `fn(kind: String)`. The client and the authority tick
 //! `"player"`, `"sheep"`, `"pig"`, and `"zombie"` every 50 ms. `events.tick` is
 //! `fn(n: Int)`. It runs on every 20th of those steps, once a second in a steady
@@ -105,12 +107,16 @@
 //! `recipe.shaped(result, "a,,,a,,,a,,")` records a 3 by 3, nine cells separated
 //! by commas, blanks empty. Both ids must already exist. The crafting table
 //! shows the result. `entity.register(namespace, path)` adds a mob. It stands
-//! just east of the oak stairs. `entity.spawn(id, x, y, z)` is `Bool`. It places
-//! another body of an id this script registered, at that cell. False means the
-//! id was not registered here or a body already stands in that cell.
+//! just east of the oak stairs. `entity.model(id, path)` attaches a Blockbench
+//! `.bbmodel`. `entity.hostile(id, flag)` marks chase/attack AI.
+//! `entity.spawn_egg(id, item)` links a creative item that spawns the mob on use.
+//! `entity.spawn(id, x, y, z)` is `Bool`. During `main` it records a load-time
+//! body; inside a hook the host places a live Guest. False means the id was not
+//! registered or a body already stands in that cell.
 //! `entity.despawn(id, x, y, z)` is `Bool`. It removes that spawned body. False
 //! means nothing spawned stood there. The first body from `entity.register` stays.
 //! `import ModAPI` is the Fabric-style entry (`builtin/std/TerraLite/ModAPI.rg`).
+//! `import Entities` is `Entities.defineEntity` beside Blocks/Items.
 //! `on_init` runs after `main` when a script defines it. `TLMod.log` and each
 //! `register` call are recorded.
 //!
@@ -168,6 +174,12 @@ pub struct ScriptLoad {
     pub block_textures: Vec<(String, String)>,
     /// `(block id, shape or model id)` from `block.model`.
     pub block_models: Vec<(String, String)>,
+    /// `(entity id, .bbmodel path)` from `entity.model`.
+    pub entity_models: Vec<(String, String)>,
+    /// `(entity id, "1"|"0")` from `entity.hostile`.
+    pub entity_hostile: Vec<(String, String)>,
+    /// `(entity id, item id)` from `entity.spawn_egg`.
+    pub entity_spawn_eggs: Vec<(String, String)>,
     /// `(block id, seconds text)` from `block.hardness`.
     pub block_hardness: Vec<(String, String)>,
     /// `(block id, level text)` from `block.light`.
@@ -291,6 +303,20 @@ pub enum Query {
     MaxCount {
         id: String,
     },
+    /// Live `entity.spawn` from inside a hook.
+    SpawnEntity {
+        id: String,
+        x: i32,
+        y: i32,
+        z: i32,
+    },
+    /// Live `entity.despawn` from inside a hook.
+    DespawnEntity {
+        id: String,
+        x: i32,
+        y: i32,
+        z: i32,
+    },
 }
 
 /// The game's answer to a [`Query`].
@@ -383,6 +409,9 @@ impl Host {
                                 }
                                 let mut block_textures = Vec::new();
                                 let mut block_models = Vec::new();
+                                let mut entity_models = Vec::new();
+                                let mut entity_hostile = Vec::new();
+                                let mut entity_spawn_eggs = Vec::new();
                                 let mut block_hardness = Vec::new();
                                 let mut block_lights = Vec::new();
                                 let mut item_places = Vec::new();
@@ -400,6 +429,9 @@ impl Host {
                                     match kind.as_str() {
                                         "texture" => block_textures.push(pair),
                                         "model" => block_models.push(pair),
+                                        "entity_model" => entity_models.push(pair),
+                                        "hostile" => entity_hostile.push(pair),
+                                        "spawn_egg" => entity_spawn_eggs.push(pair),
                                         "hardness" => block_hardness.push(pair),
                                         "light" => block_lights.push(pair),
                                         "places" => item_places.push(pair),
@@ -420,6 +452,9 @@ impl Host {
                                     entities,
                                     block_textures,
                                     block_models,
+                                    entity_models,
+                                    entity_hostile,
+                                    entity_spawn_eggs,
                                     block_hardness,
                                     block_lights,
                                     item_places,
@@ -699,6 +734,18 @@ fn query_of(name: &str, args: &[Value]) -> Result<Query, String> {
         }),
         "settings.value" => Ok(Query::Setting {
             name: text_at(args, 0)?,
+        }),
+        "entity.spawn" => Ok(Query::SpawnEntity {
+            id: text_at(args, 0)?,
+            x: int_at(args, 1)?,
+            y: int_at(args, 2)?,
+            z: int_at(args, 3)?,
+        }),
+        "entity.despawn" => Ok(Query::DespawnEntity {
+            id: text_at(args, 0)?,
+            x: int_at(args, 1)?,
+            y: int_at(args, 2)?,
+            z: int_at(args, 3)?,
         }),
         other => Err(format!("unknown function {other}")),
     }

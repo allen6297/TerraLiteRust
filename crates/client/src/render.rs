@@ -1714,8 +1714,8 @@ impl State {
             goat: crate::mobs::Goat::new(),
             goat_buf: None,
             goat_count: 0,
-            guests: crate::mobs::Guest::placed(
-                &rebuild_world::Pack::builtin().script_entities(),
+            guests: crate::mobs::Guest::placed_defs(
+                &rebuild_world::Pack::builtin().script_entity_defs(),
                 &rebuild_world::Pack::builtin().script_spawns(),
             ),
             guest_buf: None,
@@ -4280,8 +4280,89 @@ impl State {
         );
     }
 
+    /// Apply hook-time `entity.spawn` / `entity.despawn` results to Guest bodies.
+    fn flush_live_spawns(&mut self) {
+        let events = self.hooks.drain_live_spawns();
+        if events.is_empty() {
+            return;
+        }
+        let pack = rebuild_world::Pack::builtin();
+        let mut dirty = false;
+        for event in events {
+            match event {
+                Ok((id, x, y, z)) => {
+                    if !self.hooks.entity_spawn(&mut self.world, &id, x, y, z) {
+                        let _ = pack.take_spawn(&id, x, y, z);
+                        continue;
+                    }
+                    crate::mobs::Guest::push_live(
+                        &mut self.guests,
+                        id.clone(),
+                        x,
+                        y,
+                        z,
+                        pack.entity_model(&id),
+                        pack.entity_hostile(&id),
+                    );
+                    dirty = true;
+                }
+                Err((id, x, y, z)) => {
+                    let [ox, oy, oz] = [x as f32 + 0.5, y as f32, z as f32 + 0.5];
+                    if self.hooks.entity_death(
+                        &mut self.world,
+                        &id,
+                        ox.floor() as i32,
+                        oy.floor() as i32,
+                        oz.floor() as i32,
+                    ) && crate::mobs::Guest::take_live(&mut self.guests, &id, x, y, z)
+                    {
+                        dirty = true;
+                    }
+                }
+            }
+        }
+        if dirty {
+            self.rebuild_guests();
+        }
+    }
+
+    /// Right-click a script spawn egg to place that mob in front of the player.
+    fn try_spawn_egg(&mut self) -> bool {
+        let item = self
+            .hotbar
+            .slot(self.hotbar.selected())
+            .unwrap_or("")
+            .to_string();
+        if item.is_empty() {
+            return false;
+        }
+        let pack = rebuild_world::Pack::builtin();
+        let Some(kind) = pack.entity_for_spawn_egg(&item) else {
+            return false;
+        };
+        let forward = self.camera.forward();
+        let x = (self.camera.eye.x + forward.x * 2.0).floor() as i32;
+        let y = (self.camera.eye.y - 1.0).floor().max(1.0) as i32;
+        let z = (self.camera.eye.z + forward.z * 2.0).floor() as i32;
+        if !self.hooks.entity_spawn(&mut self.world, &kind, x, y, z) {
+            return true;
+        }
+        if pack.note_spawn(&kind, x, y, z, "").is_err() {
+            return true;
+        }
+        let model = pack.entity_model(&kind);
+        let hostile = pack.entity_hostile(&kind);
+        crate::mobs::Guest::push_live(&mut self.guests, kind, x, y, z, model, hostile);
+        self.rebuild_guests();
+        self.gui.push_chat("spawn");
+        true
+    }
+
     pub fn place_targeted(&mut self) {
         if self.try_script_use() {
+            return;
+        }
+        if self.try_spawn_egg() {
             return;
         }
         if self.holding_map() {
@@ -7292,6 +7373,40 @@ impl State {
                 self.apply_damage(amount);
             }
             self.rebuild_zombie();
+            let mut guest_bite = false;
+            let mut guests_moved = false;
+            for guest in &mut self.guests {
+                let (gmin, gmax) = {
+                    let [x, y, z] = guest.origin();
+                    ([x - 0.28, y, z - 0.28], [x + 0.28, y + 1.95, z + 0.28])
+                };
+                let from = [
+                    (gmin[0] + gmax[0]) * 0.5,
+                    gmin[1] + 1.4,
+                    (gmin[2] + gmax[2]) * 0.5,
+                ];
+                let to = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+                let guest_clear = look::clear_between(from, to, &self.world);
+                if guest.tick_near(steps, feet, guest_clear, &self.world) {
+                    guest_bite = true;
+                }
+                if guest.hostile() {
+                    guests_moved = true;
+                }
+            }
+            if guest_bite {
+                let blocked = self.hotbar.block_bite();
+                if blocked {
+                    self.hotbar_dirty = true;
+                    self.gui.push_chat("blocked");
+                }
+                let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                self.apply_damage(amount);
+            }
+            if guests_moved || guest_bite {
+                self.rebuild_guests();
+            }
+            self.flush_live_spawns();
             self.breeze.tick_near(steps, feet);
             if self.breeze_due {
                 self.grant_rod();

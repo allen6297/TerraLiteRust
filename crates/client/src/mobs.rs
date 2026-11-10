@@ -3286,34 +3286,123 @@ fn pig_ground(world: &Cluster, x: f32, z: f32, feet_y: f32) -> bool {
     world.block_at(ix, iy + 1, iz).is_air()
 }
 
-/// A mob a script registered. It stands still, just east of the oak stairs.
+/// A mob a script registered. Default pink boxes; optional Blockbench model and hostile AI.
 pub struct Guest {
     id: String,
     origin: [f32; 3],
+    model: Option<String>,
+    hostile: bool,
+    yaw: f32,
+    pose: f32,
+    swing: u32,
+    moving: bool,
+    attacking: bool,
 }
 
 impl Guest {
+    fn bare(id: String, origin: [f32; 3], model: Option<String>, hostile: bool) -> Self {
+        Self {
+            id,
+            origin,
+            model,
+            hostile,
+            yaw: 0.0,
+            pose: 0.0,
+            swing: 0,
+            moving: false,
+            attacking: false,
+        }
+    }
+
     /// One body per id. The first stands at x = 10.5, z = 12.5. The next ones step east.
     pub fn line(ids: &[String]) -> Vec<Self> {
-        ids.iter()
+        Self::line_defs(
+            &ids.iter()
+                .map(|id| (id.clone(), None, false))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Same as [`Self::line`], with per-id model path and hostile flag from the pack.
+    pub fn line_defs(defs: &[(String, Option<String>, bool)]) -> Vec<Self> {
+        defs.iter()
             .enumerate()
-            .map(|(index, id)| Self {
-                id: id.clone(),
-                origin: [10.5 + index as f32 * 1.25, 1.0, 12.5],
+            .map(|(index, (id, model, hostile))| {
+                Self::bare(
+                    id.clone(),
+                    [10.5 + index as f32 * 1.25, 1.0, 12.5],
+                    model.clone(),
+                    *hostile,
+                )
             })
             .collect()
     }
 
     /// The registered line, then each body from `entity.spawn`. A spawn stands in the middle of its cell.
     pub fn placed(ids: &[String], spawns: &[(String, i32, i32, i32)]) -> Vec<Self> {
-        let mut guests = Self::line(ids);
+        Self::placed_defs(
+            &ids.iter()
+                .map(|id| (id.clone(), None, false))
+                .collect::<Vec<_>>(),
+            spawns,
+        )
+    }
+
+    /// Same as [`Self::placed`], carrying model/hostile from `Pack::script_entity_defs`.
+    pub fn placed_defs(
+        defs: &[(String, Option<String>, bool)],
+        spawns: &[(String, i32, i32, i32)],
+    ) -> Vec<Self> {
+        let mut guests = Self::line_defs(defs);
         for (id, x, y, z) in spawns {
-            guests.push(Self {
-                id: id.clone(),
-                origin: [*x as f32 + 0.5, *y as f32, *z as f32 + 0.5],
-            });
+            let (model, hostile) = defs
+                .iter()
+                .find(|(known, _, _)| known == id)
+                .map(|(_, model, hostile)| (model.clone(), *hostile))
+                .unwrap_or((None, false));
+            guests.push(Self::bare(
+                id.clone(),
+                [*x as f32 + 0.5, *y as f32, *z as f32 + 0.5],
+                model,
+                hostile,
+            ));
         }
         guests
+    }
+
+    /// Append one live body from a hook-time `entity.spawn`.
+    pub fn push_live(
+        guests: &mut Vec<Self>,
+        id: String,
+        x: i32,
+        y: i32,
+        z: i32,
+        model: Option<String>,
+        hostile: bool,
+    ) {
+        let origin = [x as f32 + 0.5, y as f32, z as f32 + 0.5];
+        if guests
+            .iter()
+            .any(|guest| guest.id == id && (guest.origin[0] - origin[0]).abs() < 0.01 && (guest.origin[2] - origin[2]).abs() < 0.01)
+        {
+            return;
+        }
+        guests.push(Self::bare(id, origin, model, hostile));
+    }
+
+    /// Remove one live body from a hook-time `entity.despawn`.
+    pub fn take_live(guests: &mut Vec<Self>, id: &str, x: i32, y: i32, z: i32) -> bool {
+        let origin = [x as f32 + 0.5, y as f32, z as f32 + 0.5];
+        if let Some(index) = guests.iter().position(|guest| {
+            guest.id == id
+                && (guest.origin[0] - origin[0]).abs() < 0.01
+                && (guest.origin[2] - origin[2]).abs() < 0.01
+        }) {
+            guests.remove(index);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -3324,7 +3413,75 @@ impl Guest {
         self.origin
     }
 
+    pub fn hostile(&self) -> bool {
+        self.hostile
+    }
+
+    /// Chase the player when hostile. True when a bite is due.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 2], clear: bool, world: &Cluster) -> bool {
+        if !self.hostile {
+            self.pose += 0.05 * count as f32;
+            self.moving = false;
+            self.attacking = false;
+            return false;
+        }
+        let mut bite = false;
+        let mut stepped = false;
+        let mut swinging = false;
+        for _ in 0..count {
+            self.pose += 0.05;
+            let feet_y = self.origin[1].floor() as i32;
+            let dx = player[0] - self.origin[0];
+            let dz = player[1] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist > REACH {
+                let from = [self.origin[0], self.origin[2]];
+                if let Some(next) =
+                    land_step(world, from, player, STEP.min(dist - REACH), feet_y, 2)
+                {
+                    face_forward(&mut self.yaw, next[0] - from[0], next[1] - from[1]);
+                    self.origin[0] = next[0];
+                    self.origin[2] = next[1];
+                    stepped = true;
+                }
+            } else if clear {
+                face_forward(&mut self.yaw, dx, dz);
+                swinging = true;
+                self.swing = self.swing.wrapping_add(1);
+                if self.swing % BITE_EVERY == 0 {
+                    bite = true;
+                }
+            }
+            settle_land(&mut self.origin, world);
+        }
+        self.moving = stepped;
+        self.attacking = swinging;
+        bite
+    }
+
+    fn clip(&self) -> &'static str {
+        if self.attacking {
+            "attack"
+        } else if self.moving {
+            "walk"
+        } else {
+            "idle"
+        }
+    }
+
     pub fn vertices(&self) -> Vec<Vertex> {
+        if let Some(path) = &self.model {
+            if let Some(figure) = guest_figure(path) {
+                return crate::blockbench::mesh(
+                    figure,
+                    self.clip(),
+                    self.pose,
+                    self.yaw,
+                    self.origin,
+                    &[],
+                );
+            }
+        }
         let [x, y, z] = self.origin;
         let mut out = Vec::new();
         push_box(
@@ -3341,6 +3498,23 @@ impl Guest {
         );
         out
     }
+}
+
+fn guest_figure(path: &str) -> Option<&'static crate::blockbench::Figure> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static FIGURES: OnceLock<Mutex<HashMap<String, &'static crate::blockbench::Figure>>> =
+        OnceLock::new();
+    let map = FIGURES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().ok()?;
+    if let Some(figure) = guard.get(path) {
+        return Some(*figure);
+    }
+    let text = rebuild_world::asset_text(path)?;
+    let figure = crate::blockbench::parse(&text).ok()?;
+    let leaked: &'static crate::blockbench::Figure = Box::leak(Box::new(figure));
+    guard.insert(path.to_string(), leaked);
+    Some(leaked)
 }
 
 fn pig_point(steps: u32) -> [f32; 3] {

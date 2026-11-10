@@ -303,6 +303,12 @@ struct StoredSetting {
 struct ScriptEntity {
     id: String,
     source: String,
+    /// Blockbench `.bbmodel` path. Empty keeps the pink Guest boxes.
+    model: Option<String>,
+    /// Chase/attack when the client Guest AI runs.
+    hostile: bool,
+    /// Creative item id that spawns this mob on use.
+    spawn_egg: Option<String>,
 }
 
 struct ScriptSpawn {
@@ -631,8 +637,132 @@ impl Pack {
         script.entities.push(ScriptEntity {
             id: id.to_string(),
             source: source.to_string(),
+            model: None,
+            hostile: false,
+            spawn_egg: None,
         });
         Ok(())
+    }
+
+    /// Attach a Blockbench entity model path. The file must exist in the pack or a mod folder.
+    pub fn set_entity_model(&self, id: &str, model: &str, source: &str) -> Result<(), String> {
+        if model.is_empty() || !model.ends_with(".bbmodel") {
+            return Err(format!("entity {id} model must be a .bbmodel"));
+        }
+        if read_text_asset(model).is_none() {
+            return Err(format!("unknown entity model {model}"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entity) = script.entities.iter_mut().find(|entity| entity.id == id) else {
+            return Err(format!("unknown entity {id}"));
+        };
+        if !source.is_empty() && entity.source != source {
+            return Err(format!("entity {id} belongs to another script"));
+        }
+        if let Some(existing) = &entity.model {
+            if existing == model {
+                return Ok(());
+            }
+            if !source.is_empty() && entity.source == source {
+                entity.model = Some(model.to_string());
+                return Ok(());
+            }
+            return Err(format!("entity {id} already has a model"));
+        }
+        entity.model = Some(model.to_string());
+        Ok(())
+    }
+
+    /// Default chase/attack AI for a script mob.
+    pub fn set_entity_hostile(&self, id: &str, hostile: bool, source: &str) -> Result<(), String> {
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entity) = script.entities.iter_mut().find(|entity| entity.id == id) else {
+            return Err(format!("unknown entity {id}"));
+        };
+        if !source.is_empty() && entity.source != source {
+            return Err(format!("entity {id} belongs to another script"));
+        }
+        entity.hostile = hostile;
+        Ok(())
+    }
+
+    /// Link a registered item as this mob's spawn egg.
+    pub fn set_entity_spawn_egg(&self, id: &str, item: &str, source: &str) -> Result<(), String> {
+        if !stack_id(item) {
+            return Err(format!("bad spawn egg {item}"));
+        }
+        if !self.contains_item(item) && !self.contains_block(item) {
+            return Err(format!("unknown spawn egg item {item}"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entity) = script.entities.iter_mut().find(|entity| entity.id == id) else {
+            return Err(format!("unknown entity {id}"));
+        };
+        if !source.is_empty() && entity.source != source {
+            return Err(format!("entity {id} belongs to another script"));
+        }
+        entity.spawn_egg = Some(item.to_string());
+        Ok(())
+    }
+
+    /// Model path for a script entity, when set.
+    pub fn entity_model(&self, id: &str) -> Option<String> {
+        self.script
+            .lock()
+            .expect("script registry")
+            .entities
+            .iter()
+            .find(|entity| entity.id == id)
+            .and_then(|entity| entity.model.clone())
+    }
+
+    /// Whether a script entity chases and attacks.
+    pub fn entity_hostile(&self, id: &str) -> bool {
+        self.script
+            .lock()
+            .expect("script registry")
+            .entities
+            .iter()
+            .find(|entity| entity.id == id)
+            .map(|entity| entity.hostile)
+            .unwrap_or(false)
+    }
+
+    /// Entity id linked to a spawn-egg item, if any.
+    pub fn entity_for_spawn_egg(&self, item: &str) -> Option<String> {
+        self.script
+            .lock()
+            .expect("script registry")
+            .entities
+            .iter()
+            .find(|entity| entity.spawn_egg.as_deref() == Some(item))
+            .map(|entity| entity.id.clone())
+    }
+
+    /// `(id, model, hostile)` for every script entity, registration order.
+    pub fn script_entity_defs(&self) -> Vec<(String, Option<String>, bool)> {
+        self.script
+            .lock()
+            .expect("script registry")
+            .entities
+            .iter()
+            .map(|entity| (entity.id.clone(), entity.model.clone(), entity.hostile))
+            .collect()
+    }
+
+    /// Remove a previously noted spawn. True when a body stood there.
+    pub fn take_spawn(&self, id: &str, x: i32, y: i32, z: i32) -> bool {
+        let mut script = self.script.lock().expect("script registry");
+        if let Some(index) = script
+            .spawns
+            .iter()
+            .position(|spawn| spawn.id == id && spawn.x == x && spawn.y == y && spawn.z == z)
+        {
+            script.spawns.remove(index);
+            true
+        } else {
+            false
+        }
     }
 
     /// Remember a body placed by `entity.spawn`. The id must already be registered.

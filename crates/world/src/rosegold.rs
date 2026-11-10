@@ -63,6 +63,9 @@ pub enum ScriptHook {
     EntityHurt {
         id: String,
     },
+    EntityDeath {
+        id: String,
+    },
     EntityTick {
         id: String,
     },
@@ -152,6 +155,7 @@ impl ScriptHook {
             | Self::Loot { id }
             | Self::EntitySpawn { id }
             | Self::EntityHurt { id }
+            | Self::EntityDeath { id }
             | Self::EntityTick { id }
             | Self::UseItem { id }
             | Self::UseBlock { id }
@@ -194,6 +198,7 @@ impl ScriptHook {
             Self::Loot { .. } => "loot",
             Self::EntitySpawn { .. } => "entity-spawn",
             Self::EntityHurt { .. } => "entity-hurt",
+            Self::EntityDeath { .. } => "entity-death",
             Self::EntityTick { .. } => "entity-tick",
             Self::UseItem { .. } => "use-item",
             Self::UseBlock { .. } => "use-block",
@@ -235,6 +240,7 @@ impl ScriptHook {
             Self::Loot { .. } => "loot",
             Self::EntitySpawn { .. } => "entity_spawn",
             Self::EntityHurt { .. } => "entity_hurt",
+            Self::EntityDeath { .. } => "entity_death",
             Self::EntityTick { .. } => "entity_tick",
             Self::UseItem { .. } => "use_item",
             Self::UseBlock { .. } => "use_block",
@@ -276,6 +282,7 @@ impl ScriptHook {
             "loot" => Ok(Self::Loot { id }),
             "entity_spawn" => Ok(Self::EntitySpawn { id }),
             "entity_hurt" => Ok(Self::EntityHurt { id }),
+            "entity_death" => Ok(Self::EntityDeath { id }),
             "entity_tick" => Ok(Self::EntityTick { id }),
             "use_item" => Ok(Self::UseItem { id }),
             "use_block" => Ok(Self::UseBlock { id }),
@@ -349,6 +356,7 @@ pub(crate) struct ScriptTable {
     loot: Vec<ScriptSlot>,
     entity_spawn: Vec<ScriptSlot>,
     entity_hurt: Vec<ScriptSlot>,
+    entity_death: Vec<ScriptSlot>,
     entity_tick: Vec<ScriptSlot>,
     use_item: Vec<ScriptSlot>,
     use_block: Vec<ScriptSlot>,
@@ -379,6 +387,9 @@ pub(crate) struct ScriptTable {
     /// Mob ids from `entity.register` and `ENTITY` registry entries.
     mobs: Vec<String>,
     writes: std::cell::RefCell<Vec<crate::changes::CellChange>>,
+    /// Live bodies from hook-time `entity.spawn` / `entity.despawn`.
+    /// `Ok` places, `Err` removes.
+    live_spawns: std::cell::RefCell<Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>>>,
     /// Lines from `chat.say` during the hook that is running.
     lines: std::cell::RefCell<Vec<String>>,
     /// Hotbar the server last heard. Empty until a hotbar packet arrives.
@@ -413,6 +424,7 @@ impl ScriptTable {
             loot: Vec::new(),
             entity_spawn: Vec::new(),
             entity_hurt: Vec::new(),
+            entity_death: Vec::new(),
             entity_tick: Vec::new(),
             use_item: Vec::new(),
             use_block: Vec::new(),
@@ -440,6 +452,7 @@ impl ScriptTable {
             entries: Vec::new(),
             mobs: Vec::new(),
             writes: std::cell::RefCell::new(Vec::new()),
+            live_spawns: std::cell::RefCell::new(Vec::new()),
             lines: std::cell::RefCell::new(Vec::new()),
             inventory: std::cell::RefCell::new(SyncedBar {
                 selected: 0,
@@ -464,6 +477,12 @@ impl ScriptTable {
 
     pub(crate) fn drain_writes(&self) -> Vec<crate::changes::CellChange> {
         self.writes.borrow_mut().drain(..).collect()
+    }
+
+    pub(crate) fn drain_live_spawns(
+        &self,
+    ) -> Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>> {
+        self.live_spawns.borrow_mut().drain(..).collect()
     }
 
     pub(crate) fn has(&self, kind: &str, id: &str) -> bool {
@@ -756,11 +775,12 @@ impl ScriptTable {
         next
     }
 
-    /// The player joined. `kind` is `"player"`. Writes are kept for the server to send.
-    /// Hurt and tick register, but nothing in the engine calls them yet.
-    pub(crate) fn entity_spawn(&self, world: &mut Cluster, kind: &str, x: i32, y: i32, z: i32) {
+    /// Player join or a demo/script mob spawn. False when a hook cancels.
+    /// Returning nothing / true keeps the spawn. Writes are kept for the server.
+    pub(crate) fn entity_spawn(&self, world: &mut Cluster, kind: &str, x: i32, y: i32, z: i32) -> bool {
         let bar = self.bar();
         let view = Self::view_of(&bar);
+        let mut allow = true;
         let args = [
             Arg::Text(kind.to_string()),
             Arg::Int(x),
@@ -768,13 +788,19 @@ impl ScriptTable {
             Arg::Int(z),
         ];
         for hook in &self.entity_spawn {
-            if let Err(err) = call(self, hook, world, &args, &view, ScriptWrites::Open) {
-                eprintln!("rosegold: hook failed: {err}");
+            match call(self, hook, world, &args, &view, ScriptWrites::Open) {
+                Ok(false) => allow = false,
+                Ok(true) => {}
+                Err(err) => {
+                    eprintln!("rosegold: hook failed: {err}");
+                    allow = false;
+                }
             }
         }
+        allow
     }
 
-    /// False when a hurt hook cancels. The engine has no damage, so this is only called from tests.
+    /// False when a hurt hook cancels.
     pub(crate) fn entity_hurt(&self, world: &mut Cluster, kind: &str, amount: i32) -> bool {
         let bar = self.bar();
         let view = Self::view_of(&bar);
@@ -782,6 +808,37 @@ impl ScriptTable {
         let args = [Arg::Text(kind.to_string()), Arg::Int(amount)];
         for hook in &self.entity_hurt {
             match call(self, hook, world, &args, &view, ScriptWrites::Closed) {
+                Ok(false) => allow = false,
+                Ok(true) => {}
+                Err(err) => {
+                    eprintln!("rosegold: hook failed: {err}");
+                    allow = false;
+                }
+            }
+        }
+        allow
+    }
+
+    /// False when a death hook cancels despawn/loot side effects.
+    pub(crate) fn entity_death(
+        &self,
+        world: &mut Cluster,
+        kind: &str,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> bool {
+        let bar = self.bar();
+        let view = Self::view_of(&bar);
+        let mut allow = true;
+        let args = [
+            Arg::Text(kind.to_string()),
+            Arg::Int(x),
+            Arg::Int(y),
+            Arg::Int(z),
+        ];
+        for hook in &self.entity_death {
+            match call(self, hook, world, &args, &view, ScriptWrites::Open) {
                 Ok(false) => allow = false,
                 Ok(true) => {}
                 Err(err) => {
@@ -1368,6 +1425,7 @@ impl ScriptTable {
             "loot" => Some(&self.loot),
             "entity_spawn" => Some(&self.entity_spawn),
             "entity_hurt" => Some(&self.entity_hurt),
+            "entity_death" => Some(&self.entity_death),
             "entity_tick" => Some(&self.entity_tick),
             "use_item" => Some(&self.use_item),
             "use_block" => Some(&self.use_block),
@@ -1415,6 +1473,7 @@ impl ScriptTable {
             ScriptHook::Loot { .. } => self.loot.push(item),
             ScriptHook::EntitySpawn { .. } => self.entity_spawn.push(item),
             ScriptHook::EntityHurt { .. } => self.entity_hurt.push(item),
+            ScriptHook::EntityDeath { .. } => self.entity_death.push(item),
             ScriptHook::EntityTick { .. } => self.entity_tick.push(item),
             ScriptHook::UseItem { .. } => self.use_item.push(item),
             ScriptHook::UseBlock { .. } => self.use_block.push(item),
@@ -1580,6 +1639,22 @@ fn register(
             .set_script_model(id, model, source)
             .map_err(|err| format!("block.model: {err}"))?;
     }
+    for (id, model) in &found.entity_models {
+        Pack::builtin()
+            .set_entity_model(id, model, source)
+            .map_err(|err| format!("entity.model: {err}"))?;
+    }
+    for (id, flag) in &found.entity_hostile {
+        let hostile = flag == "1" || flag.eq_ignore_ascii_case("true");
+        Pack::builtin()
+            .set_entity_hostile(id, hostile, source)
+            .map_err(|err| format!("entity.hostile: {err}"))?;
+    }
+    for (id, egg) in &found.entity_spawn_eggs {
+        Pack::builtin()
+            .set_entity_spawn_egg(id, egg, source)
+            .map_err(|err| format!("entity.spawn_egg: {err}"))?;
+    }
     for (id, seconds) in &found.block_hardness {
         let hardness: f32 = seconds
             .parse()
@@ -1711,7 +1786,15 @@ fn invoke(
     writes: ScriptWrites,
 ) -> Result<rebuild_rosegold::Call, String> {
     let result = hook.host.call(hook.slot, args, &mut |query| {
-        answer(world, &table.writes, &table.lines, view, &writes, query)
+        answer(
+            world,
+            &table.writes,
+            &table.live_spawns,
+            &table.lines,
+            view,
+            &writes,
+            query,
+        )
     });
     let said: Vec<String> = table.lines.borrow_mut().drain(..).collect();
     let mut call = result?;
@@ -1723,6 +1806,9 @@ fn invoke(
 fn answer(
     world: &mut Cluster,
     writes: &std::cell::RefCell<Vec<crate::changes::CellChange>>,
+    live_spawns: &std::cell::RefCell<
+        Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>>,
+    >,
     lines: &std::cell::RefCell<Vec<String>>,
     view: &ScriptView<'_>,
     gate: &ScriptWrites,
@@ -1843,6 +1929,26 @@ fn answer(
                 .map(|option| option.value)
                 .unwrap_or_default();
             Ok(Answer::Text(value))
+        }
+        Query::SpawnEntity { id, x, y, z } => {
+            if !matches!(gate, ScriptWrites::Open) {
+                return Ok(Answer::Bool(false));
+            }
+            if pack.note_spawn(&id, x, y, z, "").is_err() {
+                return Ok(Answer::Bool(false));
+            }
+            live_spawns.borrow_mut().push(Ok((id, x, y, z)));
+            Ok(Answer::Bool(true))
+        }
+        Query::DespawnEntity { id, x, y, z } => {
+            if !matches!(gate, ScriptWrites::Open) {
+                return Ok(Answer::Bool(false));
+            }
+            if !pack.take_spawn(&id, x, y, z) {
+                return Ok(Answer::Bool(false));
+            }
+            live_spawns.borrow_mut().push(Err((id, x, y, z)));
+            Ok(Answer::Bool(true))
         }
     }
 }

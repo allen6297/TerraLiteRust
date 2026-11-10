@@ -337,20 +337,38 @@ impl Hooks {
         self.scripts.set_inventory(selected, slots);
     }
 
-    /// Player joined, or a demo mob standing on the grass.
-    pub fn entity_spawn(&self, world: &mut Cluster, kind: &str, x: i32, y: i32, z: i32) {
-        self.scripts.entity_spawn(world, kind, x, y, z);
+    /// Player joined, or a demo mob standing on the grass. False cancels that spawn.
+    pub fn entity_spawn(&self, world: &mut Cluster, kind: &str, x: i32, y: i32, z: i32) -> bool {
+        self.scripts.entity_spawn(world, kind, x, y, z)
     }
 
     /// The pig and the zombie. Called once, next to the player spawn.
     pub fn spawn_demo_mobs(&self, world: &mut Cluster) {
-        self.entity_spawn(world, "pig", 5, 1, 9);
-        self.entity_spawn(world, "zombie", 11, 1, 13);
+        let _ = self.entity_spawn(world, "pig", 5, 1, 9);
+        let _ = self.entity_spawn(world, "zombie", 11, 1, 13);
     }
 
     /// False when a hurt hook cancels. A fall calls this for `"player"`.
     pub fn entity_hurt(&self, world: &mut Cluster, kind: &str, amount: i32) -> bool {
         self.scripts.entity_hurt(world, kind, amount)
+    }
+
+    /// False when a death hook cancels despawn/loot side effects.
+    pub fn entity_death(
+        &self,
+        world: &mut Cluster,
+        kind: &str,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> bool {
+        self.scripts.entity_death(world, kind, x, y, z)
+    }
+
+    pub fn drain_live_spawns(
+        &self,
+    ) -> Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>> {
+        self.scripts.drain_live_spawns()
     }
 
     /// One mob tick. The game drives `"player"`, `"sheep"`, `"pig"`, and `"zombie"`.
