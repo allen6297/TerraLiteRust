@@ -7,5 +7,5 @@
   "panel": "stone",
   "button": "cobblestone",
   "header": "deepslate",
-  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "back"]
+  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "resource_packs", "back"]
 }

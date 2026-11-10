@@ -4329,6 +4329,10 @@ pub enum MenuAction {
     Setting,
     /// Survival death screen: return at bed / world spawn.
     Respawn,
+    /// Resource pack picker: toggle an overlay by id.
+    TogglePack,
+    /// Resource pack picker: persist selection and reload textures.
+    ApplyPacks,
 }
 
 /// How an egui settings row draws its control (toggle vs discrete slider).
@@ -4365,6 +4369,7 @@ enum MenuPage {
     Keybinds,
     Advancements,
     Statistics,
+    ResourcePacks,
     Worlds,
     Pause,
     Closed,
@@ -4385,6 +4390,10 @@ pub struct Menu {
     advancements_return: MenuPage,
     /// Statistics screen returns here (pause or closed).
     statistics_return: MenuPage,
+    /// Resource packs screen returns here (settings / pause / closed).
+    resource_packs_return: MenuPage,
+    /// Pack id waiting for [`MenuAction::TogglePack`].
+    pending_pack_toggle: Option<String>,
     selected: usize,
     size: rebuild_world::WorldSize,
     muted: bool,
@@ -4421,6 +4430,8 @@ impl Menu {
             keybinds_return: MenuPage::Main,
             advancements_return: MenuPage::Pause,
             statistics_return: MenuPage::Pause,
+            resource_packs_return: MenuPage::Settings,
+            pending_pack_toggle: None,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4451,6 +4462,8 @@ impl Menu {
             keybinds_return: MenuPage::Main,
             advancements_return: MenuPage::Pause,
             statistics_return: MenuPage::Pause,
+            resource_packs_return: MenuPage::Settings,
+            pending_pack_toggle: None,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4544,6 +4557,12 @@ impl Menu {
                 detail: "keys and mouse".into(),
                 options: vec!["keybinds".into()],
             },
+            SettingsCategory {
+                id: "packs".into(),
+                title: "Packs".into(),
+                detail: "resource pack overlays".into(),
+                options: vec!["resource_packs".into()],
+            },
         ];
         let options = rebuild_world::Pack::builtin().settings();
         let mut seen = Vec::new();
@@ -4628,6 +4647,7 @@ impl Menu {
             "view_bob" => "walk motion".to_string(),
             "trace" => "sun shadows".to_string(),
             "keybinds" => "click a row, then press a key".to_string(),
+            "resource_packs" => "folders and zips under resourcepacks/".to_string(),
             "back" => "return to the menu".to_string(),
             _ => rebuild_world::Pack::builtin()
                 .settings()
@@ -4705,6 +4725,9 @@ impl Menu {
                 choices: vec!["off".into(), "low".into(), "full".into()],
             },
             "keybinds" => SettingsControl::Link {
+                caption: "Open…",
+            },
+            "resource_packs" => SettingsControl::Link {
                 caption: "Open…",
             },
             _ => {
@@ -4942,6 +4965,7 @@ impl Menu {
             MenuPage::Keybinds => "KEYBINDS",
             MenuPage::Advancements => "ADVANCEMENTS",
             MenuPage::Statistics => "STATISTICS",
+            MenuPage::ResourcePacks => "RESOURCE PACKS",
             MenuPage::Worlds => "WORLDS",
             MenuPage::Pause => "PAUSED",
             MenuPage::Closed => "",
@@ -4967,12 +4991,14 @@ impl Menu {
             "join" => "localhost".to_string(),
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
+            "resource_packs" => "enable overlays, then Apply".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
             "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
             "title" => "quit to the menu".to_string(),
+            "apply" => "reload textures from enabled packs".to_string(),
             "world" if self.size_locked => format!(
                 "server {}, {} by {} chunks",
                 self.size.label(),
@@ -5047,6 +5073,16 @@ impl Menu {
                     MenuAction::None
                 }
             }
+            MenuPage::ResourcePacks => {
+                let back = self.resource_packs_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
             MenuPage::Worlds => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5060,7 +5096,7 @@ impl Menu {
         }
     }
 
-    /// Leave settings, keybinds, advancements, or statistics.
+    /// Leave settings, keybinds, advancements, statistics, or resource packs.
     pub fn back(&mut self) {
         if matches!(
             self.page,
@@ -5068,6 +5104,7 @@ impl Menu {
                 | MenuPage::Keybinds
                 | MenuPage::Advancements
                 | MenuPage::Statistics
+                | MenuPage::ResourcePacks
         ) {
             let _ = self.escape();
         }
@@ -5172,6 +5209,10 @@ impl Menu {
                 self.open_keybinds(MenuPage::Settings);
                 MenuAction::None
             }
+            MenuPage::Settings if label == "resource_packs" => {
+                self.open_resource_packs(MenuPage::Settings);
+                MenuAction::None
+            }
             MenuPage::Settings => {
                 self.back();
                 MenuAction::None
@@ -5203,6 +5244,10 @@ impl Menu {
                 self.open_statistics(MenuPage::Pause);
                 MenuAction::None
             }
+            MenuPage::Pause if label == "resource_packs" => {
+                self.open_resource_packs(MenuPage::Pause);
+                MenuAction::None
+            }
             MenuPage::Pause if label == "title" => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5228,6 +5273,17 @@ impl Menu {
                     MenuAction::None
                 }
             }
+            MenuPage::ResourcePacks if label == "back" => {
+                let back = self.resource_packs_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
+            MenuPage::ResourcePacks if label == "apply" => MenuAction::ApplyPacks,
             MenuPage::Worlds if label == "back" => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5384,6 +5440,32 @@ impl Menu {
         self.open_statistics(MenuPage::Closed);
     }
 
+    pub fn is_resource_packs(&self) -> bool {
+        self.page == MenuPage::ResourcePacks
+    }
+
+    fn open_resource_packs(&mut self, back: MenuPage) {
+        self.resource_packs_return = back;
+        self.page = MenuPage::ResourcePacks;
+        self.selected = 0;
+        self.pending_pack_toggle = None;
+    }
+
+    /// Open resource packs (proof shots).
+    pub fn show_resource_packs(&mut self) {
+        self.open_resource_packs(MenuPage::Closed);
+    }
+
+    /// Queue a pack toggle from the egui list.
+    pub fn request_pack_toggle(&mut self, id: &str) -> MenuAction {
+        self.pending_pack_toggle = Some(id.to_string());
+        MenuAction::TogglePack
+    }
+
+    pub fn take_pack_toggle(&mut self) -> Option<String> {
+        self.pending_pack_toggle.take()
+    }
+
     fn make_world(&mut self) {
         let name = crate::net::fresh_world_name(&self.worlds);
         if crate::net::ensure_world(&name).is_err() {
@@ -5407,10 +5489,11 @@ impl Menu {
             MenuPage::Keybinds => vec!["back".to_string()],
             MenuPage::Advancements => vec!["back".to_string()],
             MenuPage::Statistics => vec!["back".to_string()],
+            MenuPage::ResourcePacks => vec!["apply".to_string(), "back".to_string()],
             MenuPage::Pause => {
                 let mut rows = self.pause.labels.clone();
                 // Older pause.json packs may omit rows — keep screens reachable.
-                for label in ["advancements", "statistics"] {
+                for label in ["advancements", "statistics", "resource_packs"] {
                     if !rows.iter().any(|row| row == label) {
                         let insert = rows
                             .iter()
@@ -5444,12 +5527,14 @@ impl Menu {
             "join" => "localhost".to_string(),
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
+            "resource_packs" => "enable overlays, then Apply".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
             "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
             "title" => "quit to the menu".to_string(),
+            "apply" => "reload textures from enabled packs".to_string(),
             "world" if self.size_locked => format!(
                 "server {}, {} by {} chunks",
                 self.size.label(),
@@ -5544,7 +5629,7 @@ const FALLBACK_SETTINGS: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "back"]
+  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "resource_packs", "back"]
 }"#;
 
 const FALLBACK_PAUSE: &str = r#"{
@@ -5553,7 +5638,7 @@ const FALLBACK_PAUSE: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "title"]
+  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "resource_packs", "title"]
 }"#;
 
 const FALLBACK_WORLDS: &str = r#"{

@@ -22,6 +22,7 @@ pub struct Image {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Clone)]
 struct Atlas {
     image: Image,
     slots: Vec<(String, u32)>,
@@ -31,7 +32,7 @@ struct Atlas {
 /// Atlas of every pack PNG that decodes to a 16×16 image, or a white pixel
 /// when none do.
 pub fn load_pack_texture() -> Image {
-    atlas().image.clone()
+    atlas().image
 }
 
 /// How many tiles sit side by side in [`load_pack_texture`].
@@ -43,9 +44,9 @@ pub fn atlas_tile_count() -> f32 {
 pub fn texture_slot(path: &str) -> Option<u32> {
     atlas()
         .slots
-        .iter()
+        .into_iter()
         .find(|(name, _)| name == path)
-        .map(|(_, slot)| *slot)
+        .map(|(_, slot)| slot)
 }
 
 /// Atlas column for a soft-rendered model slot icon (`slot-icon/<id>`), or `0`.
@@ -56,9 +57,9 @@ pub fn slot_icon_face(id: &str) -> f32 {
     let key = crate::item_icon::atlas_key(id);
     atlas()
         .slots
-        .iter()
+        .into_iter()
         .find(|(name, _)| name == &key)
-        .map(|(_, slot)| (*slot + 1) as f32)
+        .map(|(_, slot)| (slot + 1) as f32)
         .unwrap_or(0.0)
 }
 
@@ -126,10 +127,34 @@ pub fn face_tile(id: &str) -> Option<Image> {
     Some(image)
 }
 
-fn atlas() -> &'static Atlas {
-    static ATLAS: OnceLock<Atlas> = OnceLock::new();
-    ATLAS.get_or_init(build_atlas)
+fn atlas_cell() -> &'static Mutex<Option<Atlas>> {
+    static ATLAS: OnceLock<Mutex<Option<Atlas>>> = OnceLock::new();
+    ATLAS.get_or_init(|| Mutex::new(None))
 }
+
+fn atlas() -> Atlas {
+    let cell = atlas_cell();
+    let mut guard = cell.lock().expect("atlas");
+    if guard.is_none() {
+        *guard = Some(build_atlas());
+    }
+    guard.as_ref().expect("atlas").clone()
+}
+
+/// Drop the cached atlas so the next load rebuilds from the active packs.
+pub fn reload_atlas() {
+    if let Ok(mut guard) = atlas_cell().lock() {
+        *guard = None;
+    }
+    // Variant lists can name overlay PNGs too.
+    if let Some(cache) = VARIANT_CACHE.get() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.clear();
+        }
+    }
+}
+
+static VARIANT_CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 
 /// One of the textures named beside `path` when that file asks for a random
 /// pick. The path itself is the pick when there is no list.
@@ -145,8 +170,7 @@ pub fn varied_texture(path: &str, cell: [i32; 3]) -> String {
 }
 
 fn texture_variants(path: &str) -> Vec<String> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = VARIANT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().expect("texture variants");
     if let Some(found) = cache.get(path) {
         return found.clone();

@@ -896,6 +896,7 @@ pub struct State {
     depth: Option<DepthBuffer>,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
     uniform_buf: wgpu::Buffer,
     chunk_draws: Vec<ChunkGpu>,
     outline_pipeline: wgpu::RenderPipeline,
@@ -907,9 +908,12 @@ pub struct State {
     break_factor: f32,
     ui_pipeline: wgpu::RenderPipeline,
     ui_bind: wgpu::BindGroup,
+    ui_bind_layout: wgpu::BindGroupLayout,
     // The bind group samples this. Dropping it would free the tile count.
     #[allow(dead_code)]
     ui_tile_buf: wgpu::Buffer,
+    shadow_sampler: wgpu::Sampler,
+    trace_sampler: wgpu::Sampler,
     ui_vertex_buf: wgpu::Buffer,
     ui_index_buf: wgpu::Buffer,
     world: Cluster,
@@ -1264,6 +1268,7 @@ pub struct State {
     advancements: crate::advancements::Advancements,
     /// World statistics (break/place/walk/kills/time/deaths).
     statistics: crate::statistics::Statistics,
+    pack_picker: crate::resource_packs::PackPicker,
     /// F is down on a held spyglass.
     zoom_key: bool,
     /// Seconds until a held goat horn can sound again.
@@ -2183,6 +2188,7 @@ impl State {
             depth: None,
             pipeline,
             bind_group,
+            bind_group_layout,
             uniform_buf,
             chunk_draws: Vec::new(),
             outline_pipeline,
@@ -2194,7 +2200,10 @@ impl State {
             break_factor: 1.0,
             ui_pipeline,
             ui_bind,
+            ui_bind_layout,
             ui_tile_buf,
+            shadow_sampler,
+            trace_sampler,
             ui_vertex_buf,
             ui_index_buf,
             world: cluster,
@@ -2456,6 +2465,7 @@ impl State {
             map_open: false,
             advancements: crate::advancements::Advancements::new(),
             statistics: crate::statistics::Statistics::new(),
+            pack_picker: crate::resource_packs::PackPicker::load(),
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
@@ -16600,6 +16610,49 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Resource pack picker with demo overlay enabled (draft), then quit with a PNG.
+    pub fn arm_resource_pack_picker_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        self.pack_picker.refresh_from_disk();
+        self.pack_picker.toggle("demo-magenta");
+        self.menu.show_resource_packs();
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Statistics pause screen with sample counters, then quit with a PNG.
     pub fn arm_statistics_screen_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -21389,8 +21442,86 @@ impl State {
                     }
                 }
             }
+            gui::MenuAction::TogglePack => {
+                if let Some(id) = self.menu.take_pack_toggle() {
+                    self.pack_picker.toggle(&id);
+                }
+            }
+            gui::MenuAction::ApplyPacks => match self.pack_picker.apply() {
+                Ok(()) => self.reload_pack_textures(),
+                Err(err) => {
+                    eprintln!("resource packs: {err}");
+                    self.gui.push_chat(&format!("packs: {err}"));
+                }
+            },
             gui::MenuAction::Resume | gui::MenuAction::None => {}
         }
+    }
+
+    /// Rebuild the atlas and rebind world / HUD textures after Apply.
+    fn reload_pack_textures(&mut self) {
+        crate::texture::reload_atlas();
+        let (block_view, block_sampler) = upload_block_texture(&self.device, &self.queue);
+        let tile_count = [crate::texture::atlas_tile_count(), 0.0, 0.0, 0.0];
+        self.queue
+            .write_buffer(&self.ui_tile_buf, 0, bytemuck::cast_slice(&tile_count));
+        let trace_view = self
+            .trace_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.ui_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hotbar-textures"),
+            layout: &self.ui_bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&block_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&block_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.ui_tile_buf.as_entire_binding(),
+                },
+            ],
+        });
+        self.bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("chunk-uniforms"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&block_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&block_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&trace_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&self.trace_sampler),
+                },
+            ],
+        });
+        // Soft icons / tip textures may cache old atlas faces — clear egui icons.
+        self.egui.clear_icons();
     }
 
     /// A screen keeps the cursor free. Closing it while playing grabs the look again.
@@ -25045,6 +25176,9 @@ impl State {
                 .then(|| self.held_map_view());
             let advancement_rows = self.advancements.screen_rows();
             let statistics_rows = self.statistics.screen_rows();
+            let pack_rows = self.pack_picker.rows();
+            let pack_note = self.pack_picker.note().to_string();
+            let pack_dirty = self.pack_picker.dirty();
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -25058,6 +25192,9 @@ impl State {
                 toast,
                 &advancement_rows,
                 &statistics_rows,
+                &pack_rows,
+                &pack_note,
+                pack_dirty,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();

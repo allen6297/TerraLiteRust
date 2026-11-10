@@ -7,5 +7,5 @@
   "panel": "stone",
   "button": "cobblestone",
   "header": "deepslate",
-  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "title"]
+  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "resource_packs", "title"]
 }

@@ -37,6 +37,7 @@ mod nbt;
 mod net;
 mod pack;
 mod region;
+mod resource_packs;
 mod registry;
 mod rosegold;
 mod shape;
@@ -95,6 +96,10 @@ pub use pack::{
     block_definitions_file, break_loot_of, data_pack_root, for_each_collider, harvest_of,
     held_light_of, light_of, load_data_pack, resource_pack_root, shape_of, shelf_facing,
     shelf_filled, shelf_meta,
+};
+pub use resource_packs::{
+    BASE_PACK_ID, PackEntry, PackKind, PackSelection, RESOURCE_PACKS_DIR, discover_resource_packs,
+    install_pack_selection, prepare_overlays, resource_pack_selection, selection_file,
 };
 pub use rebuild_rosegold::{GuiElement, GuiScreen, SettingOption};
 pub use region::{load_chunk_from_path, load_chunk_from_region};

@@ -63,9 +63,13 @@ pub fn asset_text(path: &str) -> Option<String> {
 
 /// PNG bytes for a path inside the resource pack.
 ///
-/// A missing file, a path that leaves the pack, or a pack with no
-/// `pack.json` is `None`.
+/// Enabled overlays win first (topmost enabled), then the base pack, then
+/// each `mods/<name>/`. A missing file, a path that leaves the pack, or a
+/// pack with no `pack.json` is `None`.
 pub fn asset_png(path: &str) -> Option<Vec<u8>> {
+    if let Some(bytes) = crate::resource_packs::overlay_bytes(path) {
+        return Some(bytes);
+    }
     if let Some(bytes) = read_root(resource_pack_root(), path, true) {
         return Some(bytes);
     }
@@ -5553,8 +5557,15 @@ fn load_model(path: &str) -> Result<ShapeEntry, String> {
     parse_model_in(&text, path).map_err(|err| format!("{path}: {err}"))
 }
 
-/// JSON text from the resource pack, then from each `mods/<name>/` directory.
+/// JSON text from overlays, then the resource pack, then each `mods/<name>/`.
 fn read_text_asset(path: &str) -> Option<String> {
+    if let Some(bytes) = crate::resource_packs::overlay_bytes(path) {
+        if let Ok(text) = String::from_utf8(bytes) {
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
     if let Some(file) = pack_file(path) {
         if let Ok(text) = fs::read_to_string(file) {
             if !text.is_empty() {
