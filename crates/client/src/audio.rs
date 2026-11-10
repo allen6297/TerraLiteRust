@@ -55,6 +55,8 @@ pub enum Sound {
     Burp,
     /// A soft night cricket chirp. Louder and more often in deep night.
     Cricket,
+    /// A soft dawn bird call. Louder near sunrise, quiet by mid-morning.
+    Bird,
 }
 
 /// Seconds before the same horn can sound again.
@@ -241,6 +243,8 @@ pub struct Audio {
     stroke_left: f32,
     /// Seconds until the next night cricket chirp.
     cricket_left: f32,
+    /// Seconds until the next dawn bird call.
+    bird_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -263,6 +267,7 @@ impl Audio {
             step_left: 0.0,
             stroke_left: 0.0,
             cricket_left: 0.0,
+            bird_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -336,6 +341,24 @@ impl Audio {
         Some(0.12 + mix * 0.28)
     }
 
+    /// Loudness for the next dawn bird call, or `None` this frame.
+    ///
+    /// `mix` is dawn-chorus amount. Outside dawn the timer resets.
+    pub fn bird_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.bird_left = 0.0;
+            return None;
+        }
+        self.bird_left -= dt;
+        if self.bird_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edges (~3.2s), busier at the peak (~1.8s).
+        self.bird_left = 3.2 - mix * 1.4;
+        Some(0.14 + mix * 0.26)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -384,6 +407,7 @@ impl Audio {
             Sound::Breath => breath(),
             Sound::Burp => burp(),
             Sound::Cricket => cricket_chirp(),
+            Sound::Bird => bird_call(),
         }
     }
 }
@@ -692,6 +716,31 @@ fn breath() -> Vec<i16> {
     samples
 }
 
+/// A short two-note dawn whistle. Softer than a horn or mace.
+fn bird_call() -> Vec<i16> {
+    let mut samples = Vec::new();
+    samples.extend(bird_tone(1_650.0, 0.09, 0.12, 61));
+    samples.extend(vec![0i16; (22_050.0 * 0.05) as usize]);
+    samples.extend(bird_tone(2_100.0, 0.11, 0.10, 67));
+    samples
+}
+
+fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = seed;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let slide = freq * (1.0 + 0.08 * t / seconds);
+        let tone = (t * slide * std::f32::consts::TAU).sin();
+        let env = (t / 0.015).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((tone * 0.85 + n * 0.08) * volume * env * 32_767.0) as i16);
+    }
+    samples
+}
+
 /// Two soft high chirps. Quiet enough to sit under footsteps.
 fn cricket_chirp() -> Vec<i16> {
     let mut samples = Vec::new();
@@ -902,6 +951,21 @@ mod tests {
 
     fn ahead(z: f32) -> [f32; 3] {
         [8.0, 1.5, z]
+    }
+
+    #[test]
+    fn dawn_birds_wait_for_chorus_and_respect_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.bird_ready(0.1, 0.0).is_none());
+        let level = audio
+            .bird_ready(0.1, 1.0)
+            .expect("peak dawn calls on the first beat");
+        assert!(level > 0.3 && level <= 0.45);
+        audio.play_heard(Sound::Bird, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Bird]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Bird, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Bird]);
     }
 
     #[test]

@@ -373,6 +373,21 @@ pub fn night_fog(time_of_day: f32) -> f32 {
     }
 }
 
+/// Soft dawn bird chorus amount. `0` elsewhere, peaks just after dawn.
+///
+/// Rises as night fog leaves and fades by mid-morning so noon stays quiet.
+pub fn dawn_chorus(time_of_day: f32) -> f32 {
+    let time = time_of_day.rem_euclid(1.0);
+    if !(0.18..=0.42).contains(&time) {
+        return 0.0;
+    }
+    if time < 0.28 {
+        smoothstep(0.18, 0.26, time)
+    } else {
+        1.0 - smoothstep(0.32, 0.42, time)
+    }
+}
+
 /// Where the distance fog starts and ends, in blocks.
 ///
 /// Day stays long. The afternoon spell shortens it. Night shortens it again
@@ -443,6 +458,17 @@ mod tests {
         assert!(gray[2] < blue[2]);
         assert!((gray[0] - gray[2]).abs() < 0.1);
         assert_eq!(foggy(blue, [0.0, 0.0, 0.0], 0.0), blue);
+    }
+
+    #[test]
+    #[test]
+    fn dawn_chorus_peaks_after_sunrise_and_is_quiet_at_noon() {
+        assert_eq!(dawn_chorus(0.0), 0.0);
+        assert_eq!(dawn_chorus(0.5), 0.0);
+        assert_eq!(dawn_chorus(0.75), 0.0);
+        assert!(dawn_chorus(0.26) > 0.8);
+        assert!(dawn_chorus(0.22) > 0.0 && dawn_chorus(0.22) < dawn_chorus(0.26));
+        assert!(dawn_chorus(0.38) > 0.0 && dawn_chorus(0.38) < dawn_chorus(0.26));
     }
 
     #[test]
