@@ -1269,6 +1269,7 @@ pub struct State {
     /// World statistics (break/place/walk/kills/time/deaths).
     statistics: crate::statistics::Statistics,
     pack_picker: crate::resource_packs::PackPicker,
+    datapack_picker: crate::datapacks::DataPackPicker,
     /// F is down on a held spyglass.
     zoom_key: bool,
     /// Seconds until a held goat horn can sound again.
@@ -2466,6 +2467,7 @@ impl State {
             advancements: crate::advancements::Advancements::new(),
             statistics: crate::statistics::Statistics::new(),
             pack_picker: crate::resource_packs::PackPicker::load(),
+            datapack_picker: crate::datapacks::DataPackPicker::load(),
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
@@ -16610,6 +16612,49 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Datapack picker with demo overlay enabled (draft), then quit with a PNG.
+    pub fn arm_datapack_picker_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        self.datapack_picker.refresh_from_disk();
+        self.datapack_picker.toggle("demo-extra");
+        self.menu.show_datapacks();
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Resource pack picker with demo overlay enabled (draft), then quit with a PNG.
     pub fn arm_resource_pack_picker_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -21454,6 +21499,21 @@ impl State {
                     self.gui.push_chat(&format!("packs: {err}"));
                 }
             },
+            gui::MenuAction::ToggleDataPack => {
+                if let Some(id) = self.menu.take_datapack_toggle() {
+                    self.datapack_picker.toggle(&id);
+                }
+            }
+            gui::MenuAction::ApplyDataPacks => match self.datapack_picker.apply() {
+                Ok(()) => {
+                    self.gui.reload_emi_book();
+                    self.gui.push_chat("datapacks applied");
+                }
+                Err(err) => {
+                    eprintln!("datapacks: {err}");
+                    self.gui.push_chat(&format!("datapacks: {err}"));
+                }
+            },
             gui::MenuAction::Resume | gui::MenuAction::None => {}
         }
     }
@@ -25179,6 +25239,9 @@ impl State {
             let pack_rows = self.pack_picker.rows();
             let pack_note = self.pack_picker.note().to_string();
             let pack_dirty = self.pack_picker.dirty();
+            let datapack_rows = self.datapack_picker.rows();
+            let datapack_note = self.datapack_picker.note().to_string();
+            let datapack_dirty = self.datapack_picker.dirty();
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -25195,6 +25258,9 @@ impl State {
                 &pack_rows,
                 &pack_note,
                 pack_dirty,
+                &datapack_rows,
+                &datapack_note,
+                datapack_dirty,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();

@@ -808,6 +808,17 @@ pub const LECTERN_PAGES: [&str; 4] = [
 pub const HANGING_LINE: &str = "the path north of the camp";
 
 impl Gui {
+    /// Reload datapack recipes / smelting into the EMI book after Apply.
+    pub fn reload_emi_book(&mut self) {
+        self.book = match recipes::load_emi() {
+            Ok(book) => book,
+            Err(err) => {
+                eprintln!("recipes: {err}");
+                Book::empty()
+            }
+        };
+    }
+
     /// Load the shipped screen. A missing file leaves the key doing nothing.
     pub fn new() -> Self {
         let book = match recipes::load_emi() {
@@ -4333,6 +4344,10 @@ pub enum MenuAction {
     TogglePack,
     /// Resource pack picker: persist selection and reload textures.
     ApplyPacks,
+    /// Datapack picker: toggle an overlay by id.
+    ToggleDataPack,
+    /// Datapack picker: persist selection and reload loot/recipes/smelting.
+    ApplyDataPacks,
 }
 
 /// How an egui settings row draws its control (toggle vs discrete slider).
@@ -4370,6 +4385,7 @@ enum MenuPage {
     Advancements,
     Statistics,
     ResourcePacks,
+    DataPacks,
     Worlds,
     Pause,
     Closed,
@@ -4392,8 +4408,12 @@ pub struct Menu {
     statistics_return: MenuPage,
     /// Resource packs screen returns here (settings / pause / closed).
     resource_packs_return: MenuPage,
+    /// Datapacks screen returns here (settings / pause / closed).
+    datapacks_return: MenuPage,
     /// Pack id waiting for [`MenuAction::TogglePack`].
     pending_pack_toggle: Option<String>,
+    /// Datapack id waiting for [`MenuAction::ToggleDataPack`].
+    pending_datapack_toggle: Option<String>,
     selected: usize,
     size: rebuild_world::WorldSize,
     muted: bool,
@@ -4431,7 +4451,9 @@ impl Menu {
             advancements_return: MenuPage::Pause,
             statistics_return: MenuPage::Pause,
             resource_packs_return: MenuPage::Settings,
+            datapacks_return: MenuPage::Settings,
             pending_pack_toggle: None,
+            pending_datapack_toggle: None,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4463,7 +4485,9 @@ impl Menu {
             advancements_return: MenuPage::Pause,
             statistics_return: MenuPage::Pause,
             resource_packs_return: MenuPage::Settings,
+            datapacks_return: MenuPage::Settings,
             pending_pack_toggle: None,
+            pending_datapack_toggle: None,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4560,8 +4584,8 @@ impl Menu {
             SettingsCategory {
                 id: "packs".into(),
                 title: "Packs".into(),
-                detail: "resource pack overlays".into(),
-                options: vec!["resource_packs".into()],
+                detail: "resource and data pack overlays".into(),
+                options: vec!["resource_packs".into(), "datapacks".into()],
             },
         ];
         let options = rebuild_world::Pack::builtin().settings();
@@ -4648,6 +4672,7 @@ impl Menu {
             "trace" => "sun shadows".to_string(),
             "keybinds" => "click a row, then press a key".to_string(),
             "resource_packs" => "folders and zips under resourcepacks/".to_string(),
+            "datapacks" => "folders and zips under datapacks/".to_string(),
             "back" => "return to the menu".to_string(),
             _ => rebuild_world::Pack::builtin()
                 .settings()
@@ -4728,6 +4753,9 @@ impl Menu {
                 caption: "Open…",
             },
             "resource_packs" => SettingsControl::Link {
+                caption: "Open…",
+            },
+            "datapacks" => SettingsControl::Link {
                 caption: "Open…",
             },
             _ => {
@@ -4966,6 +4994,7 @@ impl Menu {
             MenuPage::Advancements => "ADVANCEMENTS",
             MenuPage::Statistics => "STATISTICS",
             MenuPage::ResourcePacks => "RESOURCE PACKS",
+            MenuPage::DataPacks => "DATAPACKS",
             MenuPage::Worlds => "WORLDS",
             MenuPage::Pause => "PAUSED",
             MenuPage::Closed => "",
@@ -4992,12 +5021,16 @@ impl Menu {
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
             "resource_packs" => "enable overlays, then Apply".to_string(),
+            "datapacks" => "enable overlays, then Apply".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
             "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
             "title" => "quit to the menu".to_string(),
+            "apply" if self.page == MenuPage::DataPacks => {
+                "reload loot, recipes, and smelting".to_string()
+            }
             "apply" => "reload textures from enabled packs".to_string(),
             "world" if self.size_locked => format!(
                 "server {}, {} by {} chunks",
@@ -5083,6 +5116,16 @@ impl Menu {
                     MenuAction::None
                 }
             }
+            MenuPage::DataPacks => {
+                let back = self.datapacks_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
             MenuPage::Worlds => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5105,6 +5148,7 @@ impl Menu {
                 | MenuPage::Advancements
                 | MenuPage::Statistics
                 | MenuPage::ResourcePacks
+                | MenuPage::DataPacks
         ) {
             let _ = self.escape();
         }
@@ -5213,6 +5257,10 @@ impl Menu {
                 self.open_resource_packs(MenuPage::Settings);
                 MenuAction::None
             }
+            MenuPage::Settings if label == "datapacks" => {
+                self.open_datapacks(MenuPage::Settings);
+                MenuAction::None
+            }
             MenuPage::Settings => {
                 self.back();
                 MenuAction::None
@@ -5246,6 +5294,10 @@ impl Menu {
             }
             MenuPage::Pause if label == "resource_packs" => {
                 self.open_resource_packs(MenuPage::Pause);
+                MenuAction::None
+            }
+            MenuPage::Pause if label == "datapacks" => {
+                self.open_datapacks(MenuPage::Pause);
                 MenuAction::None
             }
             MenuPage::Pause if label == "title" => {
@@ -5284,6 +5336,17 @@ impl Menu {
                 }
             }
             MenuPage::ResourcePacks if label == "apply" => MenuAction::ApplyPacks,
+            MenuPage::DataPacks if label == "back" => {
+                let back = self.datapacks_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
+            MenuPage::DataPacks if label == "apply" => MenuAction::ApplyDataPacks,
             MenuPage::Worlds if label == "back" => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5466,6 +5529,31 @@ impl Menu {
         self.pending_pack_toggle.take()
     }
 
+    pub fn is_datapacks(&self) -> bool {
+        self.page == MenuPage::DataPacks
+    }
+
+    fn open_datapacks(&mut self, back: MenuPage) {
+        self.datapacks_return = back;
+        self.page = MenuPage::DataPacks;
+        self.selected = 0;
+        self.pending_datapack_toggle = None;
+    }
+
+    /// Open datapacks (proof shots).
+    pub fn show_datapacks(&mut self) {
+        self.open_datapacks(MenuPage::Closed);
+    }
+
+    pub fn request_datapack_toggle(&mut self, id: &str) -> MenuAction {
+        self.pending_datapack_toggle = Some(id.to_string());
+        MenuAction::ToggleDataPack
+    }
+
+    pub fn take_datapack_toggle(&mut self) -> Option<String> {
+        self.pending_datapack_toggle.take()
+    }
+
     fn make_world(&mut self) {
         let name = crate::net::fresh_world_name(&self.worlds);
         if crate::net::ensure_world(&name).is_err() {
@@ -5490,10 +5578,11 @@ impl Menu {
             MenuPage::Advancements => vec!["back".to_string()],
             MenuPage::Statistics => vec!["back".to_string()],
             MenuPage::ResourcePacks => vec!["apply".to_string(), "back".to_string()],
+            MenuPage::DataPacks => vec!["apply".to_string(), "back".to_string()],
             MenuPage::Pause => {
                 let mut rows = self.pause.labels.clone();
                 // Older pause.json packs may omit rows — keep screens reachable.
-                for label in ["advancements", "statistics", "resource_packs"] {
+                for label in ["advancements", "statistics", "resource_packs", "datapacks"] {
                     if !rows.iter().any(|row| row == label) {
                         let insert = rows
                             .iter()
@@ -5528,12 +5617,16 @@ impl Menu {
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
             "resource_packs" => "enable overlays, then Apply".to_string(),
+            "datapacks" => "enable overlays, then Apply".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
             "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
             "title" => "quit to the menu".to_string(),
+            "apply" if self.page == MenuPage::DataPacks => {
+                "reload loot, recipes, and smelting".to_string()
+            }
             "apply" => "reload textures from enabled packs".to_string(),
             "world" if self.size_locked => format!(
                 "server {}, {} by {} chunks",
@@ -5629,7 +5722,7 @@ const FALLBACK_SETTINGS: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "resource_packs", "back"]
+  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "resource_packs", "datapacks", "back"]
 }"#;
 
 const FALLBACK_PAUSE: &str = r#"{
@@ -5638,7 +5731,7 @@ const FALLBACK_PAUSE: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "resource_packs", "title"]
+  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "resource_packs", "datapacks", "title"]
 }"#;
 
 const FALLBACK_WORLDS: &str = r#"{

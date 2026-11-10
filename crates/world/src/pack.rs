@@ -4519,12 +4519,9 @@ fn load_block_loot_file(id: &str) -> Option<Vec<String>> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return None;
     }
-    let path = data_pack_root()
-        .join("data")
-        .join("terralite")
-        .join("loot")
-        .join("blocks")
-        .join(format!("{id}.json"));
+    let path = crate::datapacks::resolve_datapack_file(&format!(
+        "data/terralite/loot/blocks/{id}.json"
+    ))?;
     let text = fs::read_to_string(path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&text).ok()?;
     let list = root.get("drops")?.as_array()?;

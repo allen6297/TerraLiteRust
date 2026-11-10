@@ -20,12 +20,20 @@ pub struct Table {
     pub omen: Vec<String>,
 }
 
+fn loot_file(name: &str) -> PathBuf {
+    rebuild_world::resolve_datapack_file(&format!("data/terralite/loot/{name}.json")).unwrap_or_else(
+        || {
+            rebuild_world::data_pack_root()
+                .join("data")
+                .join("terralite")
+                .join("loot")
+                .join(format!("{name}.json"))
+        },
+    )
+}
+
 pub fn copper_chest_file() -> PathBuf {
-    rebuild_world::data_pack_root()
-        .join("data")
-        .join("terralite")
-        .join("loot")
-        .join("copper_chest.json")
+    loot_file("copper_chest")
 }
 
 /// The copper-chest table from the data pack.
@@ -34,11 +42,7 @@ pub fn load_copper_chest() -> Result<Table, String> {
 }
 
 pub fn camp_chest_file() -> PathBuf {
-    rebuild_world::data_pack_root()
-        .join("data")
-        .join("terralite")
-        .join("loot")
-        .join("camp_chest.json")
+    loot_file("camp_chest")
 }
 
 /// The camp-chest table from the data pack.
@@ -47,11 +51,7 @@ pub fn load_camp_chest() -> Result<Table, String> {
 }
 
 pub fn shrine_chest_file() -> PathBuf {
-    rebuild_world::data_pack_root()
-        .join("data")
-        .join("terralite")
-        .join("loot")
-        .join("shrine_chest.json")
+    loot_file("shrine_chest")
 }
 
 /// The shrine-chest table from the data pack.
@@ -60,11 +60,7 @@ pub fn load_shrine_chest() -> Result<Table, String> {
 }
 
 pub fn mine_chest_file() -> PathBuf {
-    rebuild_world::data_pack_root()
-        .join("data")
-        .join("terralite")
-        .join("loot")
-        .join("mine_chest.json")
+    loot_file("mine_chest")
 }
 
 /// The mine-chest table from the data pack.

@@ -1,6 +1,7 @@
 mod advancements;
 mod statistics;
 mod resource_packs;
+mod datapacks;
 mod arrows;
 mod audio;
 mod pearls;
@@ -239,6 +240,8 @@ struct Args {
     shot_statistics_screen: Option<std::path::PathBuf>,
     /// Resource pack picker screen, then quit.
     shot_resource_pack_picker: Option<std::path::PathBuf>,
+    /// Datapack picker screen, then quit.
+    shot_datapack_picker: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -502,6 +505,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_advancements_screen: args.shot_advancements_screen,
         shot_statistics_screen: args.shot_statistics_screen,
         shot_resource_pack_picker: args.shot_resource_pack_picker,
+        shot_datapack_picker: args.shot_datapack_picker,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -643,6 +647,7 @@ struct App {
     shot_advancements_screen: Option<std::path::PathBuf>,
     shot_statistics_screen: Option<std::path::PathBuf>,
     shot_resource_pack_picker: Option<std::path::PathBuf>,
+    shot_datapack_picker: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -931,6 +936,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_resource_pack_picker.take() {
                     state.arm_resource_pack_picker_shot(path);
+                }
+                if let Some(path) = self.shot_datapack_picker.take() {
+                    state.arm_datapack_picker_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1302,6 +1310,7 @@ where
         shot_advancements_screen: None,
         shot_statistics_screen: None,
         shot_resource_pack_picker: None,
+        shot_datapack_picker: None,
         name: None,
         host: false,
         join: false,
@@ -1753,6 +1762,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-resource-pack-picker".to_string())?;
                 parsed.shot_resource_pack_picker = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-datapack-picker" | "--shot-datapacks" | "--shot-datapack" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-datapack-picker".to_string())?;
+                parsed.shot_datapack_picker = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2402,6 +2417,17 @@ mod tests {
         assert_eq!(
             args.shot_resource_pack_picker.as_deref(),
             Some(std::path::Path::new("resource-pack-picker.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-datapack-picker".into(),
+            "datapack-picker.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_datapack_picker.as_deref(),
+            Some(std::path::Path::new("datapack-picker.png"))
         );
     }
 }

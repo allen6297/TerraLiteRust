@@ -351,31 +351,12 @@ pub fn load_book() -> Result<Book, String> {
     if !root.join("pack.meta").is_file() {
         return Err(format!("data pack missing pack.meta ({})", root.display()));
     }
-    let dir = recipes_dir();
-    let entries = fs::read_dir(&dir).map_err(|_| format!("data pack missing {}", dir.display()))?;
-    let mut paths = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|err| err.to_string())?;
-        let path = entry.path();
-        let is_json = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
-        if path.is_file() && is_json {
-            paths.push(path);
-        }
+    let listed = rebuild_world::list_datapack_json("recipes");
+    if listed.is_empty() {
+        return Err(format!("data pack has no recipes in {}", recipes_dir().display()));
     }
-    paths.sort();
-    if paths.is_empty() {
-        return Err(format!("data pack has no recipes in {}", dir.display()));
-    }
-    let mut recipes = Vec::with_capacity(paths.len());
-    for path in paths {
-        let id = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_string)
-            .ok_or_else(|| format!("bad recipe file {}", path.display()))?;
+    let mut recipes = Vec::with_capacity(listed.len());
+    for (id, path) in listed {
         let text =
             fs::read_to_string(&path).map_err(|_| format!("unreadable {}", path.display()))?;
         let recipe = parse_recipe(&id, &text)?;
@@ -411,28 +392,10 @@ pub fn load_emi() -> Result<Book, String> {
 }
 
 fn load_smelting_into(book: &mut Book) -> Result<(), String> {
-    let dir = smelting_dir();
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    let entries = fs::read_dir(&dir).map_err(|_| format!("unreadable {}", dir.display()))?;
-    let mut paths = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|err| err.to_string())?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    for path in paths {
+    for (name, path) in rebuild_world::list_datapack_json("smelting") {
         let text =
             fs::read_to_string(&path).map_err(|_| format!("unreadable {}", path.display()))?;
-        let name = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("smelt");
-        let (result, input, station) = parse_smelting(name, &text)?;
+        let (result, input, station) = parse_smelting(&name, &text)?;
         book.add_heat(result, input, station);
     }
     Ok(())
