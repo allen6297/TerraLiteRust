@@ -314,6 +314,9 @@ pub const FLY_FOV: f32 = 7.0;
 /// Degrees the view tightens on a successful block place (before view-bob scale).
 pub const PLACE_FOV: f32 = 2.5;
 
+/// Degrees of FOV pinch while drawing a bow (`1` = full draw).
+pub const BOW_FOV: f32 = 8.0;
+
 /// Degrees the view tightens when a block breaks (before view-bob scale).
 pub const BREAK_FOV: f32 = 3.5;
 

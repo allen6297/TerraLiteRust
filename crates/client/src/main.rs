@@ -1,3 +1,4 @@
+mod arrows;
 mod audio;
 mod blockbench;
 mod boat;
@@ -209,6 +210,8 @@ struct Args {
     shot_loot_magnet: Option<std::path::PathBuf>,
     /// Shield block raise pose, then quit.
     shot_shield_block: Option<std::path::PathBuf>,
+    /// Bow draw + flying arrow, then quit.
+    shot_bow_shoot: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -460,6 +463,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_xp_orbs: args.shot_xp_orbs,
         shot_loot_magnet: args.shot_loot_magnet,
         shot_shield_block: args.shot_shield_block,
+        shot_bow_shoot: args.shot_bow_shoot,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -589,6 +593,7 @@ struct App {
     shot_xp_orbs: Option<std::path::PathBuf>,
     shot_loot_magnet: Option<std::path::PathBuf>,
     shot_shield_block: Option<std::path::PathBuf>,
+    shot_bow_shoot: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -841,6 +846,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_shield_block.take() {
                     state.arm_shield_block_shot(path);
+                }
+                if let Some(path) = self.shot_bow_shoot.take() {
+                    state.arm_bow_shoot_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1200,6 +1208,7 @@ where
         shot_xp_orbs: None,
         shot_loot_magnet: None,
         shot_shield_block: None,
+        shot_bow_shoot: None,
         name: None,
         host: false,
         join: false,
@@ -1576,6 +1585,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-shield-block".to_string())?;
                 parsed.shot_shield_block = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-bow-shoot" | "--shot-bow" | "--shot-draw" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-bow-shoot".to_string())?;
+                parsed.shot_bow_shoot = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2093,6 +2108,17 @@ mod tests {
         assert_eq!(
             args.shot_shield_block.as_deref(),
             Some(std::path::Path::new("shield-block.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-bow-shoot".into(),
+            "bow-draw-shoot.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_bow_shoot.as_deref(),
+            Some(std::path::Path::new("bow-draw-shoot.png"))
         );
     }
 }

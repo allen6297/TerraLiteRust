@@ -494,6 +494,11 @@ struct ArrowDef {
     icon: String,
 }
 
+struct BowDef {
+    id: String,
+    icon: String,
+}
+
 struct PearlDef {
     id: String,
     icon: String,
@@ -591,6 +596,8 @@ pub struct Pack {
     fertilizers: Vec<FertilizerDef>,
     /// Arrows from the data pack. A fletching table makes them.
     arrows: Vec<ArrowDef>,
+    /// Bows from the data pack. Hold use to draw, release to fire an arrow.
+    bows: Vec<BowDef>,
     /// Crafting lines from `data/terralite/recipes`. The fletching table reads arrow.
     pack_recipes: Vec<PackRecipe>,
     /// Ender pearls from the data pack. Throwing one teleports along the look.
@@ -661,6 +668,7 @@ impl Pack {
             books: Vec::new(),
             fertilizers: Vec::new(),
             arrows: Vec::new(),
+            bows: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
             winds: Vec::new(),
@@ -2432,6 +2440,12 @@ impl Pack {
                     .map(|arrow| arrow.icon.as_str())
             })
             .or_else(|| {
+                self.bows
+                    .iter()
+                    .find(|bow| bow.id == id)
+                    .map(|bow| bow.icon.as_str())
+            })
+            .or_else(|| {
                 self.pearls
                     .iter()
                     .find(|pearl| pearl.id == id)
@@ -2597,6 +2611,16 @@ impl Pack {
     /// Arrow ids, in data-pack order.
     pub fn arrow_ids(&self) -> Vec<String> {
         self.arrows.iter().map(|arrow| arrow.id.clone()).collect()
+    }
+
+    /// True when `id` is a bow.
+    pub fn is_bow(&self, id: &str) -> bool {
+        self.bows.iter().any(|bow| bow.id == id)
+    }
+
+    /// Bow ids, in data-pack order.
+    pub fn bow_ids(&self) -> Vec<String> {
+        self.bows.iter().map(|bow| bow.id.clone()).collect()
     }
 
     /// True when `id` is a thrown ender pearl.
@@ -3007,6 +3031,7 @@ impl Pack {
         let mut books = Vec::new();
         let mut fertilizers = Vec::new();
         let mut arrows = Vec::new();
+        let mut bows = Vec::new();
         let mut pearls = Vec::new();
         let mut winds = Vec::new();
         let mut rods = Vec::new();
@@ -3050,6 +3075,7 @@ impl Pack {
                 || books.iter().any(|book: &BookDef| book.id == id)
                 || fertilizers.iter().any(|meal: &FertilizerDef| meal.id == id)
                 || arrows.iter().any(|arrow: &ArrowDef| arrow.id == id)
+                || bows.iter().any(|bow: &BowDef| bow.id == id)
                 || pearls.iter().any(|pearl: &PearlDef| pearl.id == id)
                 || winds.iter().any(|wind: &WindDef| wind.id == id)
                 || rods.iter().any(|rod: &RodDef| rod.id == id)
@@ -3089,6 +3115,7 @@ impl Pack {
                 PackItem::Book(book) => books.push(book),
                 PackItem::Fertilizer(meal) => fertilizers.push(meal),
                 PackItem::Arrow(arrow) => arrows.push(arrow),
+                PackItem::Bow(bow) => bows.push(bow),
                 PackItem::Pearl(pearl) => pearls.push(pearl),
                 PackItem::Wind(wind) => winds.push(wind),
                 PackItem::Rod(rod) => rods.push(rod),
@@ -3123,6 +3150,7 @@ impl Pack {
         self.books = books;
         self.fertilizers = fertilizers;
         self.arrows = arrows;
+        self.bows = bows;
         self.pearls = pearls;
         self.winds = winds;
         self.rods = rods;
@@ -3160,6 +3188,7 @@ enum PackItem {
     Book(BookDef),
     Fertilizer(FertilizerDef),
     Arrow(ArrowDef),
+    Bow(BowDef),
     Pearl(PearlDef),
     Wind(WindDef),
     Rod(RodDef),
@@ -3828,6 +3857,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("bow") {
+        require_only(obj, &["bow", "icon"], &format!("{id}.json"))?;
+        if obj.get("bow") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json bow must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Bow(BowDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
     parse_tool(id, obj).map(PackItem::Tool)
 }
 
@@ -3931,6 +3977,7 @@ impl Pack {
             books: Vec::new(),
             fertilizers: Vec::new(),
             arrows: Vec::new(),
+            bows: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
             winds: Vec::new(),
@@ -7624,6 +7671,10 @@ mod tests {
         assert_eq!(pack.tool_icon("book"), Some("bookshelf"));
         assert!(pack.is_fertilizer("bone_meal"));
         assert!(pack.is_arrow("arrow"));
+        assert!(pack.is_bow("bow"));
+        assert!(!pack.is_bow("arrow"));
+        assert_eq!(pack.tool_icon("bow"), Some("stick"));
+        assert!(pack.bow_ids().contains(&"bow".to_string()));
         assert_eq!(
             pack.pack_recipe("arrow"),
             Some(

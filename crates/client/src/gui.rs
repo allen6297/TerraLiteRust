@@ -5648,6 +5648,11 @@ pub fn shield_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "block")
 }
 
+/// Plate while a bow is drawn (right-click hold).
+pub fn bow_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "draw")
+}
+
 /// A small plate above the hotbar while Ctrl-sprint is held.
 pub fn sprint_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "sprint")
@@ -6483,6 +6488,11 @@ fn catalog() -> Vec<String> {
         }
     }
     for id in pack.arrow_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
+    for id in pack.bow_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
         }

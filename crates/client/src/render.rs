@@ -1222,6 +1222,12 @@ pub struct State {
     shield_raised: bool,
     /// HUD plate amount for the shield block cue, `0`..`1`.
     shield_show: f32,
+    /// Right mouse is held on a bow — drawing a shot.
+    bow_drawing: bool,
+    /// Draw charge `0`..`1` while holding a bow.
+    bow_charge: f32,
+    /// HUD plate amount for the bow draw cue, `0`..`1`.
+    bow_show: f32,
     /// Control key is down (trackpad Ctrl+click secondary place).
     ctrl_mod: bool,
     /// Last place/use click time — collapses WindowEvent + DeviceEvent doubles.
@@ -1462,6 +1468,8 @@ pub struct State {
     drop_count: u32,
     /// Collectible XP orbs + level progress (survival HUD bar).
     xp: crate::xp::Xp,
+    /// In-flight bow arrows.
+    arrows: crate::arrows::Arrows,
     sheep: crate::sheep::Sheep,
     sheep_buf: Option<wgpu::Buffer>,
     sheep_count: u32,
@@ -2401,6 +2409,9 @@ impl State {
             zoom_mouse: false,
             shield_raised: false,
             shield_show: 0.0,
+            bow_drawing: false,
+            bow_charge: 0.0,
+            bow_show: 0.0,
             ctrl_mod: false,
             place_click_at: None,
             compound_flow_wait: 0.35,
@@ -2537,6 +2548,7 @@ impl State {
             drop_buf: None,
             drop_count: 0,
             xp: crate::xp::Xp::new(),
+            arrows: crate::arrows::Arrows::new(),
             sheep: crate::sheep::Sheep::new(),
             sheep_buf: None,
             sheep_count: 0,
@@ -2911,6 +2923,97 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Bow mid-draw with a flying arrow toward a zombie, then quit with a PNG.
+    pub fn arm_bow_shoot_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([8.5, 1.0, 9.2]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bow");
+        self.hotbar.select_digit(2);
+        let _ = self.hotbar.give_stack("arrow");
+        self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        // First-person draw toward the zombie with an arrow mid-flight.
+        self.third_person = false;
+        let eye = glam::Vec3::new(8.5, 1.55 + crate::body::EYE_HEIGHT, 13.2);
+        let focus = glam::Vec3::new(8.5, 1.6, 9.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.bow_drawing = true;
+        self.bow_charge = 0.85;
+        self.bow_show = 1.0;
+        self.shield_raised = false;
+        self.shield_show = 0.0;
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        // Arrow mid-flight between the eye and the zombie.
+        self.arrows.pin([8.5, 2.35, 11.2], [0.0, 0.2, -12.0]);
+        self.player.tick(0.0, 0.0, -1.0, false, false, true);
+        self.rebuild_player();
+        self.rebuild_drops();
         let _ = self.window.focus_window();
     }
 
@@ -3692,6 +3795,7 @@ impl State {
         if !pressed {
             self.release_spyglass();
             self.release_shield();
+            self.release_bow();
             return;
         }
         if self.is_dead() || self.screen_open() || self.menu_open() {
@@ -3766,6 +3870,7 @@ impl State {
         let eye = self.camera.eye.to_array();
         let mut vertices = self.drops.vertices_toward(eye);
         vertices.extend(self.xp.vertices());
+        vertices.extend(self.arrows.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
             self.drop_count = 0;
@@ -4491,6 +4596,155 @@ impl State {
         // Keep the raise readable for a beat after the thud.
         self.slot_punch = self.slot_punch.max(0.85);
         true
+    }
+
+    fn holding_bow(&self) -> bool {
+        self.hotbar
+            .slot(self.hotbar.selected())
+            .is_some_and(|id| Pack::builtin().is_bow(id))
+    }
+
+    fn has_arrow(&self) -> bool {
+        if self.menu.creative() {
+            return true;
+        }
+        if self.hotbar.index_of("arrow").is_some() {
+            return true;
+        }
+        (0..crate::hotbar::PACK).any(|index| self.bag.slot(index) == Some("arrow"))
+    }
+
+    fn spend_arrow(&mut self) -> bool {
+        if self.menu.creative() {
+            return true;
+        }
+        if self.hotbar.consume_one("arrow") {
+            self.hotbar_dirty = true;
+            return true;
+        }
+        for index in 0..crate::hotbar::PACK {
+            if self.bag.slot(index) == Some("arrow") {
+                let _ = self.bag.take_one(index);
+                self.bag_dirty = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn release_bow(&mut self) {
+        if !self.bow_drawing {
+            return;
+        }
+        let charge = self.bow_charge;
+        self.bow_drawing = false;
+        if !self.holding_bow() {
+            return;
+        }
+        if charge < crate::arrows::MIN_CHARGE {
+            self.gui.push_chat("draw");
+            return;
+        }
+        if !self.spend_arrow() {
+            self.gui.push_chat("no arrow");
+            return;
+        }
+        let eye = self.camera.eye.to_array();
+        let forward = self.camera.forward().to_array();
+        self.arrows.fire(eye, forward, charge);
+        self.play_world(crate::audio::Sound::Gust, eye);
+        self.gui.push_chat("shot");
+        self.hit_kick = self.hit_kick.max(0.25);
+        self.rebuild_drops();
+    }
+
+    /// Clip flying arrows against nearby mobs. Returns true when one hit.
+    fn try_arrow_mob_hits(&mut self) -> bool {
+        let tips = self.arrows.flying_tips();
+        let amount = crate::arrows::HIT_HEARTS;
+        for tip in tips {
+            let (zmin, zmax) = self.zombie.bounds();
+            if point_in_box(tip, zmin, zmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let origin = [
+                    (zmin[0] + zmax[0]) * 0.5,
+                    zmin[1],
+                    (zmin[2] + zmax[2]) * 0.5,
+                ];
+                let dropped = self.hurt_mob("zombie", amount, origin, |s, n| s.zombie.hurt(n));
+                if dropped {
+                    self.grant_xp_at(origin, true);
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_zombie();
+                return true;
+            }
+            let night_hit = self.night.iter().enumerate().find_map(|(index, z)| {
+                let o = z.origin();
+                let (min, max) = (
+                    [o[0] - 0.3, o[1], o[2] - 0.3],
+                    [o[0] + 0.3, o[1] + 1.9, o[2] + 0.3],
+                );
+                point_in_box(tip, min, max).then_some((index, o))
+            });
+            if let Some((index, origin)) = night_hit {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped = self.hurt_mob("zombie", amount, origin, |s, n| {
+                    s.night.get_mut(index).is_some_and(|z| z.hurt(n))
+                });
+                if dropped {
+                    self.grant_xp_at(origin, true);
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                return true;
+            }
+            let breeze = self.breeze.origin();
+            let (bmin, bmax) = (
+                [breeze[0] - 0.35, breeze[1], breeze[2] - 0.35],
+                [breeze[0] + 0.35, breeze[1] + 1.4, breeze[2] + 0.35],
+            );
+            if point_in_box(tip, bmin, bmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("breeze", amount, breeze, |s, n| s.breeze.hurt(n));
+                if dropped {
+                    self.grant_xp_at(breeze, true);
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_breeze();
+                return true;
+            }
+            if let Some(index) = self.guests.iter().position(|guest| {
+                let o = guest.origin();
+                point_in_box(
+                    tip,
+                    [o[0] - 0.28, o[1], o[2] - 0.28],
+                    [o[0] + 0.28, o[1] + 1.95, o[2] + 0.28],
+                )
+            }) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let id = self.guests[index].id().to_string();
+                let origin = self.guests[index].origin();
+                let dropped =
+                    self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
+                if dropped {
+                    self.grant_xp_at(origin, true);
+                    self.guests.remove(index);
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_guests();
+                return true;
+            }
+        }
+        false
     }
 
     fn holding_compass(&self) -> bool {
@@ -8287,6 +8541,14 @@ impl State {
         }
         if self.holding_shield() {
             self.shield_raised = true;
+            return;
+        }
+        if self.holding_bow() {
+            if self.has_arrow() {
+                self.bow_drawing = true;
+            } else {
+                self.gui.push_chat("no arrow");
+            }
             return;
         }
         if self.try_equip()
@@ -21266,7 +21528,7 @@ impl State {
         self.tell_shape_pot();
         self.note_pose();
         let mut drops_dirty = self.drops.tick_motes(dt);
-        // Still shots freeze orb / loot magnet motion so the armed pose stays readable.
+        // Still shots freeze orb / loot / arrow motion so the armed pose stays readable.
         if self.cook_shot_path.is_none() {
             let eye = self.camera.eye.to_array();
             if self.drops.tick_magnet(dt, eye) {
@@ -21278,6 +21540,13 @@ impl State {
             }
             if leveled > 0 {
                 self.gui.push_chat(&format!("level {}", self.xp.level));
+            }
+            let (arrow_dirty, _) = self.arrows.tick(dt, &self.world);
+            if arrow_dirty {
+                drops_dirty = true;
+            }
+            if self.try_arrow_mob_hits() {
+                drops_dirty = true;
             }
         }
         if drops_dirty {
@@ -22038,13 +22307,15 @@ impl State {
         let moving = self.input.forward || self.input.back || self.input.left || self.input.right;
         {
             let look = self.camera.walk_axes().0;
+            let blocking = (self.shield_raised && self.holding_shield())
+                || (self.bow_drawing && self.holding_bow());
             self.player.tick(
                 dt,
                 look.x,
                 look.z,
                 moving && self.camera.on_ground,
                 self.dig.is_held(),
-                self.shield_raised && self.holding_shield(),
+                blocking,
             );
             let shield_goal = if self.shield_raised && self.holding_shield() {
                 1.0
@@ -22055,6 +22326,21 @@ impl State {
             if !self.holding_shield() {
                 self.shield_raised = false;
             }
+            if self.bow_drawing && self.holding_bow() {
+                self.bow_charge =
+                    (self.bow_charge + dt / crate::arrows::DRAW_TIME).min(1.0);
+            } else if !self.bow_drawing {
+                self.bow_charge = (self.bow_charge - dt * 2.5).max(0.0);
+            }
+            if !self.holding_bow() {
+                self.bow_drawing = false;
+            }
+            let bow_goal = if self.bow_drawing && self.holding_bow() {
+                1.0
+            } else {
+                0.0
+            };
+            self.bow_show += (bow_goal - self.bow_show) * (dt * 14.0).min(1.0);
         }
         match self.hunger.tick(
             dt,
@@ -22565,6 +22851,7 @@ impl State {
         let place = self.slot_punch * crate::camera::PLACE_FOV * bob_scale;
         let swap = self.swap_kick * crate::camera::SWAP_FOV * bob_scale;
         let broken = self.break_kick * crate::camera::BREAK_FOV * bob_scale;
+        let bow = self.bow_charge * crate::camera::BOW_FOV * bob_scale;
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
@@ -22579,7 +22866,8 @@ impl State {
             + fly
             + swap
             - place
-            - broken;
+            - broken
+            - bow;
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
         let chew_bob = if self.sipping {
@@ -23159,6 +23447,9 @@ impl State {
         }
         if self.shield_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::shield_quads(gui_w, gui_h, self.shield_show));
+        }
+        if self.bow_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::bow_quads(gui_w, gui_h, self.bow_show));
         }
         if self.sprint_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sprint_quads(gui_w, gui_h, self.sprint_show));
@@ -24674,6 +24965,15 @@ fn pot_wire(id: &str, count: u16) -> Vec<(String, i32)> {
 /// True when a held arrow is aimed at a target block.
 fn arrow_scores(held: &str, looked: &str) -> bool {
     Pack::builtin().is_arrow(held) && looked == "target"
+}
+
+fn point_in_box(at: [f32; 3], min: [f32; 3], max: [f32; 3]) -> bool {
+    at[0] >= min[0]
+        && at[0] <= max[0]
+        && at[1] >= min[1]
+        && at[1] <= max[1]
+        && at[2] >= min[2]
+        && at[2] <= max[2]
 }
 
 /// The door, trapdoor, or fence gate on a face of this cell, if one is there.
