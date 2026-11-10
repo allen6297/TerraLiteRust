@@ -4967,7 +4967,7 @@ impl State {
         let following = self.axolotl.follow();
         self.rebuild_axolotl();
         self.gui
-            .push_chat(if following { "follow" } else { "swim" });
+            .push_chat(if following { "companion" } else { "swim" });
         true
     }
 
@@ -8116,6 +8116,97 @@ impl State {
             )
         };
         self.hotbar_dirty = true;
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Axolotl companion swimming beside you in a pool, then quit with a PNG.
+    pub fn arm_axolotl_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 28..=38 {
+            for x in 5..=12 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::new("water", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 3,
+                    z,
+                    block: Block::new("water", 0),
+                });
+                for y in 4..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Dry elbow so the companion has to pathfind around it.
+        changes.push(CellChange {
+            x: 8,
+            y: 2,
+            z: 33,
+            block: Block::new("stone", 0),
+        });
+        changes.push(CellChange {
+            x: 8,
+            y: 3,
+            z: 33,
+            block: Block::new("stone", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        self.axolotl.place_at([6.5, 3.72, 30.5]);
+        if !self.axolotl.following() {
+            let _ = self.axolotl.follow();
+        }
+        // Swim toward the far side of the pool (around the dry cell).
+        self.axolotl.tick(80, [10.5, 36.5], &self.world);
+        self.rebuild_axolotl();
+        self.gui.push_chat("companion");
+
+        let focus = glam::Vec3::from(self.axolotl.origin()) + glam::Vec3::new(0.0, 0.35, 0.0);
+        let eye = glam::Vec3::new(focus.x - 1.2, focus.y + 1.55 + body::EYE_HEIGHT, focus.z - 3.4);
         self.camera = Camera::looking_at(eye, focus);
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;

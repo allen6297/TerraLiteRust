@@ -13,8 +13,9 @@
 //! follows, bites, and turns to face the step. The cat sits or follows, hisses,
 //! and turns with the step. The parrot echoes a note, perches, or follows, and
 //! turns with the step. The frog hops and eats a bug. The axolotl pauses with its gills open, swims one
-//! side of the pool, and follows feet that stay over water, steering around a
-//! dry cell. The chicken pecks, walks its yard, steps around a full block, and
+//! side of the pool, and as a companion pathfinds through water to stay near
+//! your feet — hanging at the wet edge when you step onto land, and appearing
+//! beside you in water past twelve blocks. The chicken pecks, walks its yard, steps around a full block, and
 //! lays an egg. The zombie walks around a full block to bite. The bee carries
 //! pollen to a hive. The fox sits or follows, fetches, and turns with the step.
 //! A standing pet appears beside you past twelve blocks. A wild one pauses and
@@ -2176,6 +2177,14 @@ const AXOLOTL_LEG: f32 = 1.0;
 pub const AXOLOTL_STEPS: u32 = 10;
 const AXOLOTL_IDLE: u32 = 12;
 const AXOLOTL_SWIM: f32 = 0.12;
+/// Companion swim pace — a bit quicker so it keeps up.
+const AXOLOTL_FOLLOW: f32 = 0.18;
+/// How close a following axolotl hangs beside your feet.
+const AXOLOTL_HEEL: f32 = 1.6;
+/// Water search radius when hanging near a dry player.
+const AXOLOTL_NEAR: i32 = 4;
+/// Path cells an axolotl will BFS through water while following.
+const AXOLOTL_REACH: i32 = 16;
 
 #[derive(Clone, Copy)]
 enum AxolotlMood {
@@ -2225,6 +2234,13 @@ impl Axolotl {
         self.following
     }
 
+    /// Put the body in a pool for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.loose = 0;
+        self.mood = AxolotlMood::Swim;
+    }
+
     pub fn shove(&mut self, burst: [f32; 3]) -> bool {
         let Some(gust) = crate::body::wind_push(burst, self.origin) else {
             return false;
@@ -2258,7 +2274,8 @@ impl Axolotl {
         dx * dx + dy * dy + dz * dz < 0.8
     }
 
-    /// Pause with the gills open, then swim one side. Follow feet that stay over water.
+    /// Pause with the gills open, then swim one side. As a companion, pathfind
+    /// through water to stay near the player (wet edge when they step onto land).
     pub fn tick(&mut self, count: u32, player: [f32; 2], world: &Cluster) {
         for _ in 0..count {
             self.pose += 0.03;
@@ -2269,7 +2286,23 @@ impl Axolotl {
                 continue;
             }
             if self.following {
-                let held = self.step_water(player[0], player[1], world);
+                if pet_far(self.origin, player) {
+                    appear_in_water(&mut self.origin, &mut self.yaw, player, world);
+                    self.mood = AxolotlMood::Idle { left: AXOLOTL_IDLE / 2 };
+                    settle_swim(&mut self.origin, world);
+                    continue;
+                }
+                let Some(goal) = companion_water_goal(player, world) else {
+                    face_box(
+                        &mut self.yaw,
+                        player[0] - self.origin[0],
+                        player[1] - self.origin[2],
+                    );
+                    self.mood = AxolotlMood::Idle { left: AXOLOTL_IDLE };
+                    settle_swim(&mut self.origin, world);
+                    continue;
+                };
+                let held = self.follow_water(goal[0], goal[1], world);
                 self.mood = if held {
                     AxolotlMood::Idle { left: AXOLOTL_IDLE }
                 } else {
@@ -2332,25 +2365,31 @@ impl Axolotl {
         false
     }
 
-    /// Step toward a point when that cell is water. True when already close.
-    fn step_water(&mut self, x: f32, z: f32, world: &Cluster) -> bool {
+    /// Step toward a wet goal while following. True when already close.
+    fn follow_water(&mut self, x: f32, z: f32, world: &Cluster) -> bool {
         let dx = x - self.origin[0];
         let dz = z - self.origin[2];
         let dist = (dx * dx + dz * dz).sqrt();
-        if dist <= HEEL {
+        if dist <= AXOLOTL_HEEL {
+            face_box(&mut self.yaw, dx, dz);
             return true;
         }
         let feet_y = self.origin[1].floor() as i32;
-        let Some([next_x, next_z]) = water_step(
+        let Some([next_x, next_z]) = water_follow_step(
             world,
             [self.origin[0], self.origin[2]],
             [x, z],
-            STEP.min(dist - HEEL),
+            AXOLOTL_FOLLOW.min(dist - AXOLOTL_HEEL),
             feet_y,
         ) else {
+            face_box(&mut self.yaw, dx, dz);
             return false;
         };
-        self.yaw = (next_x - self.origin[0]).atan2(next_z - self.origin[2]);
+        face_box(
+            &mut self.yaw,
+            next_x - self.origin[0],
+            next_z - self.origin[2],
+        );
         self.origin[0] = next_x;
         self.origin[2] = next_z;
         false
@@ -2654,30 +2693,7 @@ fn route_step(
     step: f32,
     open: impl Fn(i32, i32) -> bool,
 ) -> Option<[f32; 2]> {
-    let dx = goal[0] - from[0];
-    let dz = goal[1] - from[1];
-    let dist = (dx * dx + dz * dz).sqrt();
-    if dist <= 1.0e-4 || step <= 0.0 {
-        return None;
-    }
-    let step = step.min(dist);
-    let straight = [from[0] + dx / dist * step, from[1] + dz / dist * step];
-    let here = (from[0].floor() as i32, from[1].floor() as i32);
-    let into = (straight[0].floor() as i32, straight[1].floor() as i32);
-    if open(into.0, into.1) {
-        return Some(straight);
-    }
-    let aim = (goal[0].floor() as i32, goal[1].floor() as i32);
-    let via = first_open_step(here, aim, &open)?;
-    let center = [via.0 as f32 + 0.5, via.1 as f32 + 0.5];
-    let vx = center[0] - from[0];
-    let vz = center[1] - from[1];
-    let along = (vx * vx + vz * vz).sqrt();
-    if along <= 1.0e-4 {
-        return None;
-    }
-    let step = step.min(along);
-    Some([from[0] + vx / along * step, from[1] + vz / along * step])
+    route_step_reach(from, goal, step, 8, open)
 }
 
 fn is_fluid(id: &str) -> bool {
@@ -2825,21 +2841,164 @@ fn water_step(
     step: f32,
     feet_y: i32,
 ) -> Option<[f32; 2]> {
-    let next = route_step(from, goal, step, |x, z| {
-        fluid_at(world, x, feet_y, z) && !cell_blocks(world, x, feet_y + 1, z)
-    })?;
-    let ix = next[0].floor() as i32;
-    let iz = next[1].floor() as i32;
-    fluid_at(world, ix, feet_y, iz).then_some(next)
+    water_step_reach(world, from, goal, step, feet_y, 8)
 }
 
-/// The neighbor that starts a path of at most eight blocks toward `aim`.
+/// Companion pathfind through water — longer BFS so it can snake around dry cells.
+fn water_follow_step(
+    world: &Cluster,
+    from: [f32; 2],
+    goal: [f32; 2],
+    step: f32,
+    feet_y: i32,
+) -> Option<[f32; 2]> {
+    water_step_reach(world, from, goal, step, feet_y, AXOLOTL_REACH)
+}
+
+fn water_open(world: &Cluster, x: i32, z: i32, feet_y: i32) -> bool {
+    for dy in [-1, 0, 1] {
+        let y = feet_y + dy;
+        if fluid_at(world, x, y, z) && !cell_blocks(world, x, y + 1, z) {
+            return true;
+        }
+    }
+    false
+}
+
+fn water_step_reach(
+    world: &Cluster,
+    from: [f32; 2],
+    goal: [f32; 2],
+    step: f32,
+    feet_y: i32,
+    reach: i32,
+) -> Option<[f32; 2]> {
+    let next = route_step_reach(from, goal, step, reach, |x, z| water_open(world, x, z, feet_y))?;
+    let ix = next[0].floor() as i32;
+    let iz = next[1].floor() as i32;
+    water_open(world, ix, iz, feet_y).then_some(next)
+}
+
+/// Aim for the player when any water is within [`AXOLOTL_NEAR`] — pathfind keeps
+/// the body in water and hangs at the wet edge beside dry feet. `None` when the
+/// player has left the water entirely.
+fn companion_water_goal(player: [f32; 2], world: &Cluster) -> Option<[f32; 2]> {
+    let px = player[0].floor() as i32;
+    let pz = player[1].floor() as i32;
+    for dz in -AXOLOTL_NEAR..=AXOLOTL_NEAR {
+        for dx in -AXOLOTL_NEAR..=AXOLOTL_NEAR {
+            let x = px + dx;
+            let z = pz + dz;
+            if water_open(world, x, z, 3)
+                || water_open(world, x, z, 2)
+                || water_open(world, x, z, 1)
+            {
+                return Some(player);
+            }
+        }
+    }
+    None
+}
+
+/// Nearest wet cell center around `player`, if any within [`AXOLOTL_NEAR`].
+fn nearest_water_cell(player: [f32; 2], world: &Cluster) -> Option<[f32; 2]> {
+    let px = player[0].floor() as i32;
+    let pz = player[1].floor() as i32;
+    let mut best: Option<(i32, i32, i32)> = None;
+    for dz in -AXOLOTL_NEAR..=AXOLOTL_NEAR {
+        for dx in -AXOLOTL_NEAR..=AXOLOTL_NEAR {
+            let x = px + dx;
+            let z = pz + dz;
+            if !(water_open(world, x, z, 3)
+                || water_open(world, x, z, 2)
+                || water_open(world, x, z, 1))
+            {
+                continue;
+            }
+            let dist = dx.abs() + dz.abs();
+            if best.map_or(true, |(_, _, d)| dist < d) {
+                best = Some((x, z, dist));
+            }
+        }
+    }
+    best.map(|(x, z, _)| [x as f32 + 0.5, z as f32 + 0.5])
+}
+
+/// Warp into water beside the player when the leash snaps (same spirit as land pets).
+fn appear_in_water(origin: &mut [f32; 3], yaw: &mut f32, player: [f32; 2], world: &Cluster) {
+    let spots = [
+        [player[0] + 1.15, player[1] + 0.35],
+        [player[0] - 1.15, player[1] + 0.2],
+        [player[0] + 0.3, player[1] + 1.15],
+        [player[0] + 0.2, player[1] - 1.15],
+        [player[0] + 1.4, player[1] - 0.4],
+        [player[0] - 0.5, player[1] + 1.4],
+    ];
+    for spot in spots {
+        let x = spot[0].floor() as i32;
+        let z = spot[1].floor() as i32;
+        if !(water_open(world, x, z, 3) || water_open(world, x, z, 2) || water_open(world, x, z, 1))
+        {
+            continue;
+        }
+        face_box(yaw, player[0] - spot[0], player[1] - spot[1]);
+        origin[0] = spot[0];
+        origin[2] = spot[1];
+        settle_swim(origin, world);
+        return;
+    }
+    if let Some(goal) = nearest_water_cell(player, world) {
+        face_box(yaw, player[0] - goal[0], player[1] - goal[1]);
+        origin[0] = goal[0];
+        origin[2] = goal[1];
+        settle_swim(origin, world);
+        return;
+    }
+    face_box(yaw, -1.0, 0.0);
+}
+
+/// One step toward `goal` that stays on open cells. A straight step is used
+/// when that cell is open. Otherwise the first cell of a short path is used.
+fn route_step_reach(
+    from: [f32; 2],
+    goal: [f32; 2],
+    step: f32,
+    reach: i32,
+    open: impl Fn(i32, i32) -> bool,
+) -> Option<[f32; 2]> {
+    let dx = goal[0] - from[0];
+    let dz = goal[1] - from[1];
+    let dist = (dx * dx + dz * dz).sqrt();
+    if dist <= 1.0e-4 || step <= 0.0 {
+        return None;
+    }
+    let step = step.min(dist);
+    let straight = [from[0] + dx / dist * step, from[1] + dz / dist * step];
+    let here = (from[0].floor() as i32, from[1].floor() as i32);
+    let into = (straight[0].floor() as i32, straight[1].floor() as i32);
+    if open(into.0, into.1) {
+        return Some(straight);
+    }
+    let aim = (goal[0].floor() as i32, goal[1].floor() as i32);
+    let via = first_open_step(here, aim, reach, &open)?;
+    let center = [via.0 as f32 + 0.5, via.1 as f32 + 0.5];
+    let vx = center[0] - from[0];
+    let vz = center[1] - from[1];
+    let along = (vx * vx + vz * vz).sqrt();
+    if along <= 1.0e-4 {
+        return None;
+    }
+    let step = step.min(along);
+    Some([from[0] + vx / along * step, from[1] + vz / along * step])
+}
+
+/// The neighbor that starts a path of at most `reach` blocks toward `aim`.
 fn first_open_step(
     start: (i32, i32),
     aim: (i32, i32),
+    reach: i32,
     open: &impl Fn(i32, i32) -> bool,
 ) -> Option<(i32, i32)> {
-    const REACH_CELLS: i32 = 8;
     let mut queue = std::collections::VecDeque::new();
     let mut seen = Vec::new();
     let mut parent = Vec::new();
@@ -2851,12 +3010,12 @@ fn first_open_step(
             found = Some(cell);
             break;
         }
-        if (cell.0 - start.0).abs() >= REACH_CELLS || (cell.1 - start.1).abs() >= REACH_CELLS {
+        if (cell.0 - start.0).abs() >= reach || (cell.1 - start.1).abs() >= reach {
             continue;
         }
         for (ox, oz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let next = (cell.0 + ox, cell.1 + oz);
-            if (next.0 - start.0).abs() > REACH_CELLS || (next.1 - start.1).abs() > REACH_CELLS {
+            if (next.0 - start.0).abs() > reach || (next.1 - start.1).abs() > reach {
                 continue;
             }
             if seen.contains(&next) || !open(next.0, next.1) {
@@ -4393,6 +4552,84 @@ mod tests {
         assert!(one.origin()[2] > 32.0);
         assert!(one.origin()[2] <= home[2]);
         assert!(!one.follow());
+    }
+
+    #[test]
+    fn axolotl_companion_pathfinds_around_dry_and_stays_near() {
+        // L-shaped pool: along x=5..10 at z=5, then up z at x=10. A dry block
+        // sits in the elbow so a straight cut is closed.
+        let mut cells = Vec::new();
+        for x in 5..=10u8 {
+            cells.push((x, 1u16, 5u8, Block::new("stone", 0)));
+            cells.push((x, 2, 5, Block::new("water", 0)));
+        }
+        for z in 6..=10u8 {
+            cells.push((10, 1, z, Block::new("stone", 0)));
+            cells.push((10, 2, z, Block::new("water", 0)));
+        }
+        cells.push((8, 1, 8, Block::new("stone", 0)));
+        cells.push((8, 2, 8, Block::new("stone", 0)));
+        let mut far_cells = cells.clone();
+        for x in 1..=3u8 {
+            for z in 1..=3u8 {
+                far_cells.push((x, 1, z, Block::new("stone", 0)));
+                far_cells.push((x, 2, z, Block::new("water", 0)));
+            }
+        }
+        let pool = Cluster::try_from_chunks(
+            0,
+            0,
+            [Chunk::from_blocks(0, 0, cells).unwrap()],
+        )
+        .unwrap();
+        let mut axolotl = Axolotl::new();
+        axolotl.place_at([5.5, 2.72, 5.5]);
+        assert!(axolotl.follow());
+        // Swim the L toward the far arm.
+        axolotl.tick(200, [10.5, 10.5], &pool);
+        assert!(
+            (axolotl.origin()[0] - 10.5).abs() < 1.5,
+            "pathfinds to x, at {}",
+            axolotl.origin()[0]
+        );
+        assert!(
+            axolotl.origin()[2] > 8.5,
+            "pathfinds up the arm, at {}",
+            axolotl.origin()[2]
+        );
+        // Player on dry land beside the pool — hang at the wet edge.
+        let shore = axolotl.origin();
+        axolotl.tick(40, [12.5, 10.5], &pool);
+        let after = axolotl.origin();
+        assert!(
+            (after[0] - shore[0]).abs() < 2.5 && (after[2] - shore[2]).abs() < 2.5,
+            "stays near the shore beside the player"
+        );
+        assert!(
+            pool.block_at(after[0].floor() as i32, 2, after[2].floor() as i32)
+                .id
+                == "water",
+            "still in water"
+        );
+        // Leash snap: player far in another wet pocket → appear nearby in water.
+        let far_pool =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, far_cells).unwrap()])
+                .unwrap();
+        axolotl.place_at([10.5, 2.72, 10.5]);
+        assert!(axolotl.following());
+        // ~12.7 blocks away (> LEASH) with water underfoot at the pocket.
+        axolotl.tick(5, [1.5, 1.5], &far_pool);
+        let warped = axolotl.origin();
+        assert!(
+            (warped[0] - 1.5).abs() < 3.0 && (warped[2] - 1.5).abs() < 3.0,
+            "appears in water beside the far player, at {warped:?}"
+        );
+        assert_eq!(
+            far_pool
+                .block_at(warped[0].floor() as i32, 2, warped[2].floor() as i32)
+                .id,
+            "water"
+        );
     }
 
     #[test]

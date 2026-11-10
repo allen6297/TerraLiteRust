@@ -74,7 +74,7 @@ The window needs a display. A menu opens first. Up and down move the row.
 Enter or Space picks it. Play starts the solo world. Join connects to 127.0.0.1 and stays on the menu when nothing is listening. Settings chooses
 the world size, a southern or northern sun, sound, view bob (full, low, or off), and trace (on or off). Worlds loads a named
 save. Quit closes the window. Click to capture the mouse.
-WASD walks, mouse looks, Space jumps, Ctrl is faster, Shift crouches. F5 toggles a third-person look so you can see your Blockbench body walk and dig. A small cross marks the center, and the block under it is named just below. Stepping into water splashes, and swimming is a stroke. An axolotl pauses, then swims the marsh just south of the stairs, at (8, 32). Right-click it and it follows through the water. A chicken pecks the grass west of the oak, at (3, 8). It stands and pecks, walks one side of the yard, and steps back when you stand close. Right-click the egg and it hands you raw food. A Blockbench zombie idles by the ore line at (11, 13), walks in to bite, and flashes red when the mace hits. Esc releases the mouse,
+WASD walks, mouse looks, Space jumps, Ctrl is faster, Shift crouches. F5 toggles a third-person look so you can see your Blockbench body walk and dig. A small cross marks the center, and the block under it is named just below. Stepping into water splashes, and swimming is a stroke. An axolotl pauses, then swims the marsh just south of the stairs, at (8, 32). Right-click it and it pathfinds through water to stay near you as a companion. A chicken pecks the grass west of the oak, at (3, 8). It stands and pecks, walks one side of the yard, and steps back when you stand close. Right-click the egg and it hands you raw food. A Blockbench zombie idles by the ore line at (11, 13), walks in to bite, and flashes red when the mace hits. Esc releases the mouse,
 and Esc again opens pause: resume, settings, or quit to the title. E opens the Items screen. Up and down arrows
 select a recipe. Enter crafts it when the hotbar holds the ingredients. Esc or E closes it.
 I opens the inventory, nine slots past the hotbar. Letters search that grid by name, and a space splits words. A search that fits nothing says nothing matches. Enter moves one into the hotbar.
@@ -163,6 +163,8 @@ struct Args {
     shot_mine: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
+    /// Axolotl companion swim, then quit.
+    shot_axolotl: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -258,6 +260,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
+        shot_axolotl: args.shot_axolotl,
         state: None,
         last_frame: Instant::now(),
     };
@@ -302,6 +305,7 @@ struct App {
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
+    shot_axolotl: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -425,6 +429,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
+                }
+                if let Some(path) = self.shot_axolotl.take() {
+                    state.arm_axolotl_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -587,6 +594,7 @@ where
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
+        shot_axolotl: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -772,6 +780,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-keybinds".to_string())?;
                 parsed.shot_keybinds = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-axolotl" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-axolotl".to_string())?;
+                parsed.shot_axolotl = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }
