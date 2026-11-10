@@ -155,6 +155,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
+    stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
@@ -416,6 +417,17 @@ pub const DESERT_TEMPLE_PLATE: (i32, i32) = (DESERT_TEMPLE.0, DESERT_TEMPLE.1 - 
 
 const TEMPLE_CHUNK: (i32, i32) = (2, 0);
 
+/// Half-buried shipwreck on a sand beach, west of the demo pad.
+///
+/// The chunk is `(-2, 0)`. Walk west from the stairs onto the shore. Oak hull
+/// with a loot chest in the hold; the south side sits in shallow water.
+pub const SHIPWRECK: (i32, i32) = (-24, 8);
+
+/// Loot chest in the shipwreck hold, one block east of center.
+pub const SHIPWRECK_CHEST: (i32, i32) = (SHIPWRECK.0 + 1, SHIPWRECK.1);
+
+const WRECK_CHUNK: (i32, i32) = (-2, 0);
+
 /// Broken stone-brick shrine, southeast of the demo pad.
 ///
 /// The chunk is `(2, 2)`. Walk east past the pad, then south. A chest sits on
@@ -570,7 +582,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let guaranteed = (chunk_x, chunk_z) == PORTAL_CHUNK;
     let reserved = matches!(
         (chunk_x, chunk_z),
-        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | TEMPLE_CHUNK | (0, 0)
+        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | TEMPLE_CHUNK | WRECK_CHUNK | (0, 0)
     );
     if !guaranteed {
         if reserved || hash2(chunk_x.wrapping_mul(31), chunk_z.wrapping_mul(17)) % 113 != 0 {
@@ -669,7 +681,7 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let guaranteed = (chunk_x, chunk_z) == TEMPLE_CHUNK;
     let reserved = matches!(
         (chunk_x, chunk_z),
-        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | PORTAL_CHUNK | (0, 0)
+        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | PORTAL_CHUNK | WRECK_CHUNK | (0, 0)
     );
     if !guaranteed {
         if reserved {
@@ -760,6 +772,110 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let plate_lx = (plate_x - chunk_x * 16) as u8;
     let plate_lz = (plate_z - chunk_z * 16) as u8;
     blocks.push((plate_lx, floor, plate_lz, Block::new("plate", 0)));
+}
+
+/// Half-buried oak hull on a sand beach with shallow water south.
+/// Guaranteed in [`WRECK_CHUNK`]; rare scatter near marsh shores.
+fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    let guaranteed = (chunk_x, chunk_z) == WRECK_CHUNK;
+    let reserved = matches!(
+        (chunk_x, chunk_z),
+        CAMP_CHUNK
+            | SHAFT_CHUNK
+            | SHRINE_CHUNK
+            | CLAY_CHUNK
+            | PORTAL_CHUNK
+            | TEMPLE_CHUNK
+            | (0, 0)
+    );
+    if !guaranteed {
+        if reserved {
+            return;
+        }
+        let cx = chunk_x * 16 + 8;
+        let cz = chunk_z * 16 + 8;
+        // Prefer marsh / marsh-adjacent shores.
+        let shore = biome_at(cx, cz) == Biome::Marsh
+            || biome_at(cx, cz + 8) == Biome::Marsh
+            || biome_at(cx, cz - 8) == Biome::Marsh;
+        if !shore || hash2(chunk_x.wrapping_mul(53), chunk_z.wrapping_mul(23)) % 101 != 0 {
+            return;
+        }
+    }
+    let (cx, cz) = if guaranteed {
+        SHIPWRECK
+    } else {
+        (chunk_x * 16 + 8, chunk_z * 16 + 8)
+    };
+    let floor = column_height(cx, cz, biome_at(cx, cz)).max(3);
+    // Clear a beach pad; sand north, shallow water south.
+    let x0 = ((cx - 5) - chunk_x * 16) as u8;
+    let x1 = ((cx + 5) - chunk_x * 16) as u8;
+    let z0 = ((cz - 3) - chunk_z * 16) as u8;
+    let z1 = ((cz + 4) - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x >= x0 && *x <= x1 && *z >= z0 && *z <= z1 && *y + 1 >= floor.saturating_sub(1)));
+    let sand = Block::new("sand", 0);
+    let water = Block::new("water", 0);
+    let oak = Block::new("oak_log", 0);
+    let stair = Block::new("oak_stairs", 0);
+    for dz in -3i32..=4 {
+        for dx in -5i32..=5 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            if dz >= 2 {
+                // Shallow water lapping the south flank.
+                blocks.push((lx, floor - 2, lz, sand));
+                blocks.push((lx, floor - 1, lz, water));
+            } else {
+                blocks.push((lx, floor - 1, lz, sand));
+            }
+        }
+    }
+    // Hull keel along X (−4..+4), half-sunk: floor−1 under sand, walls at floor.
+    for dx in -4i32..=4 {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz0 = (cz - chunk_z * 16) as u8;
+        let lz1 = (cz + 1 - chunk_z * 16) as u8;
+        // Buried keel.
+        blocks.push((lx, floor - 1, lz0, oak));
+        blocks.push((lx, floor - 1, lz1, oak));
+        // Deck floor (gaps for ruin).
+        if dx.abs() != 2 {
+            blocks.push((lx, floor, lz0, oak));
+        }
+        if dx.abs() != 3 {
+            blocks.push((lx, floor, lz1, oak));
+        }
+        // Port / starboard ribs (broken).
+        if dx.abs() != 1 && dx.abs() != 4 {
+            blocks.push((lx, floor + 1, lz0, oak));
+        }
+        if dx != 0 && dx.abs() != 2 {
+            blocks.push((lx, floor + 1, lz1, oak));
+        }
+    }
+    // Broken bow (west) and stern steps (east).
+    let bow_lx = (cx - 5 - chunk_x * 16) as u8;
+    let stern_lx = (cx + 5 - chunk_x * 16) as u8;
+    let mid_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((bow_lx, floor, mid_lz, oak));
+    blocks.push((bow_lx, floor + 1, mid_lz, oak));
+    blocks.push((stern_lx, floor, mid_lz, stair));
+    blocks.push((stern_lx, floor - 1, mid_lz, oak));
+    // Mast stub amidships.
+    let mast_lx = (cx - chunk_x * 16) as u8;
+    let mast_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((mast_lx, floor + 2, mast_lz, oak));
+    blocks.push((mast_lx, floor + 3, mast_lz, oak));
+    // Hold chest.
+    let (chest_x, chest_z) = if guaranteed {
+        SHIPWRECK_CHEST
+    } else {
+        (cx + 1, cz)
+    };
+    let chest_lx = (chest_x - chunk_x * 16) as u8;
+    let chest_lz = (chest_z - chunk_z * 16) as u8;
+    blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -1460,6 +1576,47 @@ mod tests {
         assert_eq!(
             cluster
                 .block_at(DESERT_TEMPLE_CHEST.0, i32::from(floor), DESERT_TEMPLE_CHEST.1)
+                .id,
+            "chest"
+        );
+    }
+
+    #[test]
+    fn a_shipwreck_lies_west_of_the_pad() {
+        let wreck = generate_chunk(WRECK_CHUNK.0, WRECK_CHUNK.1);
+        let (cx, cz) = SHIPWRECK;
+        let lx = (cx - WRECK_CHUNK.0 * 16) as u8;
+        let lz = (cz - WRECK_CHUNK.1 * 16) as u8;
+        let floor = column_height(cx, cz, biome_at(cx, cz)).max(3);
+        let mut oak = false;
+        for y in (floor - 1)..(floor + 4) {
+            if wreck.block(lx, y, lz).id == "oak_log" {
+                oak = true;
+            }
+        }
+        assert!(oak, "hull should include oak_log");
+        let chest_lx = (SHIPWRECK_CHEST.0 - WRECK_CHUNK.0 * 16) as u8;
+        let chest_lz = (SHIPWRECK_CHEST.1 - WRECK_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            wreck.block(chest_lx, floor, chest_lz).id,
+            "chest",
+            "loot chest in the hold"
+        );
+        // South flank should hold shallow water.
+        let water_lz = (cz + 3 - WRECK_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            wreck.block(lx, floor - 1, water_lz).id,
+            "water",
+            "beach water on the south side"
+        );
+        assert_ne!(WRECK_CHUNK, CAMP_CHUNK);
+        assert_ne!(WRECK_CHUNK, PORTAL_CHUNK);
+        assert_ne!(WRECK_CHUNK, TEMPLE_CHUNK);
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster
+                .block_at(SHIPWRECK_CHEST.0, i32::from(floor), SHIPWRECK_CHEST.1)
                 .id,
             "chest"
         );

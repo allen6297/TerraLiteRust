@@ -1352,6 +1352,8 @@ pub struct State {
     found_portal: bool,
     /// Once: walked up to the east desert temple.
     found_temple: bool,
+    /// Once: walked up to the west beach shipwreck.
+    found_wreck: bool,
     found_rails: bool,
     found_clay: bool,
     /// Once: walked up to the starter compound demo by the pad.
@@ -1534,6 +1536,12 @@ pub struct State {
     temple_shot_eye: glam::Vec3,
     temple_shot_yaw: f32,
     temple_shot_pitch: f32,
+    /// One-shot beach shipwreck proof PNG, then quit.
+    wreck_shot_path: Option<std::path::PathBuf>,
+    wreck_shot_frames: u32,
+    wreck_shot_eye: glam::Vec3,
+    wreck_shot_yaw: f32,
+    wreck_shot_pitch: f32,
     /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
     wind_mix: f32,
     /// Eased water-edge proximity, `0` far through `1` at the surface.
@@ -2574,6 +2582,7 @@ impl State {
             found_mine: false,
             found_portal: false,
             found_temple: false,
+            found_wreck: false,
             found_rails: false,
             found_clay: false,
             found_compound: false,
@@ -2680,6 +2689,11 @@ impl State {
             temple_shot_eye: glam::Vec3::ZERO,
             temple_shot_yaw: 0.0,
             temple_shot_pitch: 0.0,
+            wreck_shot_path: None,
+            wreck_shot_frames: 0,
+            wreck_shot_eye: glam::Vec3::ZERO,
+            wreck_shot_yaw: 0.0,
+            wreck_shot_pitch: 0.0,
             wind_mix: 0.0,
             lap_mix: 0.0,
             lap_at: None,
@@ -6173,6 +6187,15 @@ impl State {
             self.found_temple = true;
             self.gui.push_chat("a desert temple");
         }
+        if !self.found_wreck
+            && near(
+                rebuild_world::SHIPWRECK.0,
+                rebuild_world::SHIPWRECK.1,
+            )
+        {
+            self.found_wreck = true;
+            self.gui.push_chat("a shipwreck");
+        }
         if !self.found_lodestone
             && near(
                 rebuild_world::SHAFT_LODESTONE.0,
@@ -6729,7 +6752,8 @@ impl State {
             .or_else(|| fresh_shrine(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_mine(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_portal(has_record, hit.block[0], hit.block[2], self.omen))
-            .or_else(|| fresh_temple(has_record, hit.block[0], hit.block[2], self.omen));
+            .or_else(|| fresh_temple(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen));
         if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
@@ -12981,6 +13005,105 @@ impl State {
                 eprintln!("temple shot failed: {err}");
                 if self.temple_shot_frames > 260 {
                     self.temple_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    /// Half-buried oak shipwreck west of the pad, then quit.
+    pub fn arm_shipwreck_shot(&mut self, path: std::path::PathBuf) {
+        self.wreck_shot_path = Some(path);
+        self.wreck_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 0));
+        self.clock.set_time_of_day(0.32);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_wreck = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a shipwreck");
+
+        let (cx, cz) = rebuild_world::SHIPWRECK;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "oak_log" {
+                cy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 1.6, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 7.0,
+            cy as f32 + 2.0 + body::EYE_HEIGHT,
+            cz as f32 + 6.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.wreck_shot_eye = eye;
+        self.wreck_shot_yaw = yaw;
+        self.wreck_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_wreck_shot_camera(&mut self) {
+        if self.wreck_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.wreck_shot_eye,
+            self.wreck_shot_yaw,
+            self.wreck_shot_pitch,
+        );
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.wreck_shot_eye;
+        self.posed_yaw = self.wreck_shot_yaw;
+        self.posed_pitch = self.wreck_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+    }
+
+    fn poll_wreck_shot(&mut self) {
+        let Some(path) = self.wreck_shot_path.clone() else {
+            return;
+        };
+        self.pin_wreck_shot_camera();
+        self.wreck_shot_frames = self.wreck_shot_frames.saturating_add(1);
+        if self.wreck_shot_frames < 120 || !self.chunk_bake.is_idle() {
+            if self.wreck_shot_frames > 600 {
+                eprintln!("wreck shot timed out");
+                self.wreck_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("wreck shot wrote {}", path.display());
+                self.wreck_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("wreck shot failed: {err}");
+                if self.wreck_shot_frames > 260 {
+                    self.wreck_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -26590,6 +26713,7 @@ impl State {
         self.poll_mine_shot();
         self.poll_portal_shot();
         self.poll_temple_shot();
+        self.poll_wreck_shot();
         self.poll_swap_shot();
         self.poll_break_shot();
     }
@@ -27290,6 +27414,11 @@ fn temple_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::DESERT_TEMPLE_CHEST
 }
 
+/// The west beach shipwreck hold chest.
+fn wreck_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::SHIPWRECK_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -27865,6 +27994,28 @@ fn fresh_temple(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> 
     temple_loot(x, z, omen)
 }
 
+/// One drop from the shipwreck chest, read from the data pack.
+fn wreck_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !wreck_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_shipwreck_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the shipwreck hold chest.
+fn fresh_wreck(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    wreck_loot(x, z, omen)
+}
+
 /// One drop from this chest, read from the data pack. The same cell always
 /// yields the same item. `omen` uses the richer list. `None` means the file
 /// could not be read.
@@ -28387,6 +28538,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_temple(true, x, z, false).is_none());
         assert!(super::fresh_temple(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_shipwreck_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::SHIPWRECK_CHEST;
+        assert!(super::wreck_cell(x, z));
+        assert!(!super::wreck_cell(
+            rebuild_world::SHIPWRECK.0,
+            rebuild_world::SHIPWRECK.1
+        ));
+        assert!(!super::camp_cell(x, z));
+        assert!(!super::temple_cell(x, z));
+        let table = crate::loot::load_shipwreck_chest().unwrap();
+        let paid = super::fresh_wreck(false, x, z, false).unwrap();
+        let rich = super::fresh_wreck(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_wreck(true, x, z, false).is_none());
+        assert!(super::fresh_wreck(false, 0, 0, false).is_none());
     }
 
     #[test]
