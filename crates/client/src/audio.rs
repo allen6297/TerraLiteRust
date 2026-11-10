@@ -67,6 +67,8 @@ pub enum Sound {
     Drip,
     /// Soft leaf rustle in forest under open sky.
     Rustle,
+    /// Soft rain tapping on leaves under a wet canopy.
+    Patter,
     /// A soft warm lantern / torch hiss.
     Hiss,
     /// A soft wooden fence-gate / door creak.
@@ -283,6 +285,8 @@ pub struct Audio {
     drip_left: f32,
     /// Seconds until the next forest rustle.
     rustle_left: f32,
+    /// Seconds until the next rain-on-leaves patter.
+    patter_left: f32,
     /// Seconds until the next lantern hiss.
     hiss_left: f32,
     /// Seconds until the next dawn shore gull.
@@ -316,6 +320,7 @@ impl Audio {
             rain_left: 0.0,
             drip_left: 0.0,
             rustle_left: 0.0,
+            patter_left: 0.0,
             hiss_left: 0.0,
             gull_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
@@ -517,6 +522,24 @@ impl Audio {
         Some(0.10 + mix * 0.20)
     }
 
+    /// Loudness for the next rain-on-leaves patter, or `None` this frame.
+    ///
+    /// `mix` is wet×canopy amount (`0` clear/open → `1` under wet leaves).
+    pub fn patter_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.08 {
+            self.patter_left = 0.0;
+            return None;
+        }
+        self.patter_left -= dt;
+        if self.patter_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edge (~1.5s); busier under dense wet canopy (~0.55s).
+        self.patter_left = 1.5 - mix * 0.95;
+        Some(0.12 + mix * 0.26)
+    }
+
     /// Loudness for the next lantern / torch hiss, or `None` this frame.
     ///
     /// `mix` is proximity (`0` far → `1` at the light).
@@ -607,6 +630,7 @@ impl Audio {
             Sound::Lap => water_lap(),
             Sound::Drip => cave_drip(),
             Sound::Rustle => leaf_rustle(),
+            Sound::Patter => rain_on_leaves(),
             Sound::Hiss => lantern_hiss(),
             Sound::Creak => gate_creak(),
             Sound::Gull => gull_cry(),
@@ -1075,6 +1099,25 @@ fn leaf_rustle() -> Vec<i16> {
     samples
 }
 
+/// Soft rain taps on leaves. Shorter and wetter than a dry rustle.
+fn rain_on_leaves() -> Vec<i16> {
+    let seconds = 0.2;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 173u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let drip = (t * 2_100.0 * std::f32::consts::TAU).sin() * 0.28
+            + (t * 3_600.0 * std::f32::consts::TAU).sin() * 0.1;
+        let leaf = (t * 620.0 * std::f32::consts::TAU).sin() * 0.12;
+        let env = (t / 0.01).min(1.0) * (1.0 - t / seconds).max(0.0).powf(1.35);
+        samples.push(((n * 0.35 + drip + leaf) * 0.11 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
 /// A soft single drip. Shorter and quieter than a shore lap.
 fn cave_drip() -> Vec<i16> {
     let seconds = 0.09;
@@ -1437,6 +1480,22 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn rain_on_leaves_waits_for_canopy_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.patter_ready(0.1, 0.0).is_none());
+        let level = audio
+            .patter_ready(0.1, 1.0)
+            .expect("peak wet canopy patters on the first beat");
+        assert!(level > 0.3 && level <= 0.45);
+        assert!(audio.patter_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Patter, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Patter]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Patter, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Patter]);
     }
 
     #[test]

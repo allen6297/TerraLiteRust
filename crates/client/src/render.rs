@@ -1156,6 +1156,12 @@ pub struct State {
     found_scrape: bool,
     /// Once: placed a torch or lantern and heard the pop.
     found_pop: bool,
+    /// Eased wet×leaf-canopy mix, `0` clear/open through `1` under wet leaves.
+    patter_mix: f32,
+    /// Leaf canopy source for spatial rain patter, when under trees.
+    patter_at: Option<[f32; 3]>,
+    /// Once: stood under wet leaves and heard the rain patter.
+    found_patter: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2197,6 +2203,9 @@ impl State {
             found_thunk: false,
             found_scrape: false,
             found_pop: false,
+            patter_mix: 0.0,
+            patter_at: None,
+            found_patter: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -13232,6 +13241,135 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Wet leaf canopy with rain patter, then quit with a PNG.
+    pub fn arm_rain_leaves_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        // Peak afternoon rain mood (~0.70).
+        self.clock.set_time_of_day(0.70);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let tx = 10;
+        let tz = 18;
+        let mut changes = Vec::new();
+        for z in (tz - 2)..=(tz + 2) {
+            for x in (tx - 2)..=(tx + 2) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=8 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Short trunk + leaf canopy so the eye stands under wet cover.
+        changes.push(CellChange {
+            x: tx,
+            y: 2,
+            z: tz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: tx,
+            y: 3,
+            z: tz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: tx,
+            y: 4,
+            z: tz,
+            block: Block::new("oak_log", 0),
+        });
+        for z in (tz - 1)..=(tz + 1) {
+            for x in (tx - 1)..=(tx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 5,
+                    z,
+                    block: Block::new("leaves", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 6,
+                    z,
+                    block: Block::new("leaves", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let canopy = [tx as f32 + 0.5, 5.25, tz as f32 + 0.5];
+        self.patter_at = Some(canopy);
+        self.patter_mix = 1.0;
+        self.found_patter = true;
+        self.rain_mix = 0.0;
+        self.drops = crate::drops::Drops::new();
+        self.rebuild_drops();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("patter");
+        self.play_world(crate::audio::Sound::Patter, canopy);
+
+        let eye = glam::Vec3::new(
+            tx as f32 + 0.5,
+            2.0 + body::EYE_HEIGHT,
+            tz as f32 - 2.4,
+        );
+        let focus = glam::Vec3::new(tx as f32 + 0.5, 4.6, tz as f32 + 0.5);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(tx + dx * 8, tz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Placed torch with soft pop tip, then quit with a PNG.
     pub fn arm_torch_pop_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17744,11 +17882,8 @@ impl State {
         let dawn = crate::daylight::dawn_chorus(time);
         let eye = self.camera.eye.to_array();
         let sky_open = open_sky(&self.world, eye);
-        let wet = if sky_open {
-            crate::daylight::rain_mood(time)
-        } else {
-            0.0
-        };
+        let mood = crate::daylight::rain_mood(time);
+        let wet = if sky_open { mood } else { 0.0 };
         let open = if sky_open {
             crate::daylight::day_breeze(time) * (1.0 - wet * 0.65)
         } else {
@@ -17761,6 +17896,15 @@ impl State {
         self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
         let cover = cave_drip_mix(&self.world, eye);
         self.drip_mix += (cover - self.drip_mix) * (dt * 1.4).min(1.0);
+        // Rain still hits the canopy when leaves block open sky.
+        let (leaf_cover, leaf_at) = leaf_canopy_mix(&self.world, eye);
+        let want_patter = (mood * leaf_cover).clamp(0.0, 1.0);
+        self.patter_mix += (want_patter - self.patter_mix) * (dt * 1.2).min(1.0);
+        self.patter_at = leaf_at;
+        if self.patter_mix > 0.35 && !self.found_patter {
+            self.found_patter = true;
+            self.gui.push_chat("patter");
+        }
         let woods = if sky_open
             && rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32)
                 == rebuild_world::Biome::Forest
@@ -17978,6 +18122,16 @@ impl State {
                     );
                 }
             }
+            if let Some(level) = self.audio.patter_ready(dt, self.patter_mix) {
+                if let Some(source) = self.patter_at {
+                    self.play_world_soft(crate::audio::Sound::Patter, source, level);
+                } else {
+                    self.audio.play_heard(
+                        crate::audio::Sound::Patter,
+                        crate::audio::Hearing::even(level),
+                    );
+                }
+            }
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
@@ -17989,6 +18143,7 @@ impl State {
             let _ = self.audio.crackle_ready(dt, 0.0);
             let _ = self.audio.hiss_ready(dt, 0.0);
             let _ = self.audio.gull_ready(dt, 0.0);
+            let _ = self.audio.patter_ready(dt, 0.0);
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
@@ -20213,6 +20368,46 @@ fn cave_drip_mix(world: &Cluster, eye: [f32; 3]) -> f32 {
     ((solids as f32 - 2.0) / 8.0).clamp(0.35, 1.0)
 }
 
+/// Leaf canopy above the eye. Solid non-leaf roofs first count as cave, not trees.
+///
+/// Mix is `0` with no leaves, rising with denser nearby canopy. Returns the
+/// first leaf center for spatial rain patter.
+fn leaf_canopy_mix(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    let x = eye[0].floor() as i32;
+    let z = eye[2].floor() as i32;
+    let start = eye[1].floor() as i32 + 1;
+    let mut leaves = 0u32;
+    let mut leaf_at: Option<[f32; 3]> = None;
+    for y in start..(start + 16) {
+        let block = world.block_at(x, y, z);
+        if block.id == "leaves" {
+            leaves += 1;
+            if leaf_at.is_none() {
+                leaf_at = Some([x as f32 + 0.5, y as f32 + 0.25, z as f32 + 0.5]);
+            }
+            continue;
+        }
+        if shape_of(block).is_full_cube() {
+            // Hit a solid roof before any leaves — building / cave, not canopy.
+            if leaves == 0 {
+                return (0.0, None);
+            }
+        }
+    }
+    for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)] {
+        for y in start..(start + 16) {
+            if world.block_at(x + dx, y, z + dz).id == "leaves" {
+                leaves += 1;
+            }
+        }
+    }
+    if leaves == 0 {
+        return (0.0, None);
+    }
+    let mix = (leaves as f32 / 5.0).clamp(0.35, 1.0);
+    (mix, leaf_at)
+}
+
 /// Soft proximity to a water surface (air or non-water above). Mix is `0`
 /// outside ~10 blocks, rising to `1` at the shore. Returns the surface center.
 fn nearest_water_edge(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -20914,6 +21109,67 @@ mod tests {
             }],
         );
         assert!(!super::open_sky(&cluster, eye));
+    }
+
+    #[test]
+    fn leaf_canopy_mix_needs_leaves_not_a_solid_roof() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        let eye = [0.5, 2.5, 0.5];
+        assert_eq!(super::leaf_canopy_mix(&cluster, eye).0, 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[rebuild_world::CellChange {
+                x: 0,
+                y: 5,
+                z: 0,
+                block: rebuild_world::Block::new("stone", 0),
+            }],
+        );
+        assert_eq!(super::leaf_canopy_mix(&cluster, eye).0, 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[
+                rebuild_world::CellChange {
+                    x: 0,
+                    y: 5,
+                    z: 0,
+                    block: rebuild_world::Block::AIR,
+                },
+                rebuild_world::CellChange {
+                    x: 0,
+                    y: 5,
+                    z: 0,
+                    block: rebuild_world::Block::new("leaves", 0),
+                },
+                rebuild_world::CellChange {
+                    x: 1,
+                    y: 5,
+                    z: 0,
+                    block: rebuild_world::Block::new("leaves", 0),
+                },
+                rebuild_world::CellChange {
+                    x: 0,
+                    y: 5,
+                    z: 1,
+                    block: rebuild_world::Block::new("leaves", 0),
+                },
+                rebuild_world::CellChange {
+                    x: -1,
+                    y: 5,
+                    z: 0,
+                    block: rebuild_world::Block::new("leaves", 0),
+                },
+                rebuild_world::CellChange {
+                    x: 0,
+                    y: 5,
+                    z: -1,
+                    block: rebuild_world::Block::new("leaves", 0),
+                },
+            ],
+        );
+        let (mix, at) = super::leaf_canopy_mix(&cluster, eye);
+        assert!(mix >= 0.35, "canopy mix {mix}");
+        assert!(at.is_some());
     }
 
     #[test]
