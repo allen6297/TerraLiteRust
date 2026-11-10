@@ -8590,6 +8590,53 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the map sheet by the marsh clay bank (teal mark), then quit with a PNG.
+    pub fn arm_map_clay_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CLAY_BANK;
+        // Stand north of the bank so the teal mark sits below center on the sheet.
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            3.0 + body::EYE_HEIGHT,
+            cz as f32 - 6.0,
+        );
+        let yaw = std::f32::consts::FRAC_PI_2; // look +Z toward the bank
+        self.camera.restore(eye, yaw, -0.2);
+        let _ = self.hotbar.give_stack("map");
+        self.hotbar_dirty = true;
+        self.map_open = true;
+        self.found_clay = true;
+        self.gui.push_chat("clay teal");
+
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = -0.2;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = -0.2;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Look at the marsh clay bank under water, then quit with a PNG.
     pub fn arm_clay_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -14483,8 +14530,16 @@ impl State {
                 rebuild_world::SHRINE.0,
                 rebuild_world::SHRINE.1,
             );
+            let clay = crate::map::cell_of(
+                eye[0],
+                eye[2],
+                zoom,
+                crate::map::SHEET,
+                rebuild_world::CLAY_BANK.0,
+                rebuild_world::CLAY_BANK.1,
+            );
             quads.extend(crate::map::sheet_quads(
-                gui_w, gui_h, &colors, yaw, camp, mine, stairs, shrine,
+                gui_w, gui_h, &colors, yaw, camp, mine, stairs, shrine, clay,
             ));
         } else if self.holding_map() && !self.menu.is_open() {
             let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];

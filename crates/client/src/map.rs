@@ -2,7 +2,7 @@
 //!
 //! The corner chart stays a glance. Right-click opens the sheet: a larger
 //! north-up page, with you in the middle, north labeled, and the camp, mine,
-//! stairs, and southeast shrine marked when they fall on the page.
+//! stairs, southeast shrine, and marsh clay bank marked when they fall on the page.
 
 use rebuild_world::{Block, Cluster};
 
@@ -30,6 +30,7 @@ const CAMP: [f32; 3] = [0.95, 0.45, 0.12];
 const MINE: [f32; 3] = [0.25, 0.55, 0.78];
 const STAIRS: [f32; 3] = [0.95, 0.82, 0.28];
 const SHRINE: [f32; 3] = [0.35, 0.72, 0.38];
+const CLAY: [f32; 3] = [0.20, 0.72, 0.78];
 const PAPER: [f32; 3] = [0.16, 0.13, 0.09];
 const INK: [f32; 3] = [0.93, 0.90, 0.82];
 const BACK: [f32; 3] = [0.04, 0.05, 0.06];
@@ -178,6 +179,7 @@ pub fn sheet_quads(
     mine: Option<(usize, usize)>,
     stairs: Option<(usize, usize)>,
     shrine: Option<(usize, usize)>,
+    clay: Option<(usize, usize)>,
 ) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 || colors.len() != SHEET * SHEET {
         return Vec::new();
@@ -237,6 +239,11 @@ pub fn sheet_quads(
     if let Some(cell) = shrine {
         mark_cell(&mut quads, cell, SHRINE);
     }
+    if let Some(cell) = clay {
+        if cell != (SHEET / 2, SHEET / 2) {
+            mark_cell(&mut quads, cell, CLAY);
+        }
+    }
     let cx = grid_left + SHEET as f32 * SHEET_CELL * 0.5;
     let cy = grid_top - SHEET as f32 * SHEET_CELL * 0.5;
     quads.push(pixel(
@@ -282,11 +289,13 @@ pub fn sheet_quads(
         1.5,
     );
     let stairs_shown = stairs.is_some_and(|cell| cell != (SHEET / 2, SHEET / 2));
+    let clay_shown = clay.is_some_and(|cell| cell != (SHEET / 2, SHEET / 2));
     let note = map_note(
         camp.is_some(),
         mine.is_some(),
         stairs_shown,
         shrine.is_some(),
+        clay_shown,
     );
     crate::gui::draw_text(
         &mut quads,
@@ -301,8 +310,8 @@ pub fn sheet_quads(
     quads
 }
 
-fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool) -> String {
-    let mut bits = Vec::with_capacity(6);
+fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool, clay: bool) -> String {
+    let mut bits = Vec::with_capacity(7);
     bits.push("you white");
     if camp {
         bits.push("camp orange");
@@ -315,6 +324,9 @@ fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool) -> String {
     }
     if shrine {
         bits.push("shrine green");
+    }
+    if clay {
+        bits.push("clay teal");
     }
     if !camp {
         bits.push("camp off page");
@@ -412,6 +424,7 @@ mod tests {
         assert_ne!(camp, shrine);
         assert!(cell_of(eye_x, eye_z, 0, SHEET, 39, -25).is_none());
         assert!(cell_of(eye_x, eye_z, 0, SHEET, -24, 40).is_none());
+        let clay = cell_of(2.5, 35.0, 0, SHEET, 2, 41).expect("clay on the near page");
         let sheet = sheet_quads(
             800.0,
             600.0,
@@ -421,6 +434,7 @@ mod tests {
             Some(mine),
             None,
             Some(shrine),
+            Some(clay),
         );
         assert!(sheet.len() > SHEET * SHEET);
         assert_eq!(sheet[0].color, BACK);
@@ -429,12 +443,14 @@ mod tests {
         assert!(sheet.iter().any(|quad| quad.color == CAMP));
         assert!(sheet.iter().any(|quad| quad.color == MINE));
         assert!(sheet.iter().any(|quad| quad.color == SHRINE));
+        assert!(sheet.iter().any(|quad| quad.color == CLAY));
         let mark = sheet.iter().find(|quad| quad.color == MARK).unwrap();
         let tick = sheet.iter().find(|quad| quad.color == FACING).unwrap();
         assert!(tick.max[0] > mark.max[0], "yaw 0 looks east");
-        assert!(sheet_quads(0.0, 600.0, &colors, 0.0, None, None, None, None).is_empty());
+        assert!(sheet_quads(0.0, 600.0, &colors, 0.0, None, None, None, None, None).is_empty());
         assert_eq!(sample_span_len(), SHEET * SHEET);
-        assert!(map_note(true, false, false, true).contains("shrine green"));
+        assert!(map_note(true, false, false, true, false).contains("shrine green"));
+        assert!(map_note(false, false, false, false, true).contains("clay teal"));
     }
 
     fn sample_span_len() -> usize {
