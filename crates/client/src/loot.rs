@@ -8,6 +8,7 @@
 //! `data/terralite/loot/temple_chest.json` is the east desert temple.
 //! `data/terralite/loot/shipwreck_chest.json` is the west beach shipwreck.
 //! `data/terralite/loot/monument_chest.json` is the ocean monument remnant.
+//! `data/terralite/loot/stronghold_chest.json` is the stronghold portal room.
 //! `data/terralite/loot/village_chest.json` is the north village remnant.
 //! `data/terralite/loot/dungeon_chest.json` is the underground mine dungeon.
 //! `data/terralite/loot/mineshaft_chest.json` is the abandoned mineshaft spur.
@@ -110,6 +111,15 @@ pub fn monument_chest_file() -> PathBuf {
 /// The ocean-monument remnant chest table from the data pack.
 pub fn load_monument_chest() -> Result<Table, String> {
     load_chest("monument_chest", &monument_chest_file())
+}
+
+pub fn stronghold_chest_file() -> PathBuf {
+    loot_file("stronghold_chest")
+}
+
+/// The stronghold portal-room chest table from the data pack.
+pub fn load_stronghold_chest() -> Result<Table, String> {
+    load_chest("stronghold_chest", &stronghold_chest_file())
 }
 
 pub fn village_chest_file() -> PathBuf {
@@ -321,6 +331,16 @@ mod tests {
         assert!(table.drops.iter().any(|id| id == "prismarine_shard"));
         assert!(table.omen.iter().any(|id| id == "heart_of_the_sea"));
         let (x, z) = rebuild_world::OCEAN_MONUMENT_CHEST;
+        assert_eq!(pick(&table, x, z, false), pick(&table, x, z, false));
+    }
+
+    #[test]
+    fn the_stronghold_chest_lists_eyes_of_ender() {
+        let table = load_stronghold_chest().unwrap();
+        assert!(table.drops.iter().any(|id| id == "eye_of_ender"));
+        assert!(table.drops.iter().any(|id| id == "ender_pearl"));
+        assert!(table.omen.iter().any(|id| id == "eye_of_ender"));
+        let (x, z) = rebuild_world::STRONGHOLD_CHEST;
         assert_eq!(pick(&table, x, z, false), pick(&table, x, z, false));
     }
 

@@ -16,6 +16,9 @@ use crate::body;
 /// Oak stairs, the point a held compass aims at.
 pub const STAIRS_XZ: [f32; 2] = [8.5, 12.5];
 
+/// Stronghold end-portal room — where a thrown eye of ender flies.
+pub const STRONGHOLD_XZ: [f32; 2] = [24.5, -7.5];
+
 /// Pixel offset of the compass mark. `+x` is to the right, `+y` is forward.
 ///
 /// Standing on the stairs puts the mark in the middle of the dial.
@@ -41,16 +44,16 @@ pub fn compass_mark_at(eye_x: f32, eye_z: f32, yaw: f32, target: [f32; 2]) -> [f
 
 /// Where a thrown eye of ender flies, and whether that throw breaks it.
 ///
-/// It travels up to 12 blocks toward the stairs. One cell in five breaks.
+/// It travels up to 12 blocks toward the stronghold. One cell in five breaks.
 pub struct EyeThrow {
     pub landing: [f32; 2],
     pub breaks: bool,
 }
 
-/// Fly toward the stairs from `(x, z)`. The same spot always breaks the same way.
+/// Fly toward the stronghold from `(x, z)`. The same spot always breaks the same way.
 pub fn eye_throw(x: f32, z: f32) -> EyeThrow {
-    let dx = STAIRS_XZ[0] - x;
-    let dz = STAIRS_XZ[1] - z;
+    let dx = STRONGHOLD_XZ[0] - x;
+    let dz = STRONGHOLD_XZ[1] - z;
     let dist = (dx * dx + dz * dz).sqrt();
     let travel = 12.0_f32.min(dist);
     let landing = if dist < 0.05 {
@@ -495,20 +498,21 @@ mod tests {
     }
 
     #[test]
-    fn an_eye_of_ender_flies_toward_the_stairs_and_sometimes_breaks() {
+    fn an_eye_of_ender_flies_toward_the_stronghold_and_sometimes_breaks() {
         let flight = eye_throw(0.5, 0.5);
         assert!(flight.breaks);
-        let start = (0.5 - STAIRS_XZ[0]).hypot(0.5 - STAIRS_XZ[1]);
-        let end = (flight.landing[0] - STAIRS_XZ[0]).hypot(flight.landing[1] - STAIRS_XZ[1]);
+        let start = (0.5 - STRONGHOLD_XZ[0]).hypot(0.5 - STRONGHOLD_XZ[1]);
+        let end = (flight.landing[0] - STRONGHOLD_XZ[0]).hypot(flight.landing[1] - STRONGHOLD_XZ[1]);
         assert!(
             (start - end - 12.0).abs() < 0.05,
             "it should close 12 blocks, from {start} to {end}"
         );
         let kept = eye_throw(1.5, 0.5);
         assert!(!kept.breaks);
-        let kept_end = (kept.landing[0] - STAIRS_XZ[0]).hypot(kept.landing[1] - STAIRS_XZ[1]);
-        let kept_start = (1.5 - STAIRS_XZ[0]).hypot(0.5 - STAIRS_XZ[1]);
-        assert!(kept_end < kept_start, "the drop still aims at the stairs");
+        let kept_end =
+            (kept.landing[0] - STRONGHOLD_XZ[0]).hypot(kept.landing[1] - STRONGHOLD_XZ[1]);
+        let kept_start = (1.5 - STRONGHOLD_XZ[0]).hypot(0.5 - STRONGHOLD_XZ[1]);
+        assert!(kept_end < kept_start, "the drop still aims at the stronghold");
         assert_eq!(eye_throw(0.5, 0.5).breaks, flight.breaks);
     }
 

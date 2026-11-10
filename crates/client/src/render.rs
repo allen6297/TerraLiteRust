@@ -1378,6 +1378,8 @@ pub struct State {
     found_wreck: bool,
     /// Once: swam up to the ocean monument remnant south of the wreck.
     found_monument: bool,
+    /// Once: walked into the stronghold end-portal room.
+    found_stronghold: bool,
     /// Once: walked up to the north village remnant.
     found_village: bool,
     /// Once: walked into the underground dungeon under the mine.
@@ -2671,6 +2673,7 @@ impl State {
             found_temple: false,
             found_wreck: false,
             found_monument: false,
+            found_stronghold: false,
             found_village: false,
             found_dungeon: false,
             found_mineshaft: false,
@@ -7062,6 +7065,15 @@ impl State {
             self.found_monument = true;
             self.gui.push_chat("an ocean monument");
         }
+        if !self.found_stronghold
+            && near(
+                rebuild_world::STRONGHOLD.0,
+                rebuild_world::STRONGHOLD.1,
+            )
+        {
+            self.found_stronghold = true;
+            self.gui.push_chat("a stronghold");
+        }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
         {
@@ -7654,6 +7666,7 @@ impl State {
             .or_else(|| fresh_temple(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_monument(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_stronghold(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_village(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen))
@@ -8829,7 +8842,7 @@ impl State {
         self.fish_bobber = Some((at, wait, splash));
     }
 
-    /// Throw the held eye toward the stairs. True when the selected slot is an eye.
+    /// Throw the held eye toward the stronghold. True when the selected slot is an eye.
     fn try_eye(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -8843,9 +8856,9 @@ impl State {
             (self.camera.eye.x - flight.landing[0]).hypot(self.camera.eye.z - flight.landing[1]);
         self.hotbar.consume_selected();
         if here < 0.05 {
-            self.gui.push_chat("at the stairs");
+            self.gui.push_chat("at the stronghold");
         } else {
-            self.gui.push_chat("toward the stairs");
+            self.gui.push_chat("toward the stronghold");
         }
         if flight.breaks {
             self.gui.push_chat("the eye breaks");
@@ -9359,6 +9372,61 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Stronghold end-portal room with a partial eye ring, then quit with a PNG.
+    pub fn arm_stronghold_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (cx, cz) = rebuild_world::STRONGHOLD;
+        let chunk_x = cx.div_euclid(16);
+        let chunk_z = cz.div_euclid(16);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(chunk_x, chunk_z));
+        self.clock.set_time_of_day(0.22);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let floor = i32::from(rebuild_world::STRONGHOLD_FLOOR);
+        self.found_stronghold = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a stronghold");
+        self.gui.push_chat("the eye sets");
+
+        // Look across the lava pit at the eyed north frames.
+        let focus = glam::Vec3::new(cx as f32 + 0.5, floor as f32 + 0.85, cz as f32 - 1.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            floor as f32 + 1.55,
+            cz as f32 + 3.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("eye_of_ender");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -30253,6 +30321,11 @@ fn monument_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::OCEAN_MONUMENT_CHEST
 }
 
+/// The stronghold portal-room chest.
+fn stronghold_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::STRONGHOLD_CHEST
+}
+
 /// The north village-remnant west-house chest.
 fn village_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::VILLAGE_CHEST
@@ -30890,6 +30963,28 @@ fn fresh_monument(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String
         return None;
     }
     monument_loot(x, z, omen)
+}
+
+/// One drop from the stronghold chest, read from the data pack.
+fn stronghold_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !stronghold_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_stronghold_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the stronghold portal-room chest.
+fn fresh_stronghold(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    stronghold_loot(x, z, omen)
 }
 
 /// One drop from the village-remnant chest, read from the data pack.
@@ -31541,6 +31636,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_monument(true, x, z, false).is_none());
         assert!(super::fresh_monument(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_stronghold_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::STRONGHOLD_CHEST;
+        assert!(super::stronghold_cell(x, z));
+        assert!(!super::stronghold_cell(
+            rebuild_world::STRONGHOLD.0,
+            rebuild_world::STRONGHOLD.1
+        ));
+        assert!(!super::monument_cell(x, z));
+        assert!(!super::camp_cell(x, z));
+        let table = crate::loot::load_stronghold_chest().unwrap();
+        let paid = super::fresh_stronghold(false, x, z, false).unwrap();
+        let rich = super::fresh_stronghold(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_stronghold(true, x, z, false).is_none());
+        assert!(super::fresh_stronghold(false, 0, 0, false).is_none());
     }
 
     #[test]

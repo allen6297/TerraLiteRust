@@ -161,6 +161,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
     stamp_ocean_monument(&mut blocks, chunk_x, chunk_z);
+    stamp_stronghold(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
@@ -496,6 +497,21 @@ pub const OCEAN_MONUMENT_CHEST: (i32, i32) = (OCEAN_MONUMENT.0, OCEAN_MONUMENT.1
 pub const OCEAN_MONUMENT_GOLD: (i32, i32) = (OCEAN_MONUMENT.0 - 2, OCEAN_MONUMENT.1 - 1);
 
 const MONUMENT_CHUNK: (i32, i32) = (-2, 1);
+
+/// Underground stronghold end-portal room, southeast of the demo pad.
+///
+/// The chunk is `(1, -1)`. Dig or eye-of-ender toward `(24, -8)`. Stone-brick
+/// hall with an incomplete end-portal frame ring (some eyes already set) and
+/// a loot chest in the corner.
+pub const STRONGHOLD: (i32, i32) = (24, -8);
+
+/// Loot chest in the southwest corner of the portal room.
+pub const STRONGHOLD_CHEST: (i32, i32) = (STRONGHOLD.0 - 3, STRONGHOLD.1 - 3);
+
+/// Standing floor of the demo stronghold portal room.
+pub const STRONGHOLD_FLOOR: u16 = 3;
+
+const STRONGHOLD_CHUNK: (i32, i32) = (1, -1);
 
 /// Ruined village plaza north of the demo pad.
 ///
@@ -848,6 +864,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | TEMPLE_CHUNK
             | WRECK_CHUNK
             | MONUMENT_CHUNK
+            | STRONGHOLD_CHUNK
             | VILLAGE_CHUNK
             | NETHER_CHUNK
             | (0, 0)
@@ -957,6 +974,7 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | NETHER_CHUNK
             | WRECK_CHUNK
             | MONUMENT_CHUNK
+            | STRONGHOLD_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1065,6 +1083,7 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             | NETHER_CHUNK
             | TEMPLE_CHUNK
             | MONUMENT_CHUNK
+            | STRONGHOLD_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1172,6 +1191,7 @@ fn stamp_ocean_monument(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, ch
             | NETHER_CHUNK
             | TEMPLE_CHUNK
             | WRECK_CHUNK
+            | STRONGHOLD_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1276,6 +1296,92 @@ fn stamp_ocean_monument(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, ch
     blocks.push((chest_lx, floor + 1, chest_lz, Block::new("chest", 0)));
 }
 
+/// Stone-brick end-portal room with a partially eyed frame ring + chest.
+/// Guaranteed in [`STRONGHOLD_CHUNK`].
+fn stamp_stronghold(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != STRONGHOLD_CHUNK {
+        return;
+    }
+    let (cx, cz) = STRONGHOLD;
+    let floor = STRONGHOLD_FLOOR;
+    let brick = Block::new("stone_bricks", 0);
+    let mossy = Block::new("mossy_stone_bricks", 0);
+    let cracked = Block::new("cracked_stone_bricks", 0);
+    let chiseled = Block::new("chiseled_stone_bricks", 0);
+    let lava = Block::new("lava", 0);
+    let empty = Block::new("end_portal_frame", 0);
+    let eyed = Block::new("end_portal_frame", 1);
+    // Hollow 9×9×4 stone-brick hall centered on STRONGHOLD.
+    for dz in -4i32..=4 {
+        for dx in -4i32..=4 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            let edge = dx.abs() == 4 || dz.abs() == 4;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 3)
+            });
+            let tile = match (dx + dz * 3).rem_euclid(5) {
+                0 => mossy,
+                1 => cracked,
+                2 if edge => chiseled,
+                _ => brick,
+            };
+            blocks.push((lx, floor - 1, lz, tile));
+            if edge {
+                for dy in 0..4u16 {
+                    let wall = if (dx + dy as i32 + dz).rem_euclid(4) == 0 {
+                        mossy
+                    } else if (dx * dz).rem_euclid(3) == 0 {
+                        cracked
+                    } else {
+                        brick
+                    };
+                    blocks.push((lx, floor + dy, lz, wall));
+                }
+            } else {
+                blocks.push((lx, floor + 3, lz, brick));
+            }
+        }
+    }
+    // Portal pit: 3×3 lava under the ring, air above.
+    for dz in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y >= floor - 1 && *y <= floor + 1));
+            blocks.push((lx, floor - 1, lz, lava));
+        }
+    }
+    // Incomplete 12-frame ring. North row + one east slot already hold eyes.
+    let frames: [((i32, i32), bool); 12] = [
+        ((-1, -2), true),
+        ((0, -2), true),
+        ((1, -2), true),
+        ((2, -1), true),
+        ((2, 0), false),
+        ((2, 1), false),
+        ((1, 2), false),
+        ((0, 2), false),
+        ((-1, 2), false),
+        ((-2, 1), false),
+        ((-2, 0), false),
+        ((-2, -1), false),
+    ];
+    for &((dx, dz), has_eye) in &frames {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor));
+        blocks.push((lx, floor, lz, if has_eye { eyed } else { empty }));
+    }
+    // Corner chest + torch so the hall reads in a still.
+    let chest_lx = (STRONGHOLD_CHEST.0 - chunk_x * 16) as u8;
+    let chest_lz = (STRONGHOLD_CHEST.1 - chunk_z * 16) as u8;
+    blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
+    let torch_lx = (cx + 3 - chunk_x * 16) as u8;
+    let torch_lz = (cz - 3 - chunk_z * 16) as u8;
+    blocks.push((torch_lx, floor, torch_lz, Block::new("torch", 0)));
+}
+
 /// Ruined plaza + three house shells + well. Guaranteed in [`VILLAGE_CHUNK`].
 /// Open green around the well stays clear for future villager NPCs.
 fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
@@ -1291,6 +1397,7 @@ fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, c
             | TEMPLE_CHUNK
             | WRECK_CHUNK
             | MONUMENT_CHUNK
+            | STRONGHOLD_CHUNK
             | (0, 0)
     );
     if !guaranteed {
@@ -2403,6 +2510,7 @@ mod tests {
         );
         assert_ne!(MONUMENT_CHUNK, WRECK_CHUNK);
         assert_ne!(MONUMENT_CHUNK, CAMP_CHUNK);
+        assert_ne!(MONUMENT_CHUNK, STRONGHOLD_CHUNK);
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);
         assert_eq!(
@@ -2415,6 +2523,47 @@ mod tests {
                 .id,
             "chest"
         );
+    }
+
+    #[test]
+    fn a_stronghold_portal_room_lies_southeast_of_the_pad() {
+        let hold = generate_chunk(STRONGHOLD_CHUNK.0, STRONGHOLD_CHUNK.1);
+        let (cx, cz) = STRONGHOLD;
+        let floor = STRONGHOLD_FLOOR;
+        let chest_lx = (STRONGHOLD_CHEST.0 - STRONGHOLD_CHUNK.0 * 16) as u8;
+        let chest_lz = (STRONGHOLD_CHEST.1 - STRONGHOLD_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            hold.block(chest_lx, floor, chest_lz).id,
+            "chest",
+            "loot chest in the portal room"
+        );
+        let north_lx = (cx - STRONGHOLD_CHUNK.0 * 16) as u8;
+        let north_lz = (cz - 2 - STRONGHOLD_CHUNK.1 * 16) as u8;
+        let north = hold.block(north_lx, floor, north_lz);
+        assert_eq!(north.id, "end_portal_frame");
+        assert_eq!(north.metadata, 1, "north frames start with eyes set");
+        let south_lz = (cz + 2 - STRONGHOLD_CHUNK.1 * 16) as u8;
+        let south = hold.block(north_lx, floor, south_lz);
+        assert_eq!(south.id, "end_portal_frame");
+        assert_eq!(south.metadata, 0, "south frames wait for eyes");
+        let pit_lx = (cx - STRONGHOLD_CHUNK.0 * 16) as u8;
+        let pit_lz = (cz - STRONGHOLD_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            hold.block(pit_lx, floor - 1, pit_lz).id,
+            "lava",
+            "lava under the portal pit"
+        );
+        let wall_lx = (cx + 4 - STRONGHOLD_CHUNK.0 * 16) as u8;
+        assert!(
+            matches!(
+                hold.block(wall_lx, floor + 1, pit_lz).id,
+                "stone_bricks" | "mossy_stone_bricks" | "cracked_stone_bricks" | "chiseled_stone_bricks"
+            ),
+            "stone-brick walls"
+        );
+        assert_ne!(STRONGHOLD_CHUNK, CAMP_CHUNK);
+        assert_ne!(STRONGHOLD_CHUNK, SHAFT_CHUNK);
+        assert_ne!(STRONGHOLD_CHUNK, MONUMENT_CHUNK);
     }
 
     #[test]
