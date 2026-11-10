@@ -2131,7 +2131,7 @@ impl Cat {
 
     pub fn vertices(&self) -> Vec<Vertex> {
         let [x, y, z] = self.origin;
-        let body_y = if self.sitting { 0.16 } else { 0.22 };
+        let body_y = if self.sitting { 0.14 } else { 0.22 };
         let mut out = Vec::new();
         push_box(
             &mut out,
@@ -2145,12 +2145,60 @@ impl Cat {
             [0.08, 0.08, 0.08],
             [0.94, 0.82, 0.62],
         );
+        // Pointed ears; flop a little when sitting.
+        let ear_y = if self.sitting { 0.05 } else { 0.08 };
+        push_box(
+            &mut out,
+            [x + 0.14, y + body_y + 0.16, z - 0.05],
+            [0.03, ear_y, 0.025],
+            [0.9, 0.55, 0.2],
+        );
+        push_box(
+            &mut out,
+            [x + 0.14, y + body_y + 0.16, z + 0.05],
+            [0.03, ear_y, 0.025],
+            [0.9, 0.55, 0.2],
+        );
         push_box(
             &mut out,
             [x - 0.18, y + body_y + 0.08, z],
             [0.06, 0.04, 0.04],
             [0.42, 0.22, 0.1],
         );
+        if self.sitting {
+            push_box(
+                &mut out,
+                [x + 0.1, y + 0.06, z - 0.07],
+                [0.05, 0.05, 0.04],
+                [0.8, 0.42, 0.14],
+            );
+            push_box(
+                &mut out,
+                [x + 0.1, y + 0.06, z + 0.07],
+                [0.05, 0.05, 0.04],
+                [0.8, 0.42, 0.14],
+            );
+            push_box(
+                &mut out,
+                [x - 0.08, y + 0.08, z],
+                [0.1, 0.06, 0.1],
+                [0.78, 0.4, 0.12],
+            );
+        } else {
+            for &(dx, dz) in &[
+                (0.12f32, 0.08f32),
+                (0.12, -0.08),
+                (-0.12, 0.08),
+                (-0.12, -0.08),
+            ] {
+                push_box(
+                    &mut out,
+                    [x + dx, y + 0.08, z + dz],
+                    [0.04, 0.08, 0.04],
+                    [0.8, 0.42, 0.14],
+                );
+            }
+        }
         yaw_mesh(&mut out, self.origin, self.yaw);
         out
     }
@@ -4893,6 +4941,21 @@ mod tests {
         assert!(cat.tamed());
         assert!(cat.sit());
         assert!(cat.sitting());
+        let sit_low = cat
+            .vertices()
+            .iter()
+            .map(|v| v.position[1])
+            .fold(f32::MAX, f32::min);
+        assert!(
+            sit_low < home[1] + 0.1,
+            "tucked sit paws rest near the grass, low {sit_low}"
+        );
+        assert!(
+            cat.vertices()
+                .iter()
+                .any(|v| v.color[0] > 0.85 && v.color[1] > 0.5),
+            "sitting cat keeps pointed ears"
+        );
         let parked = cat.origin();
         assert!(!cat.tick(10, [home[0] + 10.0, home[2]], Some(foe), &ground));
         assert_eq!(cat.origin(), parked);

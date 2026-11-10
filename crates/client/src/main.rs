@@ -1056,7 +1056,7 @@ where
                     .ok_or_else(|| "missing value for --shot-wolf".to_string())?;
                 parsed.shot_wolf = Some(std::path::PathBuf::from(value));
             }
-            "--shot-cat" => {
+            "--shot-cat" | "--shot-cat-sit" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-cat".to_string())?;

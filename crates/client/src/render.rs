@@ -1004,6 +1004,8 @@ pub struct State {
     wolf_show: f32,
     /// HUD plate while dusk fireflies drift nearby, `0`..`1`.
     dusk_show: f32,
+    /// HUD plate while a tamed cat sits or heels, `0`..`1`.
+    cat_show: f32,
     /// One-shot idle horse vs gallop FOV stitch, then quit.
     horse_shot_path: Option<std::path::PathBuf>,
     horse_shot_frames: u32,
@@ -2073,6 +2075,7 @@ impl State {
             axolotl_held_lead: false,
             wolf_show: 0.0,
             dusk_show: 0.0,
+            cat_show: 0.0,
             horse_shot_path: None,
             horse_shot_frames: 0,
             horse_shot_phase: HorseShotPhase::Idle,
@@ -5637,6 +5640,7 @@ impl State {
                 return false;
             }
             self.cat.sit();
+            self.cat_show = 1.0;
             self.rebuild_cat();
             self.gui
                 .push_chat(if self.cat.sitting() { "sit" } else { "follow" });
@@ -5651,6 +5655,7 @@ impl State {
         self.cat.feed();
         self.hotbar.consume_selected();
         self.hotbar_dirty = true;
+        self.cat_show = 1.0;
         self.rebuild_cat();
         self.gui.push_chat("tamed");
         true
@@ -9559,14 +9564,22 @@ impl State {
         self.cat.place_at([12.5, 1.0, 11.2]);
         let _ = self.cat.feed();
         let _ = self.cat.sit();
+        self.cat_show = 1.0;
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.rebuild_wolf();
+        self.rebuild_bee();
+        self.rebuild_axolotl();
         self.rebuild_cat();
         self.found_cat = true;
         self.gui.push_chat("sit");
         self.hotbar.install_saved(0, &[]);
         self.hotbar_dirty = true;
 
-        let focus = glam::Vec3::from(self.cat.origin()) + glam::Vec3::new(0.0, 0.3, 0.0);
-        let eye = glam::Vec3::new(focus.x - 0.3, focus.y + 1.25 + body::EYE_HEIGHT, focus.z - 2.4);
+        // Side angle so ears, tucked paws, and the sit plate read.
+        let focus = glam::Vec3::from(self.cat.origin()) + glam::Vec3::new(0.05, 0.22, 0.0);
+        let eye = glam::Vec3::new(focus.x + 1.7, focus.y + 0.5 + body::EYE_HEIGHT, focus.z + 2.2);
         self.camera = Camera::looking_at(eye, focus);
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;
@@ -17033,6 +17046,11 @@ impl State {
                 self.gui.push_chat("hiss");
                 self.rebuild_zombie();
             }
+            if self.cat.tamed() {
+                self.cat_show = (self.cat_show + 0.35).min(1.0);
+            } else {
+                self.cat_show = (self.cat_show - steps as f32 * 0.08).max(0.0);
+            }
             self.rebuild_cat();
             self.tick_scarecrow();
             let body = [
@@ -17837,6 +17855,14 @@ impl State {
         }
         if self.dusk_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::dusk_quads(gui_w, gui_h, self.dusk_show));
+        }
+        if self.cat_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::cat_quads(
+                gui_w,
+                gui_h,
+                self.cat_show,
+                self.cat.sitting(),
+            ));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));
