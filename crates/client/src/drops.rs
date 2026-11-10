@@ -297,6 +297,47 @@ impl Drops {
         }
     }
 
+    /// Hot orange sparks that pop up from a campfire, then fall. Capped.
+    pub fn embers(&mut self, origin: [f32; 3]) {
+        const MAX_EMBERS: usize = 20;
+        let mut n = self
+            .motes
+            .iter()
+            .filter(|mote| !mote.rise && !mote.hover && mote.color[0] > 0.85 && mote.color[1] > 0.3)
+            .count();
+        if n >= MAX_EMBERS {
+            return;
+        }
+        const SPARKS: [([f32; 3], [f32; 3], f32); 5] = [
+            ([0.18, 2.4, 0.05], [1.0, 0.55, 0.12], 0.55),
+            ([-0.22, 2.1, -0.08], [1.0, 0.72, 0.18], 0.48),
+            ([0.08, 2.7, -0.14], [0.98, 0.42, 0.08], 0.62),
+            ([-0.1, 1.9, 0.16], [1.0, 0.82, 0.28], 0.42),
+            ([0.14, 2.2, 0.1], [0.95, 0.35, 0.06], 0.5),
+        ];
+        for (i, (vel, color, life)) in SPARKS.into_iter().enumerate() {
+            if n >= MAX_EMBERS {
+                break;
+            }
+            let wobble = (i as f32) * 0.03;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.05,
+                    origin[1] + 0.12,
+                    origin[2] - wobble * 0.4,
+                ],
+                velocity: vel,
+                color,
+                block: color,
+                life,
+                rise: false,
+                hover: false,
+                half: 0.04,
+            });
+            n += 1;
+        }
+    }
+
     /// Soft gray puffs that float up from a campfire. Cheap and capped.
     pub fn smoke(&mut self, origin: [f32; 3]) {
         const MAX_SMOKE: usize = 28;
@@ -927,6 +968,20 @@ mod tests {
         assert!(drops.motes.iter().filter(|mote| mote.rise).count() <= 28);
         assert!(drops.tick_motes(3.0));
         assert!(drops.motes.iter().all(|mote| !mote.rise));
+    }
+
+    #[test]
+    fn campfire_embers_pop_up_then_fall() {
+        let mut drops = Drops::new();
+        drops.embers([8.0, 2.0, 8.0]);
+        assert_eq!(drops.motes.len(), 5);
+        assert!(drops.motes.iter().all(|mote| !mote.rise && !mote.hover));
+        assert!(drops.motes.iter().all(|mote| mote.color[0] > 0.9));
+        let before = drops.motes[0].center[1];
+        assert!(drops.tick_motes(0.05));
+        assert!(drops.motes[0].center[1] > before, "embers shoot upward first");
+        assert!(drops.tick_motes(1.5));
+        assert!(drops.motes.is_empty());
     }
 
     #[test]

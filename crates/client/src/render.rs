@@ -1136,6 +1136,10 @@ pub struct State {
     crackle_at: Option<[f32; 3]>,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
+    /// Seconds until the next campfire ember burst.
+    ember_wait: f32,
+    /// Once: saw campfire embers pop.
+    found_embers: bool,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
     /// One-shot campfire smoke proof PNG, then quit.
@@ -2151,6 +2155,8 @@ impl State {
             crackle_mix: 0.0,
             crackle_at: None,
             smoke_wait: 0.0,
+            ember_wait: 0.0,
+            found_embers: false,
             firefly_wait: 0.0,
             campfire_smoke_shot_path: None,
             campfire_smoke_shot_frames: 0,
@@ -12050,6 +12056,9 @@ impl State {
                 }
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
+                if self.found_embers {
+                    self.drops.embers([8.5, 2.9, 10.5]);
+                }
             }
             self.rebuild_drops();
         }
@@ -12155,6 +12164,98 @@ impl State {
         for _ in 0..8 {
             self.drops.smoke([fire.x, fire.y + 0.2, fire.z]);
         }
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
+    /// Campfire with orange ember sparks popping, then quit with a PNG.
+    pub fn arm_embers_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.clock.set_time_of_day(0.72);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let fx = 8;
+        let fy = 2;
+        let fz = 10;
+        let mut changes = Vec::new();
+        for z in 7..=13 {
+            for x in 5..=11 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: fx,
+            y: fy,
+            z: fz,
+            block: Block::new("campfire", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let fire = glam::Vec3::new(fx as f32 + 0.5, fy as f32 + 0.85, fz as f32 + 0.5);
+        // Side-low so sparks read against dusk sky above the fire.
+        let eye = glam::Vec3::new(
+            fx as f32 - 1.4,
+            fy as f32 + 0.85 + body::EYE_HEIGHT,
+            fz as f32 - 3.0,
+        );
+        let look = glam::Vec3::new(fire.x, fire.y + 0.75, fire.z);
+        self.camera = Camera::looking_at(eye, look);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.crackle_at = Some([fire.x, fire.y, fire.z]);
+        self.found_embers = true;
+        self.gui.push_chat("embers");
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.drops = crate::drops::Drops::new();
+        for _ in 0..2 {
+            self.drops.smoke([fire.x, fire.y + 0.15, fire.z]);
+        }
+        for _ in 0..4 {
+            self.drops.embers([fire.x, fire.y + 0.2, fire.z]);
+        }
+        let _ = self.drops.tick_motes(0.12);
         self.rebuild_drops();
         let _ = self.window.focus_window();
     }
@@ -16580,13 +16681,24 @@ impl State {
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
         self.smoke_wait = (self.smoke_wait - dt).max(0.0);
+        self.ember_wait = (self.ember_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
             if let Some(source) = self.crackle_at {
+                let at = [source[0], source[1] + 0.35, source[2]];
                 if self.smoke_wait <= 0.0 {
                     self.smoke_wait = 0.32;
-                    self.drops.smoke([source[0], source[1] + 0.35, source[2]]);
+                    self.drops.smoke(at);
                     self.rebuild_drops();
+                }
+                if self.ember_wait <= 0.0 {
+                    self.ember_wait = 0.18;
+                    self.drops.embers(at);
+                    self.rebuild_drops();
+                    if !self.found_embers {
+                        self.found_embers = true;
+                        self.gui.push_chat("embers");
+                    }
                 }
             }
         }
