@@ -3960,6 +3960,10 @@ pub enum SettingsControl {
         index: usize,
         choices: Vec<String>,
     },
+    /// Opens another screen (keybinds).
+    Link {
+        caption: &'static str,
+    },
 }
 
 /// One left-dock category in the Godot-style settings screen.
@@ -3975,6 +3979,7 @@ pub struct SettingsCategory {
 enum MenuPage {
     Main,
     Settings,
+    Keybinds,
     Worlds,
     Pause,
     Closed,
@@ -3989,6 +3994,8 @@ pub struct Menu {
     page: MenuPage,
     /// Settings returns here.
     settings_return: MenuPage,
+    /// Keybinds returns here (pause or settings).
+    keybinds_return: MenuPage,
     selected: usize,
     size: rebuild_world::WorldSize,
     muted: bool,
@@ -4020,6 +4027,7 @@ impl Menu {
             worlds_screen: load_or("worlds", &worlds_file(), FALLBACK_WORLDS),
             page: MenuPage::Main,
             settings_return: MenuPage::Main,
+            keybinds_return: MenuPage::Main,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4046,6 +4054,7 @@ impl Menu {
             worlds_screen: Screen::parse(FALLBACK_WORLDS).expect("fallback worlds"),
             page: MenuPage::Closed,
             settings_return: MenuPage::Main,
+            keybinds_return: MenuPage::Main,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4132,6 +4141,12 @@ impl Menu {
                 detail: "master sound".into(),
                 options: vec!["volume".into()],
             },
+            SettingsCategory {
+                id: "controls".into(),
+                title: "Controls".into(),
+                detail: "keys and mouse".into(),
+                options: vec!["keybinds".into()],
+            },
         ];
         let options = rebuild_world::Pack::builtin().settings();
         let mut seen = Vec::new();
@@ -4204,6 +4219,7 @@ impl Menu {
             "volume" => "master sound".to_string(),
             "view_bob" => "walk motion".to_string(),
             "trace" => "sun shadows".to_string(),
+            "keybinds" => "click a row, then press a key".to_string(),
             "back" => "return to the menu".to_string(),
             _ => rebuild_world::Pack::builtin()
                 .settings()
@@ -4272,6 +4288,9 @@ impl Menu {
                     crate::camera::Bob::Full => 2,
                 },
                 choices: vec!["off".into(), "low".into(), "full".into()],
+            },
+            "keybinds" => SettingsControl::Link {
+                caption: "Open…",
             },
             _ => {
                 let Some(option) = rebuild_world::Pack::builtin()
@@ -4490,6 +4509,7 @@ impl Menu {
         match self.page {
             MenuPage::Main => "TERRALITE",
             MenuPage::Settings => "SETTINGS",
+            MenuPage::Keybinds => "KEYBINDS",
             MenuPage::Worlds => "WORLDS",
             MenuPage::Pause => "PAUSED",
             MenuPage::Closed => "",
@@ -4511,6 +4531,7 @@ impl Menu {
             "join" if !self.join_note.is_empty() => self.join_note.clone(),
             "join" => "localhost".to_string(),
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
+            "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
@@ -4555,11 +4576,16 @@ impl Menu {
         self.activate()
     }
 
-    /// Leave settings for the page that opened it. Escape on pause resumes.
+    /// Leave settings / keybinds for the page that opened them. Escape on pause resumes.
     pub fn escape(&mut self) -> MenuAction {
         match self.page {
             MenuPage::Settings => {
                 self.page = self.settings_return;
+                self.selected = 0;
+                MenuAction::None
+            }
+            MenuPage::Keybinds => {
+                self.page = self.keybinds_return;
                 self.selected = 0;
                 MenuAction::None
             }
@@ -4576,9 +4602,9 @@ impl Menu {
         }
     }
 
-    /// Leave settings. The page that opened settings stays up.
+    /// Leave settings or keybinds. The page that opened them stays up.
     pub fn back(&mut self) {
-        if self.page == MenuPage::Settings {
+        if matches!(self.page, MenuPage::Settings | MenuPage::Keybinds) {
             let _ = self.escape();
         }
     }
@@ -4678,8 +4704,17 @@ impl Menu {
                 self.changed = Some(label);
                 MenuAction::Setting
             }
+            MenuPage::Settings if label == "keybinds" => {
+                self.open_keybinds(MenuPage::Settings);
+                MenuAction::None
+            }
             MenuPage::Settings => {
                 self.back();
+                MenuAction::None
+            }
+            MenuPage::Keybinds if label == "back" => {
+                self.page = self.keybinds_return;
+                self.selected = 0;
                 MenuAction::None
             }
             MenuPage::Pause if label == "resume" => {
@@ -4688,6 +4723,10 @@ impl Menu {
             }
             MenuPage::Pause if label == "settings" => {
                 self.open_settings(MenuPage::Pause);
+                MenuAction::None
+            }
+            MenuPage::Pause if label == "keybinds" => {
+                self.open_keybinds(MenuPage::Pause);
                 MenuAction::None
             }
             MenuPage::Pause if label == "title" => {
@@ -4805,6 +4844,21 @@ impl Menu {
         self.open_settings(MenuPage::Main);
     }
 
+    pub fn is_keybinds(&self) -> bool {
+        self.page == MenuPage::Keybinds
+    }
+
+    fn open_keybinds(&mut self, back: MenuPage) {
+        self.keybinds_return = back;
+        self.page = MenuPage::Keybinds;
+        self.selected = 0;
+    }
+
+    /// Open keybinds from the title menu (proof shots / automation).
+    pub fn show_keybinds(&mut self) {
+        self.open_keybinds(MenuPage::Main);
+    }
+
     fn make_world(&mut self) {
         let name = crate::net::fresh_world_name(&self.worlds);
         if crate::net::ensure_world(&name).is_err() {
@@ -4825,6 +4879,7 @@ impl Menu {
     fn rows(&self) -> Vec<String> {
         match self.page {
             MenuPage::Settings => self.settings_rows(),
+            MenuPage::Keybinds => vec!["back".to_string()],
             MenuPage::Pause => self.pause.labels.clone(),
             MenuPage::Worlds => {
                 let mut rows = self.worlds.clone();
@@ -4845,6 +4900,7 @@ impl Menu {
             "join" if !self.join_note.is_empty() => self.join_note.clone(),
             "join" => "localhost".to_string(),
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
+            "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
@@ -4943,7 +4999,7 @@ const FALLBACK_SETTINGS: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "back"]
+  "labels": ["world", "hemisphere", "volume", "view_bob", "trace", "keybinds", "back"]
 }"#;
 
 const FALLBACK_PAUSE: &str = r#"{
@@ -4952,7 +5008,7 @@ const FALLBACK_PAUSE: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["resume", "settings", "title"]
+  "labels": ["resume", "settings", "keybinds", "title"]
 }"#;
 
 const FALLBACK_WORLDS: &str = r#"{
@@ -9875,6 +9931,7 @@ fn main(): Int {
         assert!(menu.is_settings());
         assert_eq!(menu.escape(), MenuAction::None);
         assert!(menu.is_pause());
+        assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
         assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
         assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Title);

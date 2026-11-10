@@ -804,6 +804,8 @@ pub struct State {
     port: u16,
     gui: gui::Gui,
     menu: gui::Menu,
+    /// Remappable keys / mouse. Persists in `saves/keybinds.json`.
+    binds: crate::keybinds::Keybinds,
     /// Pause / settings / creative / items — egui on wgpu. World stays separate.
     egui: crate::egui_ui::EguiHost,
     /// True after Play, until quit to title.
@@ -819,6 +821,8 @@ pub struct State {
     /// One-shot capture of the Godot-style settings screen, then quit.
     settings_shot_path: Option<std::path::PathBuf>,
     settings_shot_frames: u32,
+    keybinds_shot_path: Option<std::path::PathBuf>,
+    keybinds_shot_frames: u32,
     /// One-shot night corridor: dirt hand vs torch, then quit.
     held_light_shot_path: Option<std::path::PathBuf>,
     held_light_shot_frames: u32,
@@ -1789,6 +1793,7 @@ impl State {
             port,
             gui: gui::Gui::new(),
             menu: gui::Menu::new(),
+            binds: crate::keybinds::Keybinds::load(),
             egui,
             playing: false,
             loaded_world: crate::net::DEFAULT_WORLD.to_string(),
@@ -1799,6 +1804,8 @@ impl State {
             shot_frames: 0,
             settings_shot_path: None,
             settings_shot_frames: 0,
+            keybinds_shot_path: None,
+            keybinds_shot_frames: 0,
             held_light_shot_path: None,
             held_light_shot_frames: 0,
             held_light_shot_phase: HeldLightShotPhase::Idle,
@@ -2383,6 +2390,43 @@ impl State {
             return;
         }
         self.dig.set_held(true);
+    }
+
+    /// Route a mouse button through remaps / keybind listening.
+    pub fn set_mouse(&mut self, button: winit::event::MouseButton, pressed: bool) {
+        use crate::keybinds::Action;
+        if pressed && self.binds.listening.is_some() && self.menu.is_keybinds() {
+            let _ = self.binds.hear_mouse(button);
+            return;
+        }
+        if self.binds.is_mouse(Action::Attack, button) {
+            if !pressed {
+                self.set_breaking(false);
+                return;
+            }
+            if self.is_dead() {
+                self.pointer_click();
+            } else if self.screen_open() || self.menu_open() {
+                self.pointer_click();
+            } else if self.is_captured() {
+                self.set_breaking(true);
+            } else {
+                self.set_capture(true);
+            }
+            return;
+        }
+        if self.binds.is_mouse(Action::Place, button) {
+            if !pressed {
+                self.release_spyglass();
+                return;
+            }
+            if self.screen_open() || self.menu_open() {
+                return;
+            }
+            if self.is_captured() {
+                self.place_targeted();
+            }
+        }
     }
 
     /// A left click asks `events.attack` before mining, an egg hop, or a crystal blast.
@@ -5302,6 +5346,16 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the keybinds screen and capture a window PNG.
+    pub fn arm_keybinds_shot(&mut self, path: std::path::PathBuf) {
+        self.keybinds_shot_path = Some(path);
+        self.keybinds_shot_frames = 0;
+        self.playing = false;
+        self.binds.cancel_listen();
+        self.menu.show_keybinds();
+        let _ = self.window.focus_window();
+    }
+
     /// Midnight outdoor horde in view, then quit with a PNG.
     pub fn arm_night_spawn_shot(&mut self, path: std::path::PathBuf) {
         self.night_spawn_shot_path = Some(path);
@@ -6588,6 +6642,31 @@ impl State {
         }
     }
 
+    fn poll_keybinds_shot(&mut self) {
+        let Some(path) = self.keybinds_shot_path.clone() else {
+            return;
+        };
+        self.keybinds_shot_frames = self.keybinds_shot_frames.saturating_add(1);
+        if self.keybinds_shot_frames < 50 {
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("keybinds shot wrote {}", path.display());
+                self.keybinds_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("keybinds shot failed: {err}");
+                if self.keybinds_shot_frames > 140 {
+                    self.keybinds_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_night_spawn_shot(&mut self) {
         let Some(path) = self.night_spawn_shot_path.clone() else {
             return;
@@ -7560,7 +7639,16 @@ impl State {
 
     /// Forward a winit event to egui. True when the game should ignore it.
     /// Escape is never blocked so pause / creative / items can still close.
+    /// While a keybind is listening, keyboard and mouse reach `set_key` / `set_mouse`.
     pub fn egui_on_event(&mut self, event: &winit::event::WindowEvent) -> bool {
+        if self.menu.is_keybinds() && self.binds.listening.is_some() {
+            let _ = self.egui.on_window_event(&self.window, event);
+            return !matches!(
+                event,
+                winit::event::WindowEvent::KeyboardInput { .. }
+                    | winit::event::WindowEvent::MouseInput { .. }
+            );
+        }
         let consumed = self.egui.on_window_event(&self.window, event);
         if !consumed || !crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui) {
             return false;
@@ -7597,6 +7685,10 @@ impl State {
 
     /// Escape leaves settings or worlds, and resumes from pause.
     pub fn menu_escape(&mut self) {
+        if self.menu.is_keybinds() && self.binds.listening.is_some() {
+            self.binds.cancel_listen();
+            return;
+        }
         let _ = self.menu.escape();
         self.sync_pointer();
     }
@@ -7629,6 +7721,12 @@ impl State {
     }
 
     pub fn set_key(&mut self, code: KeyCode, pressed: bool) {
+        if pressed && self.binds.listening.is_some() && self.menu.is_keybinds() {
+            let _ = self.binds.hear_key(code);
+            self.clear_motion();
+            return;
+        }
+        let code = self.binds.canonicalize_key(code);
         if code == KeyCode::KeyF && !pressed {
             self.zoom_key = false;
         }
@@ -11329,6 +11427,7 @@ impl State {
                 &mut self.hotbar,
                 &mut self.bag,
                 &mut self.armor,
+                &mut self.binds,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();
@@ -11356,6 +11455,7 @@ impl State {
         self.queue.present(surface_texture);
         self.poll_zombie_shot();
         self.poll_settings_shot();
+        self.poll_keybinds_shot();
         self.poll_held_light_shot();
         self.poll_night_spawn_shot();
         self.poll_bed_sleep_shot();

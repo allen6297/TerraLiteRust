@@ -12,6 +12,7 @@ mod gui;
 mod hotbar;
 mod item_icon;
 mod jobs;
+mod keybinds;
 mod look;
 mod loot;
 mod map;
@@ -37,7 +38,7 @@ use std::time::Instant;
 use rebuild_world::{Cluster, DEFAULT_PORT};
 use winit::application::ApplicationHandler;
 use winit::event::{
-    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
+    DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -140,6 +141,8 @@ struct Args {
     shot_campfire_smoke: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
+    /// Keybinds screen, then quit.
+    shot_keybinds: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -224,6 +227,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_break: args.shot_break,
         shot_campfire_smoke: args.shot_campfire_smoke,
         shot_shrine: args.shot_shrine,
+        shot_keybinds: args.shot_keybinds,
         state: None,
         last_frame: Instant::now(),
     };
@@ -257,6 +261,7 @@ struct App {
     shot_break: Option<std::path::PathBuf>,
     shot_campfire_smoke: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
+    shot_keybinds: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -348,6 +353,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
                 }
+                if let Some(path) = self.shot_keybinds.take() {
+                    state.arm_keybinds_shot(path);
+                }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
                 self.state = Some(state);
@@ -408,29 +416,9 @@ impl ApplicationHandler for App {
                 state: element,
                 button,
                 ..
-            } => match button {
-                MouseButton::Left if state.is_dead() && element == ElementState::Pressed => {
-                    state.pointer_click();
-                }
-                MouseButton::Left
-                    if (state.screen_open() || state.menu_open())
-                        && element == ElementState::Pressed =>
-                {
-                    state.pointer_click();
-                }
-                MouseButton::Left if state.screen_open() || state.menu_open() => {}
-                MouseButton::Left if element == ElementState::Released => state.set_breaking(false),
-                MouseButton::Left if state.is_captured() && element == ElementState::Pressed => {
-                    state.set_breaking(true);
-                }
-                MouseButton::Left if element == ElementState::Pressed => state.set_capture(true),
-                MouseButton::Right if element == ElementState::Released => state.release_spyglass(),
-                MouseButton::Right if state.screen_open() || state.menu_open() => {}
-                MouseButton::Right if state.is_captured() && element == ElementState::Pressed => {
-                    state.place_targeted();
-                }
-                _ => {}
-            },
+            } => {
+                state.set_mouse(button, element == ElementState::Pressed);
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
                     && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
@@ -504,6 +492,7 @@ where
         shot_break: None,
         shot_campfire_smoke: None,
         shot_shrine: None,
+        shot_keybinds: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -623,6 +612,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-shrine".to_string())?;
                 parsed.shot_shrine = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-keybinds" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-keybinds".to_string())?;
+                parsed.shot_keybinds = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

@@ -26,6 +26,7 @@ use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab, SettingsControl};
 use crate::hotbar::{self, Hotbar};
 use crate::item_icon;
+use crate::keybinds::{Action, Keybinds};
 use crate::player;
 use crate::texture;
 
@@ -164,6 +165,7 @@ impl EguiHost {
         hotbar: &mut Hotbar,
         bag: &mut hotbar::Bag,
         armor: &mut Armor,
+        binds: &mut Keybinds,
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
@@ -172,7 +174,7 @@ impl EguiHost {
         let output = self.ctx.run_ui(raw, |ui| {
             apply_theme(ui.ctx());
             if menu.is_open() {
-                pending = draw_menu(ui, menu);
+                pending = draw_menu(ui, menu, binds);
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
             } else if gui.player_inv_open() {
@@ -366,7 +368,10 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
     ui.add(btn)
 }
 
-fn draw_menu(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
+fn draw_menu(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuAction {
+    if menu.is_keybinds() {
+        return draw_keybinds(ui, menu, binds);
+    }
     if menu.is_settings() {
         return draw_settings(ui, menu);
     }
@@ -614,6 +619,9 @@ fn draw_settings(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
                                                             .set_settings_choice(
                                                                 row_index, choice,
                                                             ),
+                                                        SettingsPending::Open => {
+                                                            menu.activate_row(row_index)
+                                                        }
                                                     };
                                                 }
                                                 ui.add_space(4.0);
@@ -631,6 +639,7 @@ fn draw_settings(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
 enum SettingsPending {
     Toggle(bool),
     Choice(usize),
+    Open,
 }
 
 /// Inspector row: property label | control (Godot editor style).
@@ -722,12 +731,151 @@ fn inspector_property_row(
                                     );
                                 }
                             }
+                            SettingsControl::Link { caption } => {
+                                let btn = egui::Button::new(
+                                    RichText::new(*caption).size(13.0).color(INK).strong(),
+                                )
+                                .fill(BUTTON)
+                                .stroke(Stroke::new(1.0, SELECT))
+                                .corner_radius(CornerRadius::same(3))
+                                .min_size(Vec2::new(96.0, 28.0));
+                                if ui.add(btn).clicked() {
+                                    pending = Some(SettingsPending::Open);
+                                }
+                            }
                         }
                     });
                 });
             });
         });
     pending
+}
+
+/// Godot-adjacent keybinds editor: click a row, press a key or mouse button.
+fn draw_keybinds(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuAction {
+    let mut action = MenuAction::None;
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show(ui, |ui| {
+            let avail = ui.available_size();
+            let panel_w = (avail.x * 0.72).clamp(480.0, 720.0);
+            let panel_h = (avail.y * 0.82).clamp(400.0, 640.0);
+            let top_pad = ((avail.y - panel_h) * 0.3).clamp(6.0, avail.y * 0.1);
+            ui.vertical_centered(|ui| {
+                ui.add_space(top_pad);
+                show_panel(ui, panel_w, |ui| {
+                    ui.set_min_height(panel_h);
+                    ui.horizontal(|ui| {
+                        title_label(ui, "KEYBINDS");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let back =
+                                egui::Button::new(RichText::new("Back").size(14.0).color(INK))
+                                    .fill(BUTTON)
+                                    .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                    .corner_radius(CornerRadius::same(4))
+                                    .min_size(Vec2::new(88.0, 30.0));
+                            if ui.add(back).clicked() {
+                                binds.cancel_listen();
+                                action = menu.escape();
+                            }
+                            let reset = egui::Button::new(
+                                RichText::new("Reset defaults").size(13.0).color(INK),
+                            )
+                            .fill(BUTTON)
+                            .stroke(Stroke::new(1.0, SLOT_EDGE))
+                            .corner_radius(CornerRadius::same(4))
+                            .min_size(Vec2::new(128.0, 30.0));
+                            if ui.add(reset).clicked() {
+                                binds.reset_defaults();
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    let hint = if binds.listening.is_some() {
+                        "press a key or mouse button…  Esc cancels"
+                    } else {
+                        "click a bind, then press the new key or mouse button"
+                    };
+                    ui.label(RichText::new(hint).size(12.0).color(MUTED));
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("keybinds_list")
+                        .max_height(panel_h - 100.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for action_id in Action::ALL {
+                                let listening = binds.listening == Some(action_id);
+                                let fill = if listening { SELECT_SOFT } else { ROW };
+                                let stroke = if listening {
+                                    Stroke::new(1.5, SELECT)
+                                } else {
+                                    Stroke::new(1.0, SLOT_EDGE)
+                                };
+                                Frame::new()
+                                    .fill(fill)
+                                    .stroke(stroke)
+                                    .corner_radius(CornerRadius::same(3))
+                                    .inner_margin(Margin::symmetric(10, 7))
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    RichText::new(action_id.title())
+                                                        .size(14.0)
+                                                        .color(INK)
+                                                        .strong(),
+                                                );
+                                                if action_id.is_mouse() {
+                                                    ui.label(
+                                                        RichText::new("mouse")
+                                                            .size(11.0)
+                                                            .color(MUTED),
+                                                    );
+                                                }
+                                            });
+                                            ui.with_layout(
+                                                Layout::right_to_left(Align::Center),
+                                                |ui| {
+                                                    let label = if listening {
+                                                        "…".to_string()
+                                                    } else {
+                                                        binds.get(action_id).label()
+                                                    };
+                                                    let btn = egui::Button::new(
+                                                        RichText::new(label)
+                                                            .size(13.0)
+                                                            .color(if listening {
+                                                                Color32::from_rgb(20, 18, 12)
+                                                            } else {
+                                                                DETAIL
+                                                            })
+                                                            .strong(),
+                                                    )
+                                                    .fill(if listening { SELECT } else { BUTTON })
+                                                    .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                                    .corner_radius(CornerRadius::same(3))
+                                                    .min_size(Vec2::new(140.0, 28.0));
+                                                    if ui.add(btn).clicked() {
+                                                        if listening {
+                                                            binds.cancel_listen();
+                                                        } else {
+                                                            binds.begin_listen(action_id);
+                                                        }
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                ui.add_space(4.0);
+                            }
+                        });
+                });
+            });
+        });
+    action
 }
 
 /// Compact on/off switch. Returns true when the user flipped it.
