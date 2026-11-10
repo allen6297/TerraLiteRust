@@ -152,6 +152,30 @@ impl Drops {
         });
     }
 
+    /// A red cork bobber that hovers on the water for a cast beat.
+    pub fn bobber(&mut self, origin: [f32; 3]) {
+        self.motes.push(Mote {
+            center: origin,
+            velocity: [0.0, 0.12, 0.0],
+            color: [0.92, 0.28, 0.22],
+            block: [0.92, 0.28, 0.22],
+            life: 0.7,
+            rise: false,
+            hover: true,
+            half: 0.08,
+        });
+        self.motes.push(Mote {
+            center: [origin[0], origin[1] + 0.06, origin[2]],
+            velocity: [0.0, 0.08, 0.0],
+            color: [0.95, 0.95, 0.92],
+            block: [0.95, 0.95, 0.92],
+            life: 0.65,
+            rise: false,
+            hover: true,
+            half: 0.05,
+        });
+    }
+
     /// Soft cyan bubbles rising from a brewing stand.
     pub fn brew_bubbles(&mut self, origin: [f32; 3]) {
         const BUBBLES: [([f32; 3], [f32; 3], f32); 6] = [

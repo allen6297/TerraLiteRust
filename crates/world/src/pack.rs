@@ -470,6 +470,11 @@ struct RodDef {
     icon: String,
 }
 
+struct FishingDef {
+    id: String,
+    icon: String,
+}
+
 struct CoreDef {
     id: String,
     icon: String,
@@ -540,6 +545,8 @@ pub struct Pack {
     winds: Vec<WindDef>,
     /// Breeze rods from the data pack. One lifts you, and crafts a wind charge.
     rods: Vec<RodDef>,
+    /// Fishing rods from the data pack. Cast into water for a catch.
+    fishings: Vec<FishingDef>,
     /// Heavy cores from the data pack. A smithing table sets one into a mace.
     cores: Vec<CoreDef>,
     /// Trial keys from the data pack. One opens a copper chest a single time.
@@ -598,6 +605,7 @@ impl Pack {
             pearls: Vec::new(),
             winds: Vec::new(),
             rods: Vec::new(),
+            fishings: Vec::new(),
             cores: Vec::new(),
             keys: Vec::new(),
             omens: Vec::new(),
@@ -2213,6 +2221,12 @@ impl Pack {
                     .map(|rod| rod.icon.as_str())
             })
             .or_else(|| {
+                self.fishings
+                    .iter()
+                    .find(|rod| rod.id == id)
+                    .map(|rod| rod.icon.as_str())
+            })
+            .or_else(|| {
                 self.cores
                     .iter()
                     .find(|core| core.id == id)
@@ -2372,6 +2386,16 @@ impl Pack {
     /// Breeze rod ids, in data-pack order.
     pub fn rod_ids(&self) -> Vec<String> {
         self.rods.iter().map(|rod| rod.id.clone()).collect()
+    }
+
+    /// True when `id` casts a fishing bobber.
+    pub fn is_fishing(&self, id: &str) -> bool {
+        self.fishings.iter().any(|rod| rod.id == id)
+    }
+
+    /// Fishing rod ids, in data-pack order.
+    pub fn fishing_ids(&self) -> Vec<String> {
+        self.fishings.iter().map(|rod| rod.id.clone()).collect()
     }
 
     /// True when `id` is a heavy core.
@@ -2697,6 +2721,7 @@ impl Pack {
         let mut pearls = Vec::new();
         let mut winds = Vec::new();
         let mut rods = Vec::new();
+        let mut fishings = Vec::new();
         let mut cores = Vec::new();
         let mut keys = Vec::new();
         let mut omens = Vec::new();
@@ -2735,6 +2760,7 @@ impl Pack {
                 || pearls.iter().any(|pearl: &PearlDef| pearl.id == id)
                 || winds.iter().any(|wind: &WindDef| wind.id == id)
                 || rods.iter().any(|rod: &RodDef| rod.id == id)
+                || fishings.iter().any(|rod: &FishingDef| rod.id == id)
                 || cores.iter().any(|core: &CoreDef| core.id == id)
                 || keys.iter().any(|key: &KeyDef| key.id == id)
                 || omens.iter().any(|omen: &OmenDef| omen.id == id)
@@ -2769,6 +2795,7 @@ impl Pack {
                 PackItem::Pearl(pearl) => pearls.push(pearl),
                 PackItem::Wind(wind) => winds.push(wind),
                 PackItem::Rod(rod) => rods.push(rod),
+                PackItem::Fishing(rod) => fishings.push(rod),
                 PackItem::Core(core) => cores.push(core),
                 PackItem::Key(key) => keys.push(key),
                 PackItem::Omen(omen) => omens.push(omen),
@@ -2798,6 +2825,7 @@ impl Pack {
         self.pearls = pearls;
         self.winds = winds;
         self.rods = rods;
+        self.fishings = fishings;
         self.cores = cores;
         self.keys = keys;
         self.omens = omens;
@@ -2830,6 +2858,7 @@ enum PackItem {
     Pearl(PearlDef),
     Wind(WindDef),
     Rod(RodDef),
+    Fishing(FishingDef),
     Core(CoreDef),
     Key(KeyDef),
     Omen(OmenDef),
@@ -3229,6 +3258,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("fishing") {
+        require_only(obj, &["fishing", "icon"], &format!("{id}.json"))?;
+        if obj.get("fishing") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json fishing must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Fishing(FishingDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
     if obj.contains_key("core") {
         require_only(obj, &["core", "icon"], &format!("{id}.json"))?;
         if obj.get("core") != Some(&Value::Bool(true)) {
@@ -3504,6 +3550,7 @@ impl Pack {
             pearls: Vec::new(),
             winds: Vec::new(),
             rods: Vec::new(),
+            fishings: Vec::new(),
             cores: Vec::new(),
             keys: Vec::new(),
             omens: Vec::new(),
@@ -7084,6 +7131,13 @@ mod tests {
         assert!(!pack.is_wind("breeze_rod"));
         assert_eq!(pack.tool_icon("breeze_rod"), Some("stick"));
         assert!(pack.rod_ids().contains(&"breeze_rod".to_string()));
+        assert!(pack.is_fishing("fishing_rod"));
+        assert!(!pack.is_fishing("breeze_rod"));
+        assert!(!pack.is_rod("fishing_rod"));
+        assert_eq!(pack.tool_icon("fishing_rod"), Some("stick"));
+        assert!(pack.fishing_ids().contains(&"fishing_rod".to_string()));
+        assert_eq!(pack.food_of("fish"), Some(2));
+        assert_eq!(pack.tool_icon("fish"), Some("lily_pad"));
         assert!(pack.is_eye("eye_of_ender"));
         assert!(!pack.is_eye("ender_pearl"));
         assert!(!pack.is_pearl("eye_of_ender"));

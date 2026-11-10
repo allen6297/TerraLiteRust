@@ -1149,6 +1149,8 @@ pub struct State {
     sleep_fade: f32,
     /// A struck rod, seconds left on the flash, and whether the neighbor already pulsed.
     rod_strike: Option<([i32; 3], f32, bool)>,
+    /// Cast fishing bobber: surface center, seconds until catch, seconds until next splash mote.
+    fish_bobber: Option<([f32; 3], f32, f32)>,
     /// A hit target, seconds left on the flash, and whether the neighbor already pulsed.
     target_hit: Option<([i32; 3], f32, bool)>,
     frame: Option<FramePass>,
@@ -2099,6 +2101,7 @@ impl State {
             spawn_at: None,
             sleep_fade: 0.0,
             rod_strike: None,
+            fish_bobber: None,
             target_hit: None,
             frame,
             drops: crate::drops::Drops::new(),
@@ -4825,6 +4828,88 @@ impl State {
         true
     }
 
+    /// Cast a fishing bobber into looked-at water, or reel one in. True when holding a fishing rod.
+    fn try_fish(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_fishing(id) {
+            return false;
+        }
+        if self.fish_bobber.take().is_some() {
+            self.gui.push_chat("reel");
+            return true;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "water" {
+            self.gui.push_chat("need water");
+            return true;
+        }
+        let at = [
+            hit.block[0] as f32 + 0.5,
+            hit.block[1] as f32 + 0.92,
+            hit.block[2] as f32 + 0.5,
+        ];
+        self.fish_bobber = Some((at, 2.2, 0.0));
+        self.drops.brew_bubbles(at);
+        self.drops.bobber(at);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Splash, at);
+        self.gui.push_chat("cast");
+        true
+    }
+
+    /// Wait-mote splash while a bobber sits, then catch a fish into the bar.
+    fn tick_fish_bobber(&mut self, dt: f32) {
+        let Some((at, wait, splash)) = self.fish_bobber else {
+            return;
+        };
+        let holding = self
+            .hotbar
+            .slot(self.hotbar.selected())
+            .is_some_and(|id| Pack::builtin().is_fishing(id));
+        if !holding {
+            self.fish_bobber = None;
+            return;
+        }
+        let wait = wait - dt;
+        let mut splash = splash - dt;
+        if splash <= 0.0 {
+            self.drops.brew_bubbles(at);
+            self.drops.bobber(at);
+            self.rebuild_drops();
+            self.play_world(crate::audio::Sound::Lap, at);
+            splash = 0.42;
+        }
+        if wait <= 0.0 {
+            self.fish_bobber = None;
+            if !self.hotbar.room_for("fish") && !self.bag.room_for("fish") {
+                self.gui.push_chat("full");
+                self.drops.puff(at, [0.45, 0.72, 0.88]);
+                self.rebuild_drops();
+                self.play_world(crate::audio::Sound::Splash, at);
+                return;
+            }
+            if !self.hotbar.collect("fish") {
+                self.bag.collect("fish");
+                self.bag_dirty = true;
+            }
+            self.hotbar_dirty = true;
+            self.drops.puff(at, [0.55, 0.82, 0.95]);
+            self.drops.bobber(at);
+            self.rebuild_drops();
+            self.play_world(crate::audio::Sound::Splash, at);
+            self.gui.push_chat("fish");
+            return;
+        }
+        self.fish_bobber = Some((at, wait, splash));
+    }
+
     /// Throw the held eye toward the stairs. True when the selected slot is an eye.
     fn try_eye(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -6219,6 +6304,7 @@ impl State {
             || self.try_pearl()
             || self.try_eye()
             || self.try_arrow()
+            || self.try_fish()
         {
             return;
         }
@@ -8677,6 +8763,99 @@ impl State {
     }
 
     /// Mid-climb on the shaft ladder looking into the pit, then quit with a PNG.
+    /// Cast a fishing bobber into a shore pool mid-wait with splash motes, then quit with a PNG.
+    pub fn arm_fish_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 18..=24 {
+            for x in 14..=20 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::new("water", 0),
+                });
+                for y in 3..=5 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Dry shore rim south of the pool for the cast stance.
+        for x in 14..=20 {
+            changes.push(CellChange {
+                x,
+                y: 2,
+                z: 25,
+                block: Block::new("grass", 0),
+            });
+            changes.push(CellChange {
+                x,
+                y: 3,
+                z: 25,
+                block: Block::AIR,
+            });
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let bobber = [17.5, 2.92, 21.5];
+        let focus = glam::Vec3::from(bobber);
+        let eye = glam::Vec3::new(17.5, 2.2 + body::EYE_HEIGHT, 26.4);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.fish_bobber = Some((bobber, 8.0, 0.15));
+        self.note_shot_at = Some(bobber);
+        self.note_shot_pitch = 8;
+        self.note_shot_book = false;
+        self.note_shot_brew = true;
+        self.drops.brew_bubbles(bobber);
+        self.drops.bobber(bobber);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Splash, bobber);
+        self.gui.push_chat("cast");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("fishing_rod");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(17 + dx * 8, 21 + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_ladder_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -9997,6 +10176,9 @@ impl State {
                     self.drops.book_swirl(at);
                 } else if self.note_shot_brew {
                     self.drops.brew_bubbles(at);
+                    if self.fish_bobber.is_some() {
+                        self.drops.bobber(at);
+                    }
                 } else {
                     self.drops.note(at, self.note_shot_pitch);
                 }
@@ -14532,6 +14714,7 @@ impl State {
         self.flush_lever();
         self.flush_bell(dt);
         self.flush_rod(dt);
+        self.tick_fish_bobber(dt);
         self.flush_target(dt);
         if self.gui.is_open() || self.menu.is_open() || self.dead {
             return;

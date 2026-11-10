@@ -6163,6 +6163,11 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.fishing_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.wind_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
@@ -6321,6 +6326,8 @@ fn tab_of(id: &str) -> &'static str {
             | "chorus_plant"
             | "ice"
             | "clay"
+            | "fish"
+            | "fishing_rod"
     ) {
         "nature"
     } else if matches!(
@@ -9015,6 +9022,12 @@ mod tests {
             "blackstone and deepslate make basalt"
         );
         assert!(gui.on_press(KeyCode::ArrowDown));
+        assert_eq!(gui.selected_id().as_deref(), Some("battery"));
+        assert_eq!(
+            gui.selected_detail(),
+            "copper bulb and lightning rod and wire make battery"
+        );
+        assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("bed"));
         assert_eq!(gui.selected_detail(), "oak log and wool make bed");
         assert!(gui.on_press(KeyCode::ArrowDown));
@@ -9156,7 +9169,7 @@ mod tests {
         assert_eq!(gui.selected_id().as_deref(), Some("coal_ore"));
         assert_eq!(
             gui.selected_detail(),
-            "used to make blackstone and campfire and dark prismarine and torch"
+            "used to make blackstone and campfire and dark prismarine and music disc and torch"
         );
         assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("cobbled_deepslate"));
@@ -9288,6 +9301,12 @@ mod tests {
             "end portal frame and eye of ender make dragon egg"
         );
         assert!(gui.on_press(KeyCode::ArrowDown));
+        assert_eq!(gui.selected_id().as_deref(), Some("drain"));
+        assert_eq!(
+            gui.selected_detail(),
+            "pipe and copper grate and iron ore make drain"
+        );
+        assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("enchanting_table"));
         assert_eq!(
             gui.selected_detail(),
@@ -9339,6 +9358,9 @@ mod tests {
         assert_eq!(gui.selected_id().as_deref(), Some("fence_gate"));
         assert_eq!(gui.selected_detail(), "stick and fence make fence gate");
         assert!(gui.on_press(KeyCode::ArrowDown));
+        assert_eq!(gui.selected_id().as_deref(), Some("fishing_rod"));
+        assert_eq!(gui.selected_detail(), "stick and tripwire make fishing rod");
+        assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("fletching_table"));
         assert_eq!(
             gui.selected_detail(),
@@ -9350,6 +9372,12 @@ mod tests {
         assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("flower_pot"));
         assert_eq!(gui.selected_detail(), "stone and dirt make flower pot");
+        assert!(gui.on_press(KeyCode::ArrowDown));
+        assert_eq!(gui.selected_id().as_deref(), Some("generator"));
+        assert_eq!(
+            gui.selected_detail(),
+            "copper bulb and campfire and wire make generator"
+        );
         assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("gilded_blackstone"));
         assert_eq!(
@@ -9394,6 +9422,12 @@ mod tests {
             "blackstone and iron ore make gilded blackstone"
         );
         assert!(gui.on_press(KeyCode::ArrowUp));
+        assert_eq!(gui.selected_id().as_deref(), Some("generator"));
+        assert_eq!(
+            gui.selected_detail(),
+            "copper bulb and campfire and wire make generator"
+        );
+        assert!(gui.on_press(KeyCode::ArrowUp));
         assert_eq!(gui.selected_id().as_deref(), Some("flower_pot"));
         assert_eq!(gui.selected_detail(), "stone and dirt make flower pot");
         assert!(gui.on_press(KeyCode::ArrowUp));
@@ -9404,6 +9438,9 @@ mod tests {
             gui.selected_detail(),
             "gravel and hay bale make fletching table"
         );
+        assert!(gui.on_press(KeyCode::ArrowUp));
+        assert_eq!(gui.selected_id().as_deref(), Some("fishing_rod"));
+        assert_eq!(gui.selected_detail(), "stick and tripwire make fishing rod");
         assert!(gui.on_press(KeyCode::ArrowUp));
         assert_eq!(gui.selected_id().as_deref(), Some("fence_gate"));
         assert!(gui.on_press(KeyCode::ArrowUp));
@@ -9452,6 +9489,12 @@ mod tests {
         assert_eq!(
             gui.selected_detail(),
             "bookshelf and sea lantern make enchanting table"
+        );
+        assert!(gui.on_press(KeyCode::ArrowUp));
+        assert_eq!(gui.selected_id().as_deref(), Some("drain"));
+        assert_eq!(
+            gui.selected_detail(),
+            "pipe and copper grate and iron ore make drain"
         );
         assert!(gui.on_press(KeyCode::ArrowUp));
         assert_eq!(gui.selected_id().as_deref(), Some("dragon_egg"));

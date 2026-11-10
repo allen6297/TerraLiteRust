@@ -474,6 +474,7 @@ mod tests {
                 "arrow".to_string(),
                 "barrel".to_string(),
                 "basalt".to_string(),
+                "battery".to_string(),
                 "bed".to_string(),
                 "beehive".to_string(),
                 "bell".to_string(),
@@ -530,6 +531,7 @@ mod tests {
                 "dirt".to_string(),
                 "door".to_string(),
                 "dragon_egg".to_string(),
+                "drain".to_string(),
                 "enchanting_table".to_string(),
                 "end_crystal".to_string(),
                 "end_portal_frame".to_string(),
@@ -541,9 +543,11 @@ mod tests {
                 "eye_of_ender".to_string(),
                 "fence".to_string(),
                 "fence_gate".to_string(),
+                "fishing_rod".to_string(),
                 "fletching_table".to_string(),
                 "flower".to_string(),
                 "flower_pot".to_string(),
+                "generator".to_string(),
                 "gilded_blackstone".to_string(),
                 "glass".to_string(),
                 "glowstone".to_string(),
@@ -559,7 +563,9 @@ mod tests {
                 "iron_ore".to_string(),
                 "iron_pickaxe".to_string(),
                 "item_frame".to_string(),
+                "jukebox".to_string(),
                 "ladder".to_string(),
+                "lamp".to_string(),
                 "lantern".to_string(),
                 "leather_boots".to_string(),
                 "leather_cap".to_string(),
@@ -576,6 +582,7 @@ mod tests {
                 "melon".to_string(),
                 "mossy_cobblestone".to_string(),
                 "mossy_stone_bricks".to_string(),
+                "music_disc".to_string(),
                 "nether_bricks".to_string(),
                 "nether_wart_block".to_string(),
                 "netherrack".to_string(),
@@ -584,12 +591,14 @@ mod tests {
                 "oak_stairs".to_string(),
                 "ominous_bottle".to_string(),
                 "painting".to_string(),
+                "pipe".to_string(),
                 "plate".to_string(),
                 "polished_basalt".to_string(),
                 "polished_blackstone".to_string(),
                 "polished_deepslate".to_string(),
                 "prismarine".to_string(),
                 "prismarine_bricks".to_string(),
+                "pump".to_string(),
                 "pumpkin".to_string(),
                 "purpur".to_string(),
                 "purpur_pillar".to_string(),
@@ -612,6 +621,7 @@ mod tests {
                 "smooth_stone".to_string(),
                 "snow".to_string(),
                 "soul_sand".to_string(),
+                "spout".to_string(),
                 "spyglass".to_string(),
                 "stick".to_string(),
                 "stone".to_string(),
@@ -619,6 +629,7 @@ mod tests {
                 "stone_pickaxe".to_string(),
                 "stonecutter".to_string(),
                 "sugar_cane".to_string(),
+                "tank".to_string(),
                 "target".to_string(),
                 "torch".to_string(),
                 "trapdoor".to_string(),
@@ -628,6 +639,7 @@ mod tests {
                 "vine".to_string(),
                 "water".to_string(),
                 "wind_charge".to_string(),
+                "wire".to_string(),
                 "wooden_pickaxe".to_string(),
                 "wool".to_string(),
             ]
@@ -1094,7 +1106,12 @@ mod tests {
         );
         assert_eq!(
             book.detail("oak_log"),
-            "used to make bed and boat and bookshelf and door and lantern and leather tunic and note block and oak stairs and shelf and shield and sign and stick and wooden pickaxe"
+            "used to make bed and boat and bookshelf and door and jukebox and lantern and leather tunic and note block and oak stairs and shelf and shield and sign and stick and wooden pickaxe"
+        );
+        assert_eq!(
+            book.match_grid(&["stick".into(), "tripwire".into()])
+                .as_deref(),
+            Some("fishing_rod")
         );
         assert!(parse_recipe("stone", r#"{"result":"stone"}"#).is_err());
         assert!(parse_recipe("stone", r#"{"result":"stone","ingredients":["stone"]}"#).is_err());
