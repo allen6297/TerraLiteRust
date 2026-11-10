@@ -156,6 +156,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
+    stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
@@ -428,6 +429,21 @@ pub const SHIPWRECK_CHEST: (i32, i32) = (SHIPWRECK.0 + 1, SHIPWRECK.1);
 
 const WRECK_CHUNK: (i32, i32) = (-2, 0);
 
+/// Ruined village plaza north of the demo pad.
+///
+/// The chunk is `(0, -2)`. Walk north from the stairs. Cobble well, gravel
+/// paths, three house shells. Open green around the well is reserved for
+/// future villager NPCs ([`VILLAGE_GREEN`]).
+pub const VILLAGE: (i32, i32) = (8, -24);
+
+/// Loot chest inside the west house shell.
+pub const VILLAGE_CHEST: (i32, i32) = (3, -23);
+
+/// Open plaza south of the well — leave clear for future villager NPCs.
+pub const VILLAGE_GREEN: (i32, i32) = (8, -22);
+
+const VILLAGE_CHUNK: (i32, i32) = (0, -2);
+
 /// Broken stone-brick shrine, southeast of the demo pad.
 ///
 /// The chunk is `(2, 2)`. Walk east past the pad, then south. A chest sits on
@@ -582,7 +598,14 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let guaranteed = (chunk_x, chunk_z) == PORTAL_CHUNK;
     let reserved = matches!(
         (chunk_x, chunk_z),
-        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | TEMPLE_CHUNK | WRECK_CHUNK | (0, 0)
+        CAMP_CHUNK
+            | SHAFT_CHUNK
+            | SHRINE_CHUNK
+            | CLAY_CHUNK
+            | TEMPLE_CHUNK
+            | WRECK_CHUNK
+            | VILLAGE_CHUNK
+            | (0, 0)
     );
     if !guaranteed {
         if reserved || hash2(chunk_x.wrapping_mul(31), chunk_z.wrapping_mul(17)) % 113 != 0 {
@@ -681,7 +704,14 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let guaranteed = (chunk_x, chunk_z) == TEMPLE_CHUNK;
     let reserved = matches!(
         (chunk_x, chunk_z),
-        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | PORTAL_CHUNK | WRECK_CHUNK | (0, 0)
+        CAMP_CHUNK
+            | SHAFT_CHUNK
+            | SHRINE_CHUNK
+            | CLAY_CHUNK
+            | PORTAL_CHUNK
+            | WRECK_CHUNK
+            | VILLAGE_CHUNK
+            | (0, 0)
     );
     if !guaranteed {
         if reserved {
@@ -786,6 +816,7 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             | CLAY_CHUNK
             | PORTAL_CHUNK
             | TEMPLE_CHUNK
+            | VILLAGE_CHUNK
             | (0, 0)
     );
     if !guaranteed {
@@ -876,6 +907,136 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
     let chest_lx = (chest_x - chunk_x * 16) as u8;
     let chest_lz = (chest_z - chunk_z * 16) as u8;
     blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
+}
+
+/// Ruined plaza + three house shells + well. Guaranteed in [`VILLAGE_CHUNK`].
+/// Open green around the well stays clear for future villager NPCs.
+fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    let guaranteed = (chunk_x, chunk_z) == VILLAGE_CHUNK;
+    let reserved = matches!(
+        (chunk_x, chunk_z),
+        CAMP_CHUNK
+            | SHAFT_CHUNK
+            | SHRINE_CHUNK
+            | CLAY_CHUNK
+            | PORTAL_CHUNK
+            | TEMPLE_CHUNK
+            | WRECK_CHUNK
+            | (0, 0)
+    );
+    if !guaranteed {
+        if reserved {
+            return;
+        }
+        let cx = chunk_x * 16 + 8;
+        let cz = chunk_z * 16 + 8;
+        if biome_at(cx, cz) != Biome::Plains {
+            return;
+        }
+        if hash2(chunk_x.wrapping_mul(59), chunk_z.wrapping_mul(29)) % 107 != 0 {
+            return;
+        }
+    }
+    let (cx, cz) = if guaranteed {
+        VILLAGE
+    } else {
+        (chunk_x * 16 + 8, chunk_z * 16 + 8)
+    };
+    let floor = column_height(cx, cz, biome_at(cx, cz)).max(3);
+    // Clear the plaza pad (keeps room for villagers on the green).
+    let x0 = ((cx - 7) - chunk_x * 16) as u8;
+    let x1 = ((cx + 7) - chunk_x * 16) as u8;
+    let z0 = ((cz - 6) - chunk_z * 16) as u8;
+    let z1 = ((cz + 4) - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x >= x0 && *x <= x1 && *z >= z0 && *z <= z1 && *y + 1 >= floor));
+    let grass = Block::new("grass", 0);
+    let gravel = Block::new("gravel", 0);
+    let cobble = Block::new("cobblestone", 0);
+    let mossy = Block::new("mossy_cobblestone", 0);
+    let oak = Block::new("oak_log", 0);
+    let water = Block::new("water", 0);
+    for dz in -6i32..=4 {
+        for dx in -7i32..=7 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            let path = dx == 0 || dz == 0 || (dx.abs() <= 1 && dz.abs() <= 1);
+            blocks.push((lx, floor - 1, lz, if path { gravel } else { grass }));
+        }
+    }
+    // Cobble well at plaza center — rim + water, open above.
+    for &(dx, dz) in &[(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        blocks.push((lx, floor, lz, if (dx + dz).rem_euclid(2) == 0 { mossy } else { cobble }));
+    }
+    let well_lx = (cx - chunk_x * 16) as u8;
+    let well_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((well_lx, floor - 1, well_lz, cobble));
+    blocks.push((well_lx, floor, well_lz, water));
+
+    // Three ruined house shells: west (with chest), east, north.
+    let houses: [((i32, i32), bool); 3] = if guaranteed {
+        [
+            ((VILLAGE_CHEST.0 - 1, VILLAGE_CHEST.1 - 1), true),
+            ((cx + 4, cz - 1), false),
+            ((cx - 1, cz - 5), false),
+        ]
+    } else {
+        [
+            ((cx - 6, cz - 1), true),
+            ((cx + 4, cz - 1), false),
+            ((cx - 1, cz - 5), false),
+        ]
+    };
+    for &((hx, hz), with_chest) in &houses {
+        // 4×4 footprint, south door gap, broken walls, oak corners.
+        for dz in 0i32..=3 {
+            for dx in 0i32..=3 {
+                let edge = dx == 0 || dx == 3 || dz == 0 || dz == 3;
+                if !edge {
+                    continue;
+                }
+                // South door.
+                if dz == 0 && (dx == 1 || dx == 2) {
+                    continue;
+                }
+                // Weathered gaps.
+                if (dx * 3 + dz * 5 + hx).rem_euclid(7) == 0 {
+                    continue;
+                }
+                let corner = (dx == 0 || dx == 3) && (dz == 0 || dz == 3);
+                let tall = if corner { 3u16 } else { 2 };
+                let lx = (hx + dx - chunk_x * 16) as u8;
+                let lz = (hz + dz - chunk_z * 16) as u8;
+                for dy in 0..tall {
+                    let block = if corner {
+                        oak
+                    } else if (dx + dy as i32).rem_euclid(2) == 0 {
+                        mossy
+                    } else {
+                        cobble
+                    };
+                    blocks.push((lx, floor + dy, lz, block));
+                }
+            }
+        }
+        // Partial roof beams.
+        for &(dx, dz) in &[(1, 1), (2, 2)] {
+            let lx = (hx + dx - chunk_x * 16) as u8;
+            let lz = (hz + dz - chunk_z * 16) as u8;
+            blocks.push((lx, floor + 2, lz, oak));
+        }
+        if with_chest {
+            let (chest_x, chest_z) = if guaranteed {
+                VILLAGE_CHEST
+            } else {
+                (hx + 1, hz + 1)
+            };
+            let chest_lx = (chest_x - chunk_x * 16) as u8;
+            let chest_lz = (chest_z - chunk_z * 16) as u8;
+            blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
+        }
+    }
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -1617,6 +1778,45 @@ mod tests {
         assert_eq!(
             cluster
                 .block_at(SHIPWRECK_CHEST.0, i32::from(floor), SHIPWRECK_CHEST.1)
+                .id,
+            "chest"
+        );
+    }
+
+    #[test]
+    fn a_village_remnant_stands_north_of_the_pad() {
+        let village = generate_chunk(VILLAGE_CHUNK.0, VILLAGE_CHUNK.1);
+        let (cx, cz) = VILLAGE;
+        let lx = (cx - VILLAGE_CHUNK.0 * 16) as u8;
+        let lz = (cz - VILLAGE_CHUNK.1 * 16) as u8;
+        let floor = column_height(cx, cz, biome_at(cx, cz)).max(3);
+        assert_eq!(
+            village.block(lx, floor, lz).id,
+            "water",
+            "well water at plaza center"
+        );
+        let chest_lx = (VILLAGE_CHEST.0 - VILLAGE_CHUNK.0 * 16) as u8;
+        let chest_lz = (VILLAGE_CHEST.1 - VILLAGE_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            village.block(chest_lx, floor, chest_lz).id,
+            "chest",
+            "loot chest in the west house"
+        );
+        // Green south of the well stays open (no house walls on the NPC pad).
+        let green_lx = (VILLAGE_GREEN.0 - VILLAGE_CHUNK.0 * 16) as u8;
+        let green_lz = (VILLAGE_GREEN.1 - VILLAGE_CHUNK.1 * 16) as u8;
+        assert!(
+            village.block(green_lx, floor, green_lz).is_air(),
+            "village green should stay open for future NPCs"
+        );
+        assert_ne!(VILLAGE_CHUNK, CAMP_CHUNK);
+        assert_ne!(VILLAGE_CHUNK, WRECK_CHUNK);
+        assert_ne!(VILLAGE_CHUNK, PORTAL_CHUNK);
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster
+                .block_at(VILLAGE_CHEST.0, i32::from(floor), VILLAGE_CHEST.1)
                 .id,
             "chest"
         );

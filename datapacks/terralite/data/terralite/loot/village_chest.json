@@ -1,0 +1,4 @@
+{
+  "drops": ["cobblestone", "oak_log", "torch", "apple", "map"],
+  "omen": ["compass", "clock", "iron_pickaxe", "healing_potion"]
+}

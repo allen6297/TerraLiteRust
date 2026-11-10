@@ -274,6 +274,8 @@ struct Args {
     shot_temple: Option<std::path::PathBuf>,
     /// West beach shipwreck + chest, then quit.
     shot_wreck: Option<std::path::PathBuf>,
+    /// North village remnant plaza + chest, then quit.
+    shot_village: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
     /// Axolotl companion swim, then quit.
@@ -541,6 +543,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_portal: args.shot_portal,
         shot_temple: args.shot_temple,
         shot_wreck: args.shot_wreck,
+        shot_village: args.shot_village,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
         shot_frog: args.shot_frog,
@@ -693,6 +696,7 @@ struct App {
     shot_portal: Option<std::path::PathBuf>,
     shot_temple: Option<std::path::PathBuf>,
     shot_wreck: Option<std::path::PathBuf>,
+    shot_village: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
     shot_frog: Option<std::path::PathBuf>,
@@ -1021,6 +1025,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_wreck.take() {
                     state.arm_shipwreck_shot(path);
+                }
+                if let Some(path) = self.shot_village.take() {
+                    state.arm_village_remnant_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -1392,6 +1399,7 @@ where
         shot_portal: None,
         shot_temple: None,
         shot_wreck: None,
+        shot_village: None,
         shot_keybinds: None,
         shot_axolotl: None,
         shot_frog: None,
@@ -1942,6 +1950,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-wreck".to_string())?;
                 parsed.shot_wreck = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-village" | "--shot-village-remnant" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-village".to_string())?;
+                parsed.shot_village = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter
