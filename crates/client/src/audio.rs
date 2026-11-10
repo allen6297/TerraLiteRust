@@ -73,6 +73,8 @@ pub enum Sound {
     Creak,
     /// A soft dawn gull cry over open shore.
     Gull,
+    /// A soft wooden lever / button thunk.
+    Thunk,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -604,6 +606,7 @@ impl Audio {
             Sound::Hiss => lantern_hiss(),
             Sound::Creak => gate_creak(),
             Sound::Gull => gull_cry(),
+            Sound::Thunk => wood_thunk(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -954,6 +957,25 @@ fn gull_cry() -> Vec<i16> {
     samples.extend(bird_tone(780.0, 0.14, 0.13, 71));
     samples.extend(vec![0i16; (22_050.0 * 0.06) as usize]);
     samples.extend(bird_tone(1_050.0, 0.16, 0.11, 79));
+    samples
+}
+
+/// Soft wooden lever / button thunk. Short low knock.
+fn wood_thunk() -> Vec<i16> {
+    let seconds = 0.09;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 97u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let wood = (t * 210.0 * std::f32::consts::TAU).sin() * 0.45
+            + (t * 380.0 * std::f32::consts::TAU).sin() * 0.2;
+        let knock = (t * 1_120.0 * std::f32::consts::TAU).sin() * 0.1;
+        let env = (t / 0.008).min(1.0) * (1.0 - t / seconds).max(0.0).powf(1.4);
+        samples.push(((n * 0.18 + wood + knock) * 0.16 * env * 32_767.0) as i16);
+    }
     samples
 }
 
@@ -1372,6 +1394,17 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn wood_thunk_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Thunk);
+        assert_eq!(audio.played, vec![Sound::Thunk]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Thunk);
+        assert_eq!(audio.played, vec![Sound::Thunk]);
     }
 
     #[test]

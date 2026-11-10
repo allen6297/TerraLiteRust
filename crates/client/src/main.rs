@@ -182,6 +182,8 @@ struct Args {
     shot_creak: Option<std::path::PathBuf>,
     /// Dawn shore gull cry, then quit.
     shot_gull: Option<std::path::PathBuf>,
+    /// Lever / button wood thunk, then quit.
+    shot_thunk: Option<std::path::PathBuf>,
     /// Dusk fireflies over water, then quit.
     shot_firefly: Option<std::path::PathBuf>,
     /// Wolf companion sit/follow, then quit.
@@ -350,6 +352,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_hiss: args.shot_hiss,
         shot_creak: args.shot_creak,
         shot_gull: args.shot_gull,
+        shot_thunk: args.shot_thunk,
         shot_firefly: args.shot_firefly,
         shot_wolf: args.shot_wolf,
         shot_cat: args.shot_cat,
@@ -435,6 +438,7 @@ struct App {
     shot_hiss: Option<std::path::PathBuf>,
     shot_creak: Option<std::path::PathBuf>,
     shot_gull: Option<std::path::PathBuf>,
+    shot_thunk: Option<std::path::PathBuf>,
     shot_firefly: Option<std::path::PathBuf>,
     shot_wolf: Option<std::path::PathBuf>,
     shot_cat: Option<std::path::PathBuf>,
@@ -617,6 +621,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_gull.take() {
                     state.arm_dawn_gull_shot(path);
+                }
+                if let Some(path) = self.shot_thunk.take() {
+                    state.arm_lever_thunk_shot(path);
                 }
                 if let Some(path) = self.shot_firefly.take() {
                     state.arm_firefly_shot(path);
@@ -884,6 +891,7 @@ where
         shot_hiss: None,
         shot_creak: None,
         shot_gull: None,
+        shot_thunk: None,
         shot_firefly: None,
         shot_wolf: None,
         shot_cat: None,
@@ -1155,6 +1163,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-gull".to_string())?;
                 parsed.shot_gull = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-thunk" | "--shot-lever" | "--shot-button" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-thunk".to_string())?;
+                parsed.shot_thunk = Some(std::path::PathBuf::from(value));
             }
             "--shot-firefly" | "--shot-fireflies" => {
                 let value = iter
