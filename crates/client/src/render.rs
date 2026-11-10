@@ -3754,7 +3754,7 @@ impl State {
         }
         if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
             self.found_mine = true;
-            self.gui.push_chat("a mine");
+            self.gui.push_chat("a mine — ladder into the pit");
         }
         if !self.found_clay && near(rebuild_world::CLAY_BANK.0, rebuild_world::CLAY_BANK.1) {
             self.found_clay = true;
@@ -8667,6 +8667,60 @@ impl State {
         let _ = self.gui.turn_lectern(1);
         self.gui.push_chat(gui::LECTERN_PAGES[1]);
         self.found_shrine = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(lx + dx * 8, lz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Mid-climb on the shaft ladder looking into the pit, then quit with a PNG.
+    pub fn arm_ladder_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (lx, lz) = rebuild_world::SHAFT_LADDER;
+        let mut top = 4;
+        for y in (0..80).rev() {
+            if self.world.block_at(lx, y, lz).id == "ladder" {
+                top = y;
+                break;
+            }
+        }
+        let mid = top.saturating_sub(1).max(1);
+        // Stand on the ladder mid-climb, looking down at coal.
+        let eye = glam::Vec3::new(
+            lx as f32 + 0.5,
+            mid as f32 + 0.35 + body::EYE_HEIGHT,
+            lz as f32 + 0.55,
+        );
+        let focus = glam::Vec3::new(lx as f32 - 1.2, 1.2, lz as f32 + 1.0);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = false;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.found_mine = true;
+        self.gui.push_chat("climb");
         self.set_capture(false);
         for dx in -1..=1 {
             for dz in -1..=1 {

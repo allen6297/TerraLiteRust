@@ -277,6 +277,9 @@ pub const SHAFT_SMITH: (i32, i32) = (SHAFT_CHEST.0 + 1, SHAFT_CHEST.1);
 /// Anvil on the apron, one block west of the chest (toward the pit).
 pub const SHAFT_ANVIL: (i32, i32) = (SHAFT_CHEST.0 - 1, SHAFT_CHEST.1);
 
+/// Ladder on the pit's south wall, one block south of the mouth center.
+pub const SHAFT_LADDER: (i32, i32) = (SHAFT_MOUTH.0, SHAFT_MOUTH.1 - 1);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Broken stone-brick shrine, southeast of the demo pad.
@@ -486,6 +489,12 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     let coal = Block::new("coal_ore", 0);
     blocks.push((6, 1, 7, coal));
     blocks.push((6, 1, 8, coal));
+    // South wall of the pit: climb out without a jump.
+    let ladder_x = (SHAFT_LADDER.0 - chunk_x * 16) as u8;
+    let ladder_z = (SHAFT_LADDER.1 - chunk_z * 16) as u8;
+    for y in 1..floor {
+        blocks.push((ladder_x, y, ladder_z, Block::new("ladder", 0)));
+    }
     let gravel = Block::new("gravel", 0);
     blocks.retain(|(x, y, z, _)| {
         let apron = (10..=11).contains(x) && (7..=8).contains(z) && *y + 1 == floor;
@@ -1042,6 +1051,12 @@ mod tests {
         assert_eq!(
             (-2 * 16 + 9, 2 * 16 + i32::from(local_z)),
             SHAFT_ANVIL
+        );
+        assert_eq!(shaft.block(local_x, 1, local_z - 1).id, "ladder");
+        assert_eq!(shaft.block(local_x, post - 1, local_z - 1).id, "ladder");
+        assert_eq!(
+            (-2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z - 1)),
+            SHAFT_LADDER
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;
