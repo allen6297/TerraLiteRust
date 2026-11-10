@@ -14,8 +14,8 @@ use rebuild_world::{
     BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
     PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, apply_compound_seeps,
     compound_accepts, compound_host, encode_bag, encode_break, encode_chat, encode_chest,
-    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of, load_dir,
-    plan_compound_seeps, shape_of,
+    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of, is_pipe,
+    is_wire, load_dir, plan_compound_seeps, shape_of,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -4819,6 +4819,7 @@ impl State {
     }
 
     /// Slow pipe seep: copy fill into one nearby empty host each pulse.
+    /// Dedicated pipe/wire runs pulse faster so conduits feel snappy.
     fn tick_compound_flow(&mut self, dt: f32) {
         if !self.playing || self.menu.is_open() || self.dead {
             return;
@@ -4827,8 +4828,8 @@ impl State {
         if self.compound_flow_wait > 0.0 {
             return;
         }
-        self.compound_flow_wait = 0.42;
         if self.told_disconnect || !self.pending.is_empty() {
+            self.compound_flow_wait = 0.42;
             return;
         }
         let eye = self.camera.eye;
@@ -4841,8 +4842,11 @@ impl State {
             .into_iter()
             .next()
         else {
+            self.compound_flow_wait = 0.42;
             return;
         };
+        let conduit = is_pipe(cell.block.id) || is_wire(cell.block.id);
+        self.compound_flow_wait = if conduit { 0.22 } else { 0.42 };
         let player = PlayerBox {
             min: [1.0e6, 1.0e6, 1.0e6],
             max: [1.000_000_6e6, 1.000_001_8e6, 1.000_000_6e6],
@@ -6669,6 +6673,7 @@ impl State {
         let ember = name.contains("ember");
         let flow = name.contains("flow");
         let pipes = name.contains("pipe") || name.contains("wire");
+        let connected = name.contains("connected");
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6710,34 +6715,100 @@ impl State {
             }
         }
         if pipes {
-            // Water along pipes (north row) and ember along wires (south row).
-            changes.push(CellChange {
-                x: gx,
-                y: gy,
-                z: gz,
-                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
-            });
-            for step in 1..=4 {
+            if connected {
+                // Water L-bend + T, ember wire corner — shows junction shapes.
                 changes.push(CellChange {
-                    x: gx + step,
+                    x: gx,
+                    y: gy,
+                    z: gz,
+                    block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+                });
+                changes.push(CellChange {
+                    x: gx + 1,
                     y: gy,
                     z: gz,
                     block: Block::new("pipe", 0),
                 });
-            }
-            changes.push(CellChange {
-                x: gx,
-                y: gy,
-                z: gz + 2,
-                block: Block::new("glass", 0).with_fill(FILL_EMBER),
-            });
-            for step in 1..=4 {
                 changes.push(CellChange {
-                    x: gx + step,
+                    x: gx + 2,
+                    y: gy,
+                    z: gz,
+                    block: Block::new("pipe", 0),
+                });
+                changes.push(CellChange {
+                    x: gx + 3,
+                    y: gy,
+                    z: gz,
+                    block: Block::new("pipe", 0),
+                });
+                // T stem south from mid pipe.
+                changes.push(CellChange {
+                    x: gx + 2,
+                    y: gy,
+                    z: gz + 1,
+                    block: Block::new("pipe", 0),
+                });
+                changes.push(CellChange {
+                    x: gx + 2,
                     y: gy,
                     z: gz + 2,
+                    block: Block::new("pipe", 0),
+                });
+                // Ember wire L in front.
+                changes.push(CellChange {
+                    x: gx,
+                    y: gy,
+                    z: gz - 2,
+                    block: Block::new("glass", 0).with_fill(FILL_EMBER),
+                });
+                changes.push(CellChange {
+                    x: gx + 1,
+                    y: gy,
+                    z: gz - 2,
                     block: Block::new("wire", 0),
                 });
+                changes.push(CellChange {
+                    x: gx + 2,
+                    y: gy,
+                    z: gz - 2,
+                    block: Block::new("wire", 0),
+                });
+                changes.push(CellChange {
+                    x: gx + 2,
+                    y: gy,
+                    z: gz - 1,
+                    block: Block::new("wire", 0),
+                });
+            } else {
+                // Water along pipes (north row) and ember along wires (south row).
+                changes.push(CellChange {
+                    x: gx,
+                    y: gy,
+                    z: gz,
+                    block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+                });
+                for step in 1..=4 {
+                    changes.push(CellChange {
+                        x: gx + step,
+                        y: gy,
+                        z: gz,
+                        block: Block::new("pipe", 0),
+                    });
+                }
+                changes.push(CellChange {
+                    x: gx,
+                    y: gy,
+                    z: gz + 2,
+                    block: Block::new("glass", 0).with_fill(FILL_EMBER),
+                });
+                for step in 1..=4 {
+                    changes.push(CellChange {
+                        x: gx + step,
+                        y: gy,
+                        z: gz + 2,
+                        block: Block::new("wire", 0),
+                    });
+                }
             }
         } else if flow {
             // Pipe of fences: source fill at the west end, empty hosts east.
@@ -6791,9 +6862,16 @@ impl State {
         }
         apply_changes(&mut self.world, &changes);
         if pipes {
-            for _ in 0..3 {
-                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
-                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz + 2], 8, 1);
+            if connected {
+                for _ in 0..4 {
+                    let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
+                    let _ = apply_compound_seeps(&mut self.world, [gx + 1, gy, gz - 2], 8, 1);
+                }
+            } else {
+                for _ in 0..3 {
+                    let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
+                    let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz + 2], 8, 1);
+                }
             }
         } else if flow {
             // Advance a few seeps so the PNG shows mid-pipe flow.
@@ -6806,7 +6884,19 @@ impl State {
         }
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
-        let (eye, focus) = if pipes {
+        self.chunk_bake.touch(gx + 2, gz - 2);
+        let (eye, focus) = if pipes && connected {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 2.15 + body::EYE_HEIGHT,
+                    gz as f32 - 3.0,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.35),
+            )
+        } else if pipes {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("water_bucket");
             (

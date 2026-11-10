@@ -41,7 +41,8 @@ use std::collections::{HashMap, HashSet};
 
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
-    Plane, Shape, compound_accepts, conduit_links, shape_of,
+    Plane, Shape, compound_accepts, conduit_edge_tube, conduit_fill_span, conduit_links,
+    conduit_shell_boxes, conduit_span, shape_of,
 };
 
 use crate::daylight;
@@ -1553,9 +1554,10 @@ fn mesh_partial_shapes(
                     chunk.z() * 16 + i32::from(z),
                 ];
                 if block.id == "pipe" || block.id == "wire" {
-                    mesh_conduit(block, cell, sample, light, sun, mesh);
-                    if let Some((fill, boxes)) = conduit_fill_boxes(block) {
-                        let fill_shape = Shape::from_boxes(boxes);
+                    let links = conduit_sample_links(block.id, cell, sample);
+                    mesh_conduit(block, links, cell, sample, light, sun, mesh);
+                    if let Some((fill, boxes)) = conduit_fill_boxes(block, links) {
+                        let fill_shape = Shape::from_boxes(&boxes);
                         mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
                     }
                     continue;
@@ -1593,86 +1595,52 @@ fn compound_fill_proxy(block: Block) -> Option<Block> {
     }
 }
 
-/// Pipe / wire shell with arms only toward linked neighbors.
+/// Bit mask: +X -X +Y -Y +Z -Z from a mesh sample fn.
+fn conduit_sample_links(
+    id: &str,
+    cell: [i32; 3],
+    sample: &impl Fn(i32, i32, i32) -> Block,
+) -> u8 {
+    let dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    let mut mask = 0u8;
+    for (i, [dx, dy, dz]) in dirs.into_iter().enumerate() {
+        let neighbor = sample(cell[0] + dx, cell[1] + dy, cell[2] + dz);
+        if conduit_links(id, neighbor.id) {
+            mask |= 1 << i;
+        }
+    }
+    mask
+}
+
+/// Pipe / wire shell: MC-like junctions — same cross-section arms, straight tubes,
+/// and small end caps on open sides.
 fn mesh_conduit(
     block: Block,
+    links: u8,
     cell: [i32; 3],
     sample: &impl Fn(i32, i32, i32) -> Block,
     light: &LightField,
     sun: [f32; 3],
     mesh: &mut Mesh,
 ) {
-    let thick = block.id == "pipe";
-    let (core_lo, core_hi, arm) = if thick {
-        (5u8, 11u8, 2u8)
-    } else {
-        (7, 9, 1)
-    };
-    let mid_lo = 8 - arm;
-    let mid_hi = 8 + arm;
-    let mut boxes = Vec::with_capacity(7);
-    boxes.push(CellBox {
-        min: [core_lo, core_lo, core_lo],
-        max: [core_hi, core_hi, core_hi],
-    });
-    let dirs = [
-        ([1, 0, 0], CellBox {
-            min: [core_hi, mid_lo, mid_lo],
-            max: [16, mid_hi, mid_hi],
-        }),
-        ([-1, 0, 0], CellBox {
-            min: [0, mid_lo, mid_lo],
-            max: [core_lo, mid_hi, mid_hi],
-        }),
-        ([0, 1, 0], CellBox {
-            min: [mid_lo, core_hi, mid_lo],
-            max: [mid_hi, 16, mid_hi],
-        }),
-        ([0, -1, 0], CellBox {
-            min: [mid_lo, 0, mid_lo],
-            max: [mid_hi, core_lo, mid_hi],
-        }),
-        ([0, 0, 1], CellBox {
-            min: [mid_lo, mid_lo, core_hi],
-            max: [mid_hi, mid_hi, 16],
-        }),
-        ([0, 0, -1], CellBox {
-            min: [mid_lo, mid_lo, 0],
-            max: [mid_hi, mid_hi, core_lo],
-        }),
-    ];
-    for ([dx, dy, dz], arm_box) in dirs {
-        let neighbor = sample(cell[0] + dx, cell[1] + dy, cell[2] + dz);
-        if conduit_links(block.id, neighbor.id) {
-            boxes.push(arm_box);
-        }
-    }
+    let (lo, hi) = conduit_span(block.id);
+    let boxes = conduit_shell_boxes(lo, hi, links, block.id == "pipe");
     let shape = Shape::from_boxes(&boxes);
     mesh_cell(block, shape, cell, sample, light, sun, mesh);
 }
 
-/// Thin fill core inside a pipe (water) or wire (ember).
-fn conduit_fill_boxes(block: Block) -> Option<(Block, &'static [CellBox])> {
+/// Fill follows the same junction topology, slightly inset.
+fn conduit_fill_boxes(block: Block, links: u8) -> Option<(Block, Vec<CellBox>)> {
     if !compound_accepts(block.id, block.fill) {
         return None;
     }
-    match (block.id, block.fill) {
-        ("pipe", FILL_WATER) => {
-            const WATER: [CellBox; 1] = [CellBox {
-                min: [6, 6, 6],
-                max: [10, 10, 10],
-            }];
-            Some((Block::new("water", 0), &WATER))
-        }
-        ("wire", FILL_EMBER) => {
-            const EMBER: [CellBox; 1] = [CellBox {
-                min: [7, 7, 7],
-                max: [9, 9, 9],
-            }];
-            Some((Block::new("magma", 0), &EMBER))
-        }
-        _ => None,
-    }
+    let fill = match block.fill {
+        FILL_WATER => Block::new("water", 0),
+        FILL_EMBER => Block::new("magma", 0),
+        _ => return None,
+    };
+    let (lo, hi) = conduit_fill_span(block.id);
+    Some((fill, conduit_shell_boxes(lo, hi, links, false)))
 }
 
 fn mesh_cell(
@@ -1698,7 +1666,7 @@ fn mesh_cell(
                             continue;
                         }
                         let (nx, ny, nz) = micro_neighbor(axis, positive, x, y, z);
-                        if shape_covers(shape, nx, ny, nz, cell, sample) {
+                        if shape_covers(block, shape, nx, ny, nz, cell, sample) {
                             continue;
                         }
                         let (center, normal) =
@@ -2084,6 +2052,7 @@ fn micro_neighbor(axis: Axis, positive: bool, x: u8, y: u8, z: u8) -> (i32, i32,
 
 /// Solid just across this micro-face, either inside the cell or in the neighbor.
 fn shape_covers(
+    block: Block,
     shape: Shape<'_>,
     x: i32,
     y: i32,
@@ -2100,7 +2069,17 @@ fn shape_covers(
     if !(0..256).contains(&wy) {
         return false;
     }
-    shape_of(sample(wx, wy, wz)).occludes(mx, my, mz)
+    let neighbor = sample(wx, wy, wz);
+    // Linked conduits share a tube face — cull even when pack shape is core-only.
+    if conduit_links(block.id, neighbor.id) && conduit_edge_tube(neighbor.id, mx, my, mz) {
+        return true;
+    }
+    // Unlinked conduit neighbor: only the core post covers, not phantom arms.
+    if neighbor.id == "pipe" || neighbor.id == "wire" {
+        let (lo, hi) = conduit_span(neighbor.id);
+        return mx >= lo && mx < hi && my >= lo && my < hi && mz >= lo && mz < hi;
+    }
+    shape_of(neighbor).occludes(mx, my, mz)
 }
 
 fn step_cell(cell: i32, micro: i32) -> (i32, u8) {

@@ -9,7 +9,7 @@
 use glam::Vec3;
 use rebuild_world::{
     Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts, compound_host,
-    for_each_collider, shape_of,
+    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, shape_of,
 };
 
 use crate::look;
@@ -36,10 +36,6 @@ pub fn selection_lines(
         return Vec::new();
     };
     let block = world.block_at(target.block[0], target.block[1], target.block[2]);
-    let shape = shape_of(block);
-    if shape.is_empty() {
-        return Vec::new();
-    }
     let color = outline_color(held, block.id, block.fill);
     let origin = Vec3::new(
         target.block[0] as f32,
@@ -47,6 +43,34 @@ pub fn selection_lines(
         target.block[2] as f32,
     );
     let mut lines = Vec::new();
+    if block.id == "pipe" || block.id == "wire" {
+        let links = conduit_link_mask(
+            world,
+            block.id,
+            target.block[0],
+            target.block[1],
+            target.block[2],
+        );
+        let (lo, hi) = conduit_span(block.id);
+        let boxes = conduit_shell_boxes(lo, hi, links, block.id == "pipe");
+        if boxes.is_empty() {
+            return Vec::new();
+        }
+        for cell in boxes {
+            let min = origin
+                + Vec3::new(cell.min[0] as f32, cell.min[1] as f32, cell.min[2] as f32) / 16.0
+                - Vec3::splat(PAD);
+            let max = origin
+                + Vec3::new(cell.max[0] as f32, cell.max[1] as f32, cell.max[2] as f32) / 16.0
+                + Vec3::splat(PAD);
+            push_box(&mut lines, min, max, eye, color);
+        }
+        return lines;
+    }
+    let shape = shape_of(block);
+    if shape.is_empty() {
+        return Vec::new();
+    }
     for_each_collider(block, |min, max| {
         let min = origin + Vec3::new(min[0], min[1], min[2]) / 16.0 - Vec3::splat(PAD);
         let max = origin + Vec3::new(max[0], max[1], max[2]) / 16.0 + Vec3::splat(PAD);

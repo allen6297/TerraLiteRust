@@ -25,6 +25,7 @@
 mod changes;
 mod chunk;
 mod cluster;
+mod conduit;
 mod edit;
 mod error;
 mod fixture;
@@ -57,6 +58,10 @@ pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};
 pub use error::Error;
 pub use fixture::{synthetic_chunk, synthetic_cluster, synthetic_cluster_sized, synthetic_region};
+pub use conduit::{
+    edge_tube as conduit_edge_tube, fill_span as conduit_fill_span, link_mask_at as conduit_link_mask,
+    shell_boxes as conduit_shell_boxes, span as conduit_span,
+};
 pub use flow::{apply_compound_seeps, plan_compound_seeps};
 pub use hooks::{
     AfterBreak, AfterPlace, BeforeBreak, BeforePlace, BreakVerdict, EntityClock, Hooks,

@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use crate::changes::CellChange;
-use crate::chunk::{FILL_EMBER, FILL_NONE, compound_accepts};
+use crate::chunk::{FILL_EMBER, FILL_NONE, compound_accepts, is_pipe, is_wire};
 use crate::cluster::Cluster;
 
 /// Water: down first, then horizontal, then up.
@@ -76,13 +76,14 @@ pub fn plan_compound_seeps(
                 {
                     return;
                 }
-                sources.push((x, y, z, block.fill));
+                sources.push((x, y, z, block.fill, is_pipe(block.id) || is_wire(block.id)));
             });
         }
     }
-    // Prefer lower cells so water reads as draining through a pipe.
-    sources.sort_by_key(|&(x, y, z, _)| {
+    // Dedicated conduits first, then lower cells so water drains through pipe runs.
+    sources.sort_by_key(|&(x, y, z, _, conduit)| {
         (
+            !conduit,
             y,
             (x - focus[0]).abs() + (z - focus[2]).abs(),
             x,
@@ -92,22 +93,32 @@ pub fn plan_compound_seeps(
 
     let mut claimed = HashSet::new();
     let mut out = Vec::new();
-    for (x, y, z, fill) in sources {
+    for (x, y, z, fill, _) in sources {
         if out.len() >= max_spreads {
             break;
         }
+        // Prefer pipe/wire destinations within this source's neighbor bias.
+        let mut candidates = Vec::new();
         for [dx, dy, dz] in neighbors_for(fill) {
-            if out.len() >= max_spreads {
-                break;
-            }
             let nx = x + dx;
             let ny = y + dy;
             let nz = z + dz;
-            if !claimed.insert((nx, ny, nz)) {
+            if claimed.contains(&(nx, ny, nz)) {
                 continue;
             }
             let dest = world.block_at(nx, ny, nz);
             if dest.fill != FILL_NONE || !compound_accepts(dest.id, fill) {
+                continue;
+            }
+            let conduit = is_pipe(dest.id) || is_wire(dest.id);
+            candidates.push((conduit, nx, ny, nz, dest));
+        }
+        candidates.sort_by_key(|&(conduit, ..)| !conduit);
+        for (_conduit, nx, ny, nz, dest) in candidates {
+            if out.len() >= max_spreads {
+                break;
+            }
+            if !claimed.insert((nx, ny, nz)) {
                 continue;
             }
             out.push(CellChange {
@@ -258,5 +269,21 @@ mod tests {
         assert_eq!(cluster.block_at(2, 1, 2).fill, FILL_NONE);
         assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 1], 8, 1), 1);
         assert_eq!(cluster.block_at(3, 1, 1).fill, FILL_EMBER);
+    }
+
+    #[test]
+    fn seep_prefers_pipe_destination_over_fence() {
+        let cluster = world(&[
+            (2, 1, 2, Block::new("copper_grate", 0).with_fill(FILL_WATER)),
+            (3, 1, 2, Block::new("fence", 0)),
+            (2, 1, 3, Block::new("pipe", 0)),
+        ]);
+        let planned = plan_compound_seeps(&cluster, [2, 1, 2], 8, 1);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(
+            (planned[0].x, planned[0].y, planned[0].z),
+            (2, 1, 3),
+            "pipe should win over fence when both are open"
+        );
     }
 }
