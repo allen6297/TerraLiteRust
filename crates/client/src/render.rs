@@ -902,6 +902,22 @@ pub struct State {
     jump_shot_eye: glam::Vec3,
     jump_shot_yaw: f32,
     jump_shot_pitch: f32,
+    /// One-shot idle vs place FOV stitch, then quit.
+    place_shot_path: Option<std::path::PathBuf>,
+    place_shot_frames: u32,
+    place_shot_phase: PlaceShotPhase,
+    place_shot_idle: Option<CapturedRgba>,
+    place_shot_eye: glam::Vec3,
+    place_shot_yaw: f32,
+    place_shot_pitch: f32,
+    /// One-shot idle vs hotbar-swap FOV stitch, then quit.
+    swap_shot_path: Option<std::path::PathBuf>,
+    swap_shot_frames: u32,
+    swap_shot_phase: SwapShotPhase,
+    swap_shot_idle: Option<CapturedRgba>,
+    swap_shot_eye: glam::Vec3,
+    swap_shot_yaw: f32,
+    swap_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -914,8 +930,10 @@ pub struct State {
     sprint_asked: bool,
     /// That ask returned false, so the walk stays at normal speed until it stops.
     sprint_blocked: bool,
-    /// Selected hotbar slot lift, `1` just placed down to `0`.
+    /// Selected hotbar slot lift, `1` just placed down to `0`. Also tightens FOV.
     slot_punch: f32,
+    /// Brief FOV flick after changing the selected hotbar slot.
+    swap_kick: f32,
     /// Walk cycle for the view. The body stays where it is.
     bob_phase: f32,
     /// `0` while still, `1` once a step is showing in the view.
@@ -1809,6 +1827,20 @@ impl State {
             jump_shot_eye: glam::Vec3::ZERO,
             jump_shot_yaw: 0.0,
             jump_shot_pitch: 0.0,
+            place_shot_path: None,
+            place_shot_frames: 0,
+            place_shot_phase: PlaceShotPhase::Idle,
+            place_shot_idle: None,
+            place_shot_eye: glam::Vec3::ZERO,
+            place_shot_yaw: 0.0,
+            place_shot_pitch: 0.0,
+            swap_shot_path: None,
+            swap_shot_frames: 0,
+            swap_shot_phase: SwapShotPhase::Idle,
+            swap_shot_idle: None,
+            swap_shot_eye: glam::Vec3::ZERO,
+            swap_shot_yaw: 0.0,
+            swap_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1818,6 +1850,7 @@ impl State {
             sprint_asked: false,
             sprint_blocked: false,
             slot_punch: 0.0,
+            swap_kick: 0.0,
             bob_phase: 0.0,
             bob_amount: 0.0,
             crouch: 0.0,
@@ -5683,6 +5716,133 @@ impl State {
         }
     }
 
+    /// Idle FOV then place-click FOV from the stairs overlook, stitched side by side.
+    pub fn arm_place_shot(&mut self, path: std::path::PathBuf) {
+        self.place_shot_path = Some(path);
+        self.place_shot_frames = 0;
+        self.place_shot_phase = PlaceShotPhase::WaitingIdle;
+        self.place_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let _ = self.hotbar.select_digit(1);
+        let _ = self.hotbar.give_stack("cobblestone");
+        self.slot_punch = 0.0;
+        self.swap_kick = 0.0;
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.place_shot_eye = eye;
+        self.place_shot_yaw = yaw;
+        self.place_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_place_shot_camera(&mut self) {
+        if self.place_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.place_shot_eye,
+            self.place_shot_yaw,
+            self.place_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.place_shot_eye;
+        self.posed_yaw = self.place_shot_yaw;
+        self.posed_pitch = self.place_shot_pitch;
+        self.pose_dirty = true;
+        match self.place_shot_phase {
+            PlaceShotPhase::WaitingIdle | PlaceShotPhase::Idle => {
+                self.slot_punch = 0.0;
+                self.swap_kick = 0.0;
+            }
+            PlaceShotPhase::WaitingPlace => {
+                self.slot_punch = 1.0;
+                self.swap_kick = 0.0;
+            }
+        }
+    }
+
+    /// Idle FOV then hotbar-swap FOV from the stairs overlook, stitched side by side.
+    pub fn arm_swap_shot(&mut self, path: std::path::PathBuf) {
+        self.swap_shot_path = Some(path);
+        self.swap_shot_frames = 0;
+        self.swap_shot_phase = SwapShotPhase::WaitingIdle;
+        self.swap_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let _ = self.hotbar.select_digit(1);
+        let _ = self.hotbar.give_stack("cobblestone");
+        let _ = self.hotbar.select_digit(2);
+        let _ = self.hotbar.give_stack("dirt");
+        let _ = self.hotbar.select_digit(1);
+        self.slot_punch = 0.0;
+        self.swap_kick = 0.0;
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.swap_shot_eye = eye;
+        self.swap_shot_yaw = yaw;
+        self.swap_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_swap_shot_camera(&mut self) {
+        if self.swap_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.swap_shot_eye,
+            self.swap_shot_yaw,
+            self.swap_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.swap_shot_eye;
+        self.posed_yaw = self.swap_shot_yaw;
+        self.posed_pitch = self.swap_shot_pitch;
+        self.pose_dirty = true;
+        match self.swap_shot_phase {
+            SwapShotPhase::WaitingIdle | SwapShotPhase::Idle => {
+                let _ = self.hotbar.select_digit(1);
+                self.slot_punch = 0.0;
+                self.swap_kick = 0.0;
+            }
+            SwapShotPhase::WaitingSwap => {
+                let _ = self.hotbar.select_digit(2);
+                self.slot_punch = 0.0;
+                self.swap_kick = 1.0;
+            }
+        }
+    }
+
     /// Grounded FOV then jump takeoff FOV from the stairs overlook, stitched side by side.
     pub fn arm_jump_shot(&mut self, path: std::path::PathBuf) {
         self.jump_shot_path = Some(path);
@@ -6583,6 +6743,144 @@ impl State {
         }
     }
 
+    fn poll_place_shot(&mut self) {
+        let Some(path) = self.place_shot_path.clone() else {
+            return;
+        };
+        self.pin_place_shot_camera();
+        self.place_shot_frames = self.place_shot_frames.saturating_add(1);
+        if self.place_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.place_shot_frames > 600 {
+                eprintln!("place shot timed out");
+                self.place_shot_path = None;
+                self.place_shot_phase = PlaceShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.place_shot_phase {
+            PlaceShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.place_shot_idle = Some(idle);
+                    self.place_shot_frames = 0;
+                    self.place_shot_phase = PlaceShotPhase::WaitingPlace;
+                }
+                Err(err) => {
+                    eprintln!("place idle capture failed: {err}");
+                    if self.place_shot_frames > 400 {
+                        self.place_shot_path = None;
+                        self.place_shot_phase = PlaceShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            PlaceShotPhase::WaitingPlace => {
+                let Some(idle) = self.place_shot_idle.take() else {
+                    self.place_shot_path = None;
+                    self.place_shot_phase = PlaceShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(placed) => match stitch_held_light_proof(&idle, &placed, &path) {
+                        Ok(()) => {
+                            eprintln!("place shot wrote {}", path.display());
+                            self.place_shot_path = None;
+                            self.place_shot_phase = PlaceShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("place stitch failed: {err}");
+                            self.place_shot_path = None;
+                            self.place_shot_phase = PlaceShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("place capture failed: {err}");
+                        self.place_shot_idle = Some(idle);
+                        if self.place_shot_frames > 400 {
+                            self.place_shot_path = None;
+                            self.place_shot_phase = PlaceShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            PlaceShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_swap_shot(&mut self) {
+        let Some(path) = self.swap_shot_path.clone() else {
+            return;
+        };
+        self.pin_swap_shot_camera();
+        self.swap_shot_frames = self.swap_shot_frames.saturating_add(1);
+        if self.swap_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.swap_shot_frames > 600 {
+                eprintln!("swap shot timed out");
+                self.swap_shot_path = None;
+                self.swap_shot_phase = SwapShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.swap_shot_phase {
+            SwapShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.swap_shot_idle = Some(idle);
+                    self.swap_shot_frames = 0;
+                    self.swap_shot_phase = SwapShotPhase::WaitingSwap;
+                }
+                Err(err) => {
+                    eprintln!("swap idle capture failed: {err}");
+                    if self.swap_shot_frames > 400 {
+                        self.swap_shot_path = None;
+                        self.swap_shot_phase = SwapShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            SwapShotPhase::WaitingSwap => {
+                let Some(idle) = self.swap_shot_idle.take() else {
+                    self.swap_shot_path = None;
+                    self.swap_shot_phase = SwapShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(swapped) => match stitch_held_light_proof(&idle, &swapped, &path) {
+                        Ok(()) => {
+                            eprintln!("swap shot wrote {}", path.display());
+                            self.swap_shot_path = None;
+                            self.swap_shot_phase = SwapShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("swap stitch failed: {err}");
+                            self.swap_shot_path = None;
+                            self.swap_shot_phase = SwapShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("swap capture failed: {err}");
+                        self.swap_shot_idle = Some(idle);
+                        if self.swap_shot_frames > 400 {
+                            self.swap_shot_path = None;
+                            self.swap_shot_phase = SwapShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            SwapShotPhase::Idle => {}
+        }
+    }
+
     fn poll_crouch_shot(&mut self) {
         let Some(path) = self.crouch_shot_path.clone() else {
             return;
@@ -7184,7 +7482,9 @@ impl State {
         }
         if pressed {
             if let Some(digit) = Self::hotbar_digit(code) {
+                let prev = self.hotbar.selected();
                 if self.hotbar.select_digit(digit) {
+                    self.note_hotbar_swap(prev);
                     self.hotbar_dirty = true;
                     let index = (digit - 1) as usize;
                     let block = self.hotbar.slot(index).unwrap_or("").to_string();
@@ -7716,7 +8016,9 @@ impl State {
                 }
             }
             gui::Click::Hotbar(index) => {
+                let prev = self.hotbar.selected();
                 if self.hotbar.select_digit(index as u8 + 1) {
+                    self.note_hotbar_swap(prev);
                     self.hotbar_dirty = true;
                 }
             }
@@ -7726,6 +8028,8 @@ impl State {
     }
 
     /// Scroll the open list. Down moves toward later rows.
+    ///
+    /// In play with the mouse captured, the wheel cycles the hotbar.
     pub fn pointer_scroll(&mut self, down: bool) {
         if self.map_open && self.holding_map() {
             self.hotbar.zoom_map(down);
@@ -7741,6 +8045,23 @@ impl State {
             self.menu.pointer_scroll(down);
         } else if self.gui.is_open() {
             self.gui.pointer_scroll(down);
+        } else if self.playing && !self.dead {
+            let prev = self.hotbar.selected();
+            let next = if down {
+                (prev + 1) % 10
+            } else {
+                (prev + 9) % 10
+            };
+            if self.hotbar.select_digit(next as u8 + 1) {
+                self.note_hotbar_swap(prev);
+                self.hotbar_dirty = true;
+            }
+        }
+    }
+
+    fn note_hotbar_swap(&mut self, prev: usize) {
+        if self.hotbar.selected() != prev {
+            self.swap_kick = 1.0;
         }
     }
 
@@ -9084,6 +9405,8 @@ impl State {
         self.water_sub = 0.0;
         self.splash_kick = 0.0;
         self.jump_kick = 0.0;
+        self.slot_punch = 0.0;
+        self.swap_kick = 0.0;
         self.clear_boat_feel();
         self.sync_pointer();
     }
@@ -9151,6 +9474,7 @@ impl State {
         }
         self.mace_wait = (self.mace_wait - dt).max(0.0);
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
+        self.swap_kick = (self.swap_kick - dt * 10.0).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt * 2.2).max(0.0);
         self.sleep_fade = (self.sleep_fade - dt * 1.4).max(0.0);
         let sip_before = self.sip;
@@ -9213,6 +9537,8 @@ impl State {
         self.pin_hunger_shot_camera();
         self.pin_eat_shot_camera();
         self.pin_jump_shot_camera();
+        self.pin_place_shot_camera();
+        self.pin_swap_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -9775,6 +10101,8 @@ impl State {
             crate::camera::chew_fov(self.sip, self.chew_phase) * bob_scale
         };
         let jump = self.jump_kick * crate::camera::JUMP_FOV * bob_scale;
+        let place = self.slot_punch * crate::camera::PLACE_FOV * bob_scale;
+        let swap = self.swap_kick * crate::camera::SWAP_FOV * bob_scale;
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
@@ -9782,7 +10110,9 @@ impl State {
             water_fov,
             self.boat_kick * bob_scale,
         ) + chew
-            + jump;
+            + jump
+            + swap
+            - place;
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
         let chew_bob = if self.sipping {
@@ -10487,6 +10817,8 @@ impl State {
         self.poll_hunger_shot();
         self.poll_eat_shot();
         self.poll_jump_shot();
+        self.poll_place_shot();
+        self.poll_swap_shot();
     }
 }
 
@@ -10544,6 +10876,20 @@ enum JumpShotPhase {
     Idle,
     WaitingGround,
     WaitingAir,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaceShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingPlace,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SwapShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingSwap,
 }
 
 struct CapturedRgba {

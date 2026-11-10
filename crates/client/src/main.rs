@@ -130,6 +130,10 @@ struct Args {
     shot_eat: Option<std::path::PathBuf>,
     /// Grounded vs jump FOV stitch, then quit.
     shot_jump: Option<std::path::PathBuf>,
+    /// Idle vs place FOV stitch, then quit.
+    shot_place: Option<std::path::PathBuf>,
+    /// Idle vs hotbar-swap FOV stitch, then quit.
+    shot_swap: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -209,6 +213,8 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_hunger: args.shot_hunger,
         shot_eat: args.shot_eat,
         shot_jump: args.shot_jump,
+        shot_place: args.shot_place,
+        shot_swap: args.shot_swap,
         state: None,
         last_frame: Instant::now(),
     };
@@ -237,6 +243,8 @@ struct App {
     shot_hunger: Option<std::path::PathBuf>,
     shot_eat: Option<std::path::PathBuf>,
     shot_jump: Option<std::path::PathBuf>,
+    shot_place: Option<std::path::PathBuf>,
+    shot_swap: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -312,6 +320,12 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_jump.take() {
                     state.arm_jump_shot(path);
+                }
+                if let Some(path) = self.shot_place.take() {
+                    state.arm_place_shot(path);
+                }
+                if let Some(path) = self.shot_swap.take() {
+                    state.arm_swap_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -464,6 +478,8 @@ where
         shot_hunger: None,
         shot_eat: None,
         shot_jump: None,
+        shot_place: None,
+        shot_swap: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -553,6 +569,18 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-jump-fov".to_string())?;
                 parsed.shot_jump = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-place-fov" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-place-fov".to_string())?;
+                parsed.shot_place = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-swap-fov" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-swap-fov".to_string())?;
+                parsed.shot_swap = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }
