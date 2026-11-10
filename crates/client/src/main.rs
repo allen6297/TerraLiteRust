@@ -175,6 +175,8 @@ struct Args {
     shot_parrot: Option<std::path::PathBuf>,
     /// Open map with clay bank mark, then quit.
     shot_map_clay: Option<std::path::PathBuf>,
+    /// Camp note-block pitch mote, then quit.
+    shot_note: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -276,6 +278,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_cat: args.shot_cat,
         shot_parrot: args.shot_parrot,
         shot_map_clay: args.shot_map_clay,
+        shot_note: args.shot_note,
         state: None,
         last_frame: Instant::now(),
     };
@@ -326,6 +329,7 @@ struct App {
     shot_cat: Option<std::path::PathBuf>,
     shot_parrot: Option<std::path::PathBuf>,
     shot_map_clay: Option<std::path::PathBuf>,
+    shot_note: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -467,6 +471,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_map_clay.take() {
                     state.arm_map_clay_shot(path);
+                }
+                if let Some(path) = self.shot_note.take() {
+                    state.arm_note_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -635,6 +642,7 @@ where
         shot_cat: None,
         shot_parrot: None,
         shot_map_clay: None,
+        shot_note: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -856,6 +864,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-map-clay".to_string())?;
                 parsed.shot_map_clay = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-note" | "--shot-note-block" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-note".to_string())?;
+                parsed.shot_note = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

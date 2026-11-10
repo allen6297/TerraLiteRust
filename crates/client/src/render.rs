@@ -1100,6 +1100,9 @@ pub struct State {
     cook_shot_eye: glam::Vec3,
     cook_shot_yaw: f32,
     cook_shot_pitch: f32,
+    /// While set, cook-shot frames keep a pitch mote rising at this origin.
+    note_shot_at: Option<[f32; 3]>,
+    note_shot_pitch: u8,
     /// One-shot shrine ruin proof PNG, then quit.
     shrine_shot_path: Option<std::path::PathBuf>,
     shrine_shot_frames: u32,
@@ -2062,6 +2065,8 @@ impl State {
             cook_shot_eye: glam::Vec3::ZERO,
             cook_shot_yaw: 0.0,
             cook_shot_pitch: 0.0,
+            note_shot_at: None,
+            note_shot_pitch: 0,
             shrine_shot_path: None,
             shrine_shot_frames: 0,
             shrine_shot_eye: glam::Vec3::ZERO,
@@ -8590,6 +8595,75 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Hit the camp note block mid-mote (pitch-tinted), then quit with a PNG.
+    pub fn arm_note_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (nx, nz) = rebuild_world::CAMP_NOTE;
+        let mut ny = 4;
+        for y in 0..80 {
+            if self.world.block_at(nx, y, nz).id == "note_block" {
+                ny = y;
+                break;
+            }
+        }
+        // Mid-scale pitch so the mote reads warm-green in the PNG.
+        let pitch = 7u8;
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: nx,
+                y: ny,
+                z: nz,
+                block: Block::new("note_block", pitch),
+            }],
+        );
+        self.chunk_bake.touch(nx, nz);
+        let focus = glam::Vec3::new(nx as f32 + 0.5, ny as f32 + 0.85, nz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            nx as f32 - 1.6,
+            ny as f32 + 1.35 + body::EYE_HEIGHT,
+            nz as f32 - 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch_look) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch_look;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch_look;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote_at = [nx as f32 + 0.5, ny as f32 + 1.05, nz as f32 + 0.5];
+        self.note_shot_at = Some(mote_at);
+        self.note_shot_pitch = pitch;
+        self.drops.note(mote_at, pitch);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(pitch), mote_at);
+        self.gui.push_chat(crate::audio::note_name(pitch));
+        self.found_camp = true;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(nx + dx * 8, nz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the map sheet by the marsh clay bank (teal mark), then quit with a PNG.
     pub fn arm_map_clay_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -9014,13 +9088,18 @@ impl State {
         self.pin_cook_shot_camera();
         self.cook_shot_frames = self.cook_shot_frames.saturating_add(1);
         if self.cook_shot_frames % 5 == 0 {
-            self.drops.smoke([8.5, 2.95, 10.5]);
+            if let Some(at) = self.note_shot_at {
+                self.drops.note(at, self.note_shot_pitch);
+            } else {
+                self.drops.smoke([8.5, 2.95, 10.5]);
+            }
             self.rebuild_drops();
         }
         if self.cook_shot_frames < 100 || !self.chunk_bake.is_idle() {
             if self.cook_shot_frames > 500 {
                 eprintln!("cook shot timed out");
                 self.cook_shot_path = None;
+                self.note_shot_at = None;
                 self.quit = true;
             }
             return;
@@ -9030,12 +9109,14 @@ impl State {
             Ok(()) => {
                 eprintln!("cook shot wrote {}", path.display());
                 self.cook_shot_path = None;
+                self.note_shot_at = None;
                 self.quit = true;
             }
             Err(err) => {
                 eprintln!("cook shot failed: {err}");
                 if self.cook_shot_frames > 220 {
                     self.cook_shot_path = None;
+                    self.note_shot_at = None;
                     self.quit = true;
                 }
             }
@@ -12559,6 +12640,12 @@ impl State {
         self.play_world(crate::audio::Sound::Note(pitch), source);
         self.tell_parrot(crate::mobs::Mimic::Note(pitch), source);
         self.gui.push_chat(crate::audio::note_name(pitch));
+        // Rising mote above the block, tinted by the pitch just played.
+        self.drops.note(
+            [source[0], at[1] as f32 + 1.05, source[2]],
+            pitch,
+        );
+        self.rebuild_drops();
         if self.pending.is_empty() {
             self.retune(at, crate::audio::next_pitch(pitch));
         }

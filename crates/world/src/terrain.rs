@@ -169,6 +169,9 @@ pub const CAMP_CHEST: (i32, i32) = (CAMP_FIRE.0, CAMP_FIRE.1 - 2);
 /// The smoker two blocks west of the campfire.
 pub const CAMP_SMOKER: (i32, i32) = (CAMP_FIRE.0 - 2, CAMP_FIRE.1);
 
+/// Note block east of the fire, for pitch cycling with a rising mote.
+pub const CAMP_NOTE: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 + 2);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.
@@ -221,6 +224,8 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
     blocks.push((local_x + 2, floor, local_z, Block::new("oak_log", 0)));
     // West of the fire: hold raw and use it for a one-step cook.
     blocks.push((local_x - 2, floor, local_z, Block::new("smoker", 0)));
+    // Southeast of the fire: use to cycle pitch and see a mote.
+    blocks.push((local_x + 2, floor, local_z + 2, Block::new("note_block", 0)));
 }
 
 /// The open pit of the mine mouth, west and south of the demo pad.
@@ -755,6 +760,11 @@ mod tests {
         assert_eq!(
             (2 * 16 + i32::from(x - 2), -2 * 16 + i32::from(z)),
             CAMP_SMOKER
+        );
+        assert_eq!(camp.block(x + 2, y, z + 2).id, "note_block");
+        assert_eq!(
+            (2 * 16 + i32::from(x + 2), -2 * 16 + i32::from(z + 2)),
+            CAMP_NOTE
         );
         let elsewhere = generate_chunk(3, 0);
         for local_z in 0..16u8 {

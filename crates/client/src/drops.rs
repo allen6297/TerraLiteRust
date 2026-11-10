@@ -152,6 +152,33 @@ impl Drops {
         });
     }
 
+    /// A short pitch-tinted mote above a note block. Color steps with the note.
+    pub fn note(&mut self, origin: [f32; 3], pitch: u8) {
+        let color = note_color(pitch);
+        const DIRS: [[f32; 3]; 3] = [
+            [0.05, 1.15, 0.02],
+            [-0.08, 0.95, -0.04],
+            [0.02, 1.35, 0.06],
+        ];
+        for (i, dir) in DIRS.into_iter().enumerate() {
+            let wobble = (i as f32) * 0.03;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble,
+                    origin[1] + 0.15,
+                    origin[2] - wobble * 0.4,
+                ],
+                velocity: dir,
+                color,
+                block: color,
+                life: 1.1,
+                rise: true,
+                hover: false,
+                half: 0.08,
+            });
+        }
+    }
+
     /// Soft gray puffs that float up from a campfire. Cheap and capped.
     pub fn smoke(&mut self, origin: [f32; 3]) {
         const MAX_SMOKE: usize = 28;
@@ -433,6 +460,16 @@ fn is_food(id: &str) -> bool {
 }
 
 /// Pale dust for stone, near-black for coal, and a warm chip for iron.
+/// Hue steps across the sixteen note pitches (C → D#5).
+pub fn note_color(pitch: u8) -> [f32; 3] {
+    let t = f32::from(pitch & 0x0F) / 15.0;
+    // Warm low → green mid → cool high, so each step reads in a still PNG.
+    let r = (1.0 - t * 0.85).clamp(0.15, 1.0);
+    let g = (0.25 + t * 0.7).clamp(0.2, 0.95);
+    let b = (0.15 + (t - 0.35).max(0.0) * 1.4).clamp(0.1, 1.0);
+    [r, g, b]
+}
+
 pub fn chip_color(id: &str) -> [f32; 3] {
     match id {
         "coal_ore" => [0.14, 0.14, 0.16],
@@ -759,6 +796,24 @@ mod tests {
         assert!(drops.motes.iter().filter(|mote| mote.rise).count() <= 28);
         assert!(drops.tick_motes(3.0));
         assert!(drops.motes.iter().all(|mote| !mote.rise));
+    }
+
+    #[test]
+    fn a_note_mote_rises_and_shifts_color_with_pitch() {
+        let mut drops = Drops::new();
+        drops.note([4.5, 2.5, 4.5], 0);
+        assert_eq!(drops.motes.len(), 3);
+        assert!(drops.motes.iter().all(|mote| mote.rise));
+        let low = note_color(0);
+        let high = note_color(12);
+        assert!(drops.motes[0].color == low);
+        assert!(high[2] > low[2], "high notes lean cooler");
+        assert!(high[0] < low[0], "high notes lose red");
+        let before = drops.motes[0].center[1];
+        assert!(drops.tick_motes(0.15));
+        assert!(drops.motes[0].center[1] > before);
+        assert!(drops.tick_motes(2.0));
+        assert!(drops.motes.is_empty());
     }
 
     #[test]
