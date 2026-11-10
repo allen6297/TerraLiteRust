@@ -196,6 +196,17 @@ impl Hearing {
             right_open: 1.0,
         }
     }
+
+    /// Scale ear loudness. Openness stays put.
+    pub fn attenuate(self, factor: f32) -> Self {
+        let factor = factor.clamp(0.0, 1.0);
+        Self {
+            left: self.left * factor,
+            right: self.right * factor,
+            left_open: self.left_open,
+            right_open: self.right_open,
+        }
+    }
 }
 
 pub struct Audio {
@@ -248,14 +259,16 @@ impl Audio {
     }
 
     /// True on the frame a step should play. The caller places it in the world.
-    pub fn footstep(&mut self, moving: bool, dt: f32) -> bool {
+    ///
+    /// Sneak steps are farther apart so the walk reads quieter and slower.
+    pub fn footstep(&mut self, moving: bool, dt: f32, sneak: bool) -> bool {
         if !moving {
             self.step_left = 0.0;
             return false;
         }
         self.step_left -= dt;
         if self.step_left <= 0.0 {
-            self.step_left = 0.42;
+            self.step_left = if sneak { 0.72 } else { 0.42 };
             return true;
         }
         false
@@ -775,16 +788,29 @@ mod tests {
 
         let mut audio = Audio::new();
         assert!(!audio.muted());
-        assert!(!audio.footstep(false, 1.0));
+        assert!(!audio.footstep(false, 1.0, false));
         assert!(audio.played.is_empty());
-        assert!(audio.footstep(true, 0.1));
+        assert!(audio.footstep(true, 0.1, false));
         audio.play(Sound::Step);
         audio.play(Sound::Break);
         audio.set_muted(true);
         audio.play(Sound::Place);
-        assert!(audio.footstep(true, 1.0));
+        assert!(audio.footstep(true, 1.0, false));
         audio.play(Sound::Step);
         assert_eq!(audio.played, vec![Sound::Step, Sound::Break]);
+    }
+
+    #[test]
+    fn sneak_steps_are_farther_apart_and_softer() {
+        let mut audio = Audio::new();
+        assert!(audio.footstep(true, 0.01, true));
+        assert!(!audio.footstep(true, 0.42, true));
+        assert!(audio.footstep(true, 0.30, true));
+        let loud = Hearing::even(1.0);
+        let soft = loud.attenuate(0.35);
+        assert!((soft.left - 0.35).abs() < 1e-4);
+        assert!((soft.right - 0.35).abs() < 1e-4);
+        assert_eq!(soft.left_open, 1.0);
     }
 
     #[test]

@@ -4952,6 +4952,10 @@ impl State {
 
     /// Path-trace the sound to each ear, then play the stereo wave.
     fn play_world(&mut self, sound: crate::audio::Sound, source: [f32; 3]) {
+        self.play_world_soft(sound, source, 1.0);
+    }
+
+    fn play_world_soft(&mut self, sound: crate::audio::Sound, source: [f32; 3], level: f32) {
         let eye = self.camera.eye.to_array();
         let forward = self.camera.forward().to_array();
         let right = self.camera.walk_axes().1.to_array();
@@ -4961,7 +4965,7 @@ impl State {
                 shape_of(world.block_at(x, y, z)).is_full_cube()
             })
         };
-        self.audio.play_heard(sound, heard);
+        self.audio.play_heard(sound, heard.attenuate(level));
     }
 
     fn note_disconnect(&mut self) {
@@ -8098,12 +8102,18 @@ impl State {
             self.play_world(crate::audio::Sound::Splash, feet);
         }
         self.was_wet = wet;
+        let sneaking = self.input.crouch && self.camera.on_ground;
         if self.audio.footstep(
             moving && self.camera.on_ground && !aboard && !wet && !splashed,
             dt,
+            sneaking,
         ) {
             let ground = body::ground_id(&self.world, self.camera.eye);
-            self.play_world(crate::audio::step_for(ground), feet);
+            if sneaking {
+                self.play_world_soft(crate::audio::step_for(ground), feet, 0.35);
+            } else {
+                self.play_world(crate::audio::step_for(ground), feet);
+            }
         }
         if self.audio.stroke(wet && moving && !aboard && !splashed, dt) {
             self.play_world(crate::audio::Sound::Swim, feet);
