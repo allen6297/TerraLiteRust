@@ -118,6 +118,8 @@ struct Args {
     shot_crouch: Option<std::path::PathBuf>,
     /// Walk FOV vs sprint FOV stitch, then quit.
     shot_sprint: Option<std::path::PathBuf>,
+    /// Dry shore vs underwater FOV/tint stitch, then quit.
+    shot_swim: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -191,6 +193,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_bed_sleep: args.shot_bed_sleep,
         shot_crouch: args.shot_crouch,
         shot_sprint: args.shot_sprint,
+        shot_swim: args.shot_swim,
         state: None,
         last_frame: Instant::now(),
     };
@@ -213,6 +216,7 @@ struct App {
     shot_bed_sleep: Option<std::path::PathBuf>,
     shot_crouch: Option<std::path::PathBuf>,
     shot_sprint: Option<std::path::PathBuf>,
+    shot_swim: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -270,6 +274,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_sprint.take() {
                     state.arm_sprint_shot(path);
+                }
+                if let Some(path) = self.shot_swim.take() {
+                    state.arm_swim_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -416,6 +423,7 @@ where
         shot_bed_sleep: None,
         shot_crouch: None,
         shot_sprint: None,
+        shot_swim: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -469,6 +477,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-sprint-fov".to_string())?;
                 parsed.shot_sprint = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-swim-water" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-swim-water".to_string())?;
+                parsed.shot_swim = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

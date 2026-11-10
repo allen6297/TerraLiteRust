@@ -21,8 +21,10 @@ pub enum Sound {
     StepWood,
     /// A quiet splash while the feet are in water.
     StepWater,
-    /// A splash when the body enters or leaves water.
+    /// A splash when the body enters water.
     Splash,
+    /// A quieter splash when the body leaves water.
+    SplashOut,
     /// A stroke while swimming. Slower and softer than a step.
     Swim,
     Break,
@@ -74,12 +76,28 @@ pub fn step_for(id: &str) -> Sound {
     Sound::Step
 }
 
-/// A splash on the frame the body enters or leaves water. Still water stays quiet.
-pub fn water_edge(was_wet: bool, wet: bool) -> Option<Sound> {
-    if wet == was_wet {
-        None
-    } else {
-        Some(Sound::Splash)
+/// Enter or leave a water body. Still water stays quiet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaterEdge {
+    Enter,
+    Exit,
+}
+
+/// A splash on the frame the body enters or leaves water.
+pub fn water_edge(was_wet: bool, wet: bool) -> Option<WaterEdge> {
+    match (was_wet, wet) {
+        (false, true) => Some(WaterEdge::Enter),
+        (true, false) => Some(WaterEdge::Exit),
+        _ => None,
+    }
+}
+
+impl WaterEdge {
+    pub fn sound(self) -> Sound {
+        match self {
+            Self::Enter => Sound::Splash,
+            Self::Exit => Sound::SplashOut,
+        }
     }
 }
 
@@ -321,6 +339,7 @@ impl Audio {
             Sound::StepWood => self.wood_wave.clone(),
             Sound::StepWater => self.water_wave.clone(),
             Sound::Splash => splash_wave(),
+            Sound::SplashOut => splash_out_wave(),
             Sound::Swim => swim_wave(),
             Sound::Break => self.break_wave.clone(),
             Sound::BreakCoal => self.coal_wave.clone(),
@@ -658,9 +677,16 @@ fn rain_hiss() -> Vec<i16> {
     samples
 }
 
-/// A splash. Louder and longer than a step in the water.
+/// Entering water. Louder and longer than a step or an exit splash.
 fn splash_wave() -> Vec<i16> {
-    noise_burst(0.22, 0.48, 23)
+    let mut wave = noise_burst(0.18, 0.62, 23);
+    wave.extend(noise_burst(0.14, 0.28, 29));
+    wave
+}
+
+/// Leaving water. Softer than the enter splash.
+fn splash_out_wave() -> Vec<i16> {
+    noise_burst(0.16, 0.32, 31)
 }
 
 /// A swim stroke. A soft noise, not a footstep tone.
@@ -937,12 +963,15 @@ mod tests {
 
     #[test]
     fn a_splash_marks_the_water_and_a_stroke_is_not_a_step() {
-        assert_eq!(water_edge(false, true), Some(Sound::Splash));
-        assert_eq!(water_edge(true, false), Some(Sound::Splash));
+        assert_eq!(water_edge(false, true), Some(WaterEdge::Enter));
+        assert_eq!(water_edge(true, false), Some(WaterEdge::Exit));
         assert!(water_edge(false, false).is_none());
         assert!(water_edge(true, true).is_none());
+        assert_eq!(WaterEdge::Enter.sound(), Sound::Splash);
+        assert_eq!(WaterEdge::Exit.sound(), Sound::SplashOut);
         let step = water_step();
         let splash = splash_wave();
+        let splash_out = splash_out_wave();
         let swim = swim_wave();
         let stone = stone_step();
         let peak = |wave: &[i16]| {
@@ -955,6 +984,10 @@ mod tests {
         assert!(
             peak(&splash) > peak(&step),
             "entering water is louder than a step"
+        );
+        assert!(
+            peak(&splash) > peak(&splash_out),
+            "entering is louder than leaving"
         );
         assert_ne!(swim, step);
         assert_ne!(swim, stone);

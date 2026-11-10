@@ -853,6 +853,15 @@ pub struct State {
     sprint_shot_eye: glam::Vec3,
     sprint_shot_yaw: f32,
     sprint_shot_pitch: f32,
+    /// One-shot dry shore vs underwater FOV/tint stitch, then quit.
+    swim_shot_path: Option<std::path::PathBuf>,
+    swim_shot_frames: u32,
+    swim_shot_phase: SwimShotPhase,
+    swim_shot_dry: Option<CapturedRgba>,
+    swim_shot_dry_eye: glam::Vec3,
+    swim_shot_wet_eye: glam::Vec3,
+    swim_shot_yaw: f32,
+    swim_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -911,6 +920,10 @@ pub struct State {
     horn_wait: f32,
     /// The body overlapped water on the previous tick.
     was_wet: bool,
+    /// `0` dry through `1` when the eye is underwater.
+    water_sub: f32,
+    /// Brief FOV punch on the splash that enters water.
+    splash_kick: f32,
     /// Seconds until the next rain patter while fog is up.
     rain_wait: f32,
     /// Seconds until a held mace can swing again.
@@ -1701,6 +1714,14 @@ impl State {
             sprint_shot_eye: glam::Vec3::ZERO,
             sprint_shot_yaw: 0.0,
             sprint_shot_pitch: 0.0,
+            swim_shot_path: None,
+            swim_shot_frames: 0,
+            swim_shot_phase: SwimShotPhase::Idle,
+            swim_shot_dry: None,
+            swim_shot_dry_eye: glam::Vec3::ZERO,
+            swim_shot_wet_eye: glam::Vec3::ZERO,
+            swim_shot_yaw: 0.0,
+            swim_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1732,6 +1753,8 @@ impl State {
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
+            water_sub: 0.0,
+            splash_kick: 0.0,
             rain_wait: 0.0,
             mace_wait: 0.0,
             omen: false,
@@ -5332,6 +5355,103 @@ impl State {
         }
     }
 
+    /// Dry shore FOV then underwater FOV/tint/veil from the pool edge, stitched side by side.
+    pub fn arm_swim_shot(&mut self, path: std::path::PathBuf) {
+        self.swim_shot_path = Some(path);
+        self.swim_shot_frames = 0;
+        self.swim_shot_phase = SwimShotPhase::WaitingDry;
+        self.swim_shot_dry = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        // Stone pier overlooking a deep pool.
+        for z in 8..=11 {
+            for x in 7..=9 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+            }
+        }
+        for z in 12..=18 {
+            for x in 6..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                for y in 1..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::new("water", 0),
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let dry_eye = glam::Vec3::new(8.5, 2.0 + body::EYE_HEIGHT, 10.7);
+        let wet_eye = glam::Vec3::new(8.5, 2.55, 15.2);
+        let target = glam::Vec3::new(8.5, 2.2, 17.5);
+        self.camera = Camera::looking_at(dry_eye, target);
+        self.camera.on_ground = true;
+        self.water_sub = 0.0;
+        self.splash_kick = 0.0;
+        self.was_wet = false;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.swim_shot_dry_eye = dry_eye;
+        self.swim_shot_wet_eye = wet_eye;
+        self.swim_shot_yaw = yaw;
+        self.swim_shot_pitch = pitch;
+        self.posed_eye = dry_eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_swim_shot_camera(&mut self) {
+        if self.swim_shot_path.is_none() {
+            return;
+        }
+        let eye = match self.swim_shot_phase {
+            SwimShotPhase::WaitingWet => {
+                self.water_sub = 1.0;
+                self.splash_kick = 0.35;
+                self.was_wet = true;
+                self.camera.on_ground = false;
+                self.swim_shot_wet_eye
+            }
+            SwimShotPhase::WaitingDry | SwimShotPhase::Idle => {
+                self.water_sub = 0.0;
+                self.splash_kick = 0.0;
+                self.was_wet = false;
+                self.camera.on_ground = true;
+                self.swim_shot_dry_eye
+            }
+        };
+        self.camera.restore(eye, self.swim_shot_yaw, self.swim_shot_pitch);
+        self.posed_eye = eye;
+        self.posed_yaw = self.swim_shot_yaw;
+        self.posed_pitch = self.swim_shot_pitch;
+        self.pose_dirty = true;
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -5565,6 +5685,75 @@ impl State {
                 }
             }
             SprintShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_swim_shot(&mut self) {
+        let Some(path) = self.swim_shot_path.clone() else {
+            return;
+        };
+        self.pin_swim_shot_camera();
+        self.swim_shot_frames = self.swim_shot_frames.saturating_add(1);
+        if self.swim_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.swim_shot_frames > 600 {
+                eprintln!("swim shot timed out");
+                self.swim_shot_path = None;
+                self.swim_shot_phase = SwimShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.swim_shot_phase {
+            SwimShotPhase::WaitingDry => match capture_window_rgba(&self.window) {
+                Ok(dry) => {
+                    self.swim_shot_dry = Some(dry);
+                    self.swim_shot_frames = 0;
+                    self.swim_shot_phase = SwimShotPhase::WaitingWet;
+                }
+                Err(err) => {
+                    eprintln!("swim dry capture failed: {err}");
+                    if self.swim_shot_frames > 400 {
+                        self.swim_shot_path = None;
+                        self.swim_shot_phase = SwimShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            SwimShotPhase::WaitingWet => {
+                let Some(dry) = self.swim_shot_dry.take() else {
+                    self.swim_shot_path = None;
+                    self.swim_shot_phase = SwimShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(wet) => match stitch_held_light_proof(&dry, &wet, &path) {
+                        Ok(()) => {
+                            eprintln!("swim shot wrote {}", path.display());
+                            self.swim_shot_path = None;
+                            self.swim_shot_phase = SwimShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("swim stitch failed: {err}");
+                            self.swim_shot_path = None;
+                            self.swim_shot_phase = SwimShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("swim wet capture failed: {err}");
+                        self.swim_shot_dry = Some(dry);
+                        if self.swim_shot_frames > 400 {
+                            self.swim_shot_path = None;
+                            self.swim_shot_phase = SwimShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            SwimShotPhase::Idle => {}
         }
     }
 
@@ -8048,6 +8237,8 @@ impl State {
         self.pose_left = 0.0;
         self.gui.push_chat("respawn");
         self.was_wet = false;
+        self.water_sub = 0.0;
+        self.splash_kick = 0.0;
         self.sync_pointer();
     }
 
@@ -8118,6 +8309,7 @@ impl State {
         self.sleep_fade = (self.sleep_fade - dt * 1.4).max(0.0);
         self.sip = (self.sip - dt * 1.8).max(0.0);
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
+        self.splash_kick = (self.splash_kick - dt * 5.0).max(0.0);
         self.bob_amount = (self.bob_amount - dt * 2.5).max(0.0);
         let crouch_goal = if self.input.crouch { 1.0 } else { 0.0 };
         self.crouch += (crouch_goal - self.crouch) * (dt * 10.0).min(1.0);
@@ -8151,6 +8343,7 @@ impl State {
         self.pin_night_spawn_shot_camera();
         self.pin_crouch_shot_camera();
         self.pin_sprint_shot_camera();
+        self.pin_swim_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -8299,15 +8492,26 @@ impl State {
             crate::body::HungerTick::None => {}
         }
         let wet = body::in_water(self.camera.eye, &self.world);
+        let submerged = body::eye_in_water(self.camera.eye, &self.world);
+        let water_goal = if submerged { 1.0 } else { 0.0 };
+        self.water_sub += (water_goal - self.water_sub) * (dt * 8.0).min(1.0);
         let aboard = self.boat.aboard() || self.pig.ridden();
         let feet = [
             self.camera.eye.x,
             self.camera.eye.y - body::EYE_HEIGHT,
             self.camera.eye.z,
         ];
-        let splashed = !aboard && crate::audio::water_edge(self.was_wet, wet).is_some();
-        if splashed {
-            self.play_world(crate::audio::Sound::Splash, feet);
+        let edge = if aboard {
+            None
+        } else {
+            crate::audio::water_edge(self.was_wet, wet)
+        };
+        let splashed = edge.is_some();
+        if let Some(edge) = edge {
+            self.play_world(edge.sound(), feet);
+            if matches!(edge, crate::audio::WaterEdge::Enter) {
+                self.splash_kick = 1.0;
+            }
         }
         self.was_wet = wet;
         let sneaking = self.input.crouch && self.camera.on_ground;
@@ -8692,10 +8896,12 @@ impl State {
         let aspect = self.size.width as f32 / self.size.height as f32;
         let base = crate::camera::look_fov(self.spyglass_zoomed());
         let bob_scale = self.menu.bob().scale();
+        let water_fov = (self.water_sub + self.splash_kick * 0.35).min(1.0);
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
             self.hit_kick * bob_scale,
+            water_fov,
         );
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
@@ -8775,13 +8981,12 @@ impl State {
         let time = self.clock.time_of_day();
         let mood = crate::daylight::fog_mood(time);
         let night = crate::daylight::night_fog(time);
-        let (fog_start, fog_end) = crate::daylight::fog_span(light.brightness, time);
-        let fog_eye = [eye[0], eye[1], eye[2], fog_start];
+        let (mut fog_start, mut fog_end) = crate::daylight::fog_span(light.brightness, time);
         let tint = rebuild_world::sky_tint(rebuild_world::biome_at(
             self.camera.eye.x.floor() as i32,
             self.camera.eye.z.floor() as i32,
         ));
-        let sky_rgb = crate::daylight::foggy(
+        let mut sky_rgb = crate::daylight::foggy(
             crate::daylight::foggy(
                 [
                     light.sky[0] * tint[0],
@@ -8794,7 +8999,7 @@ impl State {
             [0.012, 0.016, 0.04],
             night * 0.75,
         );
-        let horizon = crate::daylight::foggy(
+        let mut horizon = crate::daylight::foggy(
             crate::daylight::foggy(
                 [
                     light.horizon[0] * tint[0],
@@ -8807,6 +9012,19 @@ impl State {
             [0.012, 0.016, 0.04],
             night * 0.85,
         );
+        // Underwater: blue-green tint and a short fog so the pool reads as submerged.
+        let sub = self.water_sub.clamp(0.0, 1.0);
+        if sub > 0.0 {
+            let water_sky = [0.04, 0.22, 0.32];
+            let water_fog = [0.06, 0.28, 0.38];
+            for i in 0..3 {
+                sky_rgb[i] = sky_rgb[i] * (1.0 - sub) + water_sky[i] * sub;
+                horizon[i] = horizon[i] * (1.0 - sub) + water_fog[i] * sub;
+            }
+            fog_start = fog_start * (1.0 - sub) + 1.5 * sub;
+            fog_end = fog_end * (1.0 - sub) + 14.0 * sub;
+        }
+        let fog_eye = [eye[0], eye[1], eye[2], fog_start];
         let fog_color = [horizon[0], horizon[1], horizon[2], fog_end];
         self.queue
             .write_buffer(&self.uniform_buf, 352, bytes_of(&fog_eye));
@@ -9173,6 +9391,9 @@ impl State {
         if self.sprint_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sprint_quads(gui_w, gui_h, self.sprint_show));
         }
+        if self.water_sub > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::water_quads(gui_w, gui_h, self.water_sub));
+        }
         if self.sleep_fade > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sleep_quads(gui_w, gui_h, self.sleep_fade));
         }
@@ -9357,6 +9578,7 @@ impl State {
         self.poll_bed_sleep_shot();
         self.poll_crouch_shot();
         self.poll_sprint_shot();
+        self.poll_swim_shot();
     }
 }
 
@@ -9372,6 +9594,13 @@ enum SprintShotPhase {
     Idle,
     WaitingWalk,
     WaitingSprint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SwimShotPhase {
+    Idle,
+    WaitingDry,
+    WaitingWet,
 }
 
 struct CapturedRgba {

@@ -683,6 +683,14 @@ pub fn in_water(eye: Vec3, world: &Cluster) -> bool {
     overlaps_water(&player_box(eye, false), world)
 }
 
+/// True when the camera eye sits inside a water cell (fully submerged view).
+pub fn eye_in_water(eye: Vec3, world: &Cluster) -> bool {
+    let x = eye.x.floor() as i32;
+    let y = eye.y.floor() as i32;
+    let z = eye.z.floor() as i32;
+    (0..256).contains(&y) && world.block_at(x, y, z).id == "water"
+}
+
 /// The block the feet are on. Water at the soles wins over the floor beneath.
 pub fn ground_id(world: &Cluster, eye: Vec3) -> &'static str {
     let feet = feet_y(eye.y);
@@ -1234,6 +1242,24 @@ mod tests {
         assert_eq!(ground_id(&world, on(8.5)), "water");
         assert!(!in_water(on(2.5), &world));
         assert!(in_water(on(8.5), &world));
+    }
+
+    #[test]
+    fn eye_reads_submerged_only_inside_a_water_cell() {
+        let mut blocks = Vec::new();
+        for z in 0..4u8 {
+            for x in 0..4u8 {
+                blocks.push((x, 0, z, Block::new("stone", 0)));
+                for y in 1..4u16 {
+                    blocks.push((x, y, z, Block::new("water", 0)));
+                }
+            }
+        }
+        let world =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap();
+        assert!(eye_in_water(Vec3::new(1.5, 2.4, 1.5), &world));
+        assert!(!eye_in_water(Vec3::new(1.5, 4.2, 1.5), &world));
+        assert!(!eye_in_water(Vec3::new(1.5, 0.4, 1.5), &world));
     }
 
     #[test]

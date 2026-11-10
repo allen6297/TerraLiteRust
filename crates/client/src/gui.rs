@@ -5375,6 +5375,22 @@ pub fn hurt_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     ]
 }
 
+/// Cyan edge veil while the eye is underwater. `amount` is `0` dry through `1` submerged.
+pub fn water_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.02 || width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let band = 10.0 + 28.0 * amount;
+    let shade = [0.08, 0.28, 0.36];
+    vec![
+        pixel_quad(width, height, 0.0, height - band, width, height, shade),
+        pixel_quad(width, height, 0.0, 0.0, width, band, shade),
+        pixel_quad(width, height, 0.0, 0.0, band, height, shade),
+        pixel_quad(width, height, width - band, 0.0, width, height, shade),
+    ]
+}
+
 /// Dark edge veil after sleeping through the night. `amount` is `1` just woke through `0`.
 ///
 /// Opaque HUD quads have no alpha, so the wake cue closes in from the edges
@@ -7904,6 +7920,8 @@ mod tests {
         assert!(sprint_quads(200.0, 100.0, 1.0)
             .iter()
             .any(|quad| quad.color == WELL));
+        assert!(water_quads(200.0, 100.0, 0.0).is_empty());
+        assert_eq!(water_quads(200.0, 100.0, 1.0).len(), 4);
         assert_eq!(look_label("oak_log").as_deref(), Some("Oak Log"));
         assert_eq!(look_label("coal_ore").as_deref(), Some("Coal Ore"));
         assert_eq!(look_label("water").as_deref(), Some("Water"));
