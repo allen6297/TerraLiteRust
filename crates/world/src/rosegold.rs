@@ -1810,6 +1810,21 @@ fn register(
             .add_script_shaped(result, grid, source)
             .map_err(|err| format!("recipe.shaped: {err}"))?;
     }
+    for (result, input) in &found.smelts {
+        Pack::builtin()
+            .set_smelt_recipe(result, input, crate::pack::HeatStation::Furnace, source)
+            .map_err(|err| format!("recipe.smelt: {err}"))?;
+    }
+    for (result, input) in &found.smokes {
+        Pack::builtin()
+            .set_smelt_recipe(result, input, crate::pack::HeatStation::Smoker, source)
+            .map_err(|err| format!("recipe.smoke: {err}"))?;
+    }
+    for (result, input) in &found.blasts {
+        Pack::builtin()
+            .set_smelt_recipe(result, input, crate::pack::HeatStation::Blast, source)
+            .map_err(|err| format!("recipe.blast: {err}"))?;
+    }
     for (block, list) in &found.block_loots {
         let drops: Vec<&str> = list
             .split('+')

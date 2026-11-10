@@ -2,10 +2,12 @@
 //!
 //! Each file under `data/terralite/recipes` names one result and the items that
 //! make it. The Items screen lists those results and their ingredients.
+//! `data/terralite/smelting` registers furnace / smoker / blast cooks.
 
 use std::fs;
 use std::path::PathBuf;
 
+use rebuild_world::HeatStation;
 use serde_json::Value;
 
 pub fn recipes_dir() -> PathBuf {
@@ -13,6 +15,13 @@ pub fn recipes_dir() -> PathBuf {
         .join("data")
         .join("terralite")
         .join("recipes")
+}
+
+pub fn smelting_dir() -> PathBuf {
+    rebuild_world::data_pack_root()
+        .join("data")
+        .join("terralite")
+        .join("smelting")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,19 +45,28 @@ impl Recipe {
 }
 
 #[derive(Clone, Debug)]
+struct HeatLine {
+    result: String,
+    input: String,
+    station: HeatStation,
+}
+
+#[derive(Clone, Debug)]
 pub struct Book {
     recipes: Vec<Recipe>,
+    heats: Vec<HeatLine>,
 }
 
 impl Book {
     pub fn empty() -> Self {
         Self {
             recipes: Vec::new(),
+            heats: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.recipes.is_empty()
+        self.recipes.is_empty() && self.heats.is_empty()
     }
 
     /// Results and ingredients, sorted, each id once.
@@ -102,7 +120,35 @@ impl Book {
             }
             seen.push(recipe.result.clone());
         }
-        Ok(Self { recipes })
+        Ok(Self {
+            recipes,
+            heats: Vec::new(),
+        })
+    }
+
+    /// Furnace / smoker / blast cook. An existing input for that station stays.
+    pub fn add_heat(&mut self, result: String, input: String, station: HeatStation) {
+        if result.is_empty()
+            || input.is_empty()
+            || self
+                .heats
+                .iter()
+                .any(|line| line.input == input && line.station == station)
+        {
+            return;
+        }
+        self.heats.push(HeatLine {
+            result,
+            input,
+            station,
+        });
+    }
+
+    fn heat_of(&self, input: &str, station: HeatStation) -> Option<String> {
+        self.heats
+            .iter()
+            .find(|line| line.input == input && line.station == station)
+            .map(|line| line.result.clone())
     }
 
     /// Add a mod recipe. An existing result stays as it was.
@@ -173,7 +219,11 @@ impl Book {
 
     /// A one-ingredient stone or bricks line also cooks in the furnace.
     /// Stone cooks into smooth stone, stone bricks into cracked stone bricks, cobbled deepslate into polished deepslate, deepslate tiles into cracked deepslate tiles, blackstone bricks into cracked blackstone bricks, basalt or polished basalt into smooth basalt, nether bricks into cracked nether bricks, and netherrack into nether bricks, when those blocks are in the book.
+    /// Registered `recipe.smelt` / datapack smelting lines win first.
     pub fn smelt(&self, input: &str) -> Option<String> {
+        if let Some(result) = self.heat_of(input, HeatStation::Furnace) {
+            return Some(result);
+        }
         if input == "stone"
             && self
                 .recipes
@@ -250,12 +300,18 @@ impl Book {
 
     /// Food the smoker finishes. Stone and brick lines stay on the furnace.
     pub fn smoke(&self, input: &str) -> Option<String> {
+        if let Some(result) = self.heat_of(input, HeatStation::Smoker) {
+            return Some(result);
+        }
         let result = self.smelt(input)?;
         (result == "cooked").then_some(result)
     }
 
     /// Ore and stone the blast furnace finishes. Food and clay stay elsewhere.
     pub fn blast(&self, input: &str) -> Option<String> {
+        if let Some(result) = self.heat_of(input, HeatStation::Blast) {
+            return Some(result);
+        }
         let result = self.smelt(input)?;
         (result != "cooked" && result != "bricks").then_some(result)
     }
@@ -338,6 +394,7 @@ pub fn load_book() -> Result<Book, String> {
 /// Data-pack recipes plus `recipe.register` lines from loaded mods.
 pub fn load_emi() -> Result<Book, String> {
     let mut book = load_book()?;
+    load_smelting_into(&mut book)?;
     let pack = rebuild_world::Pack::builtin();
     let patterns = pack.script_patterns();
     for (result, ingredients) in pack.script_recipe_lines() {
@@ -347,7 +404,69 @@ pub fn load_emi() -> Result<Book, String> {
             book.add_line(result, ingredients);
         }
     }
+    for (result, input, station) in pack.script_smelt_lines() {
+        book.add_heat(result, input, station);
+    }
     Ok(book)
+}
+
+fn load_smelting_into(book: &mut Book) -> Result<(), String> {
+    let dir = smelting_dir();
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(&dir).map_err(|_| format!("unreadable {}", dir.display()))?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    for path in paths {
+        let text =
+            fs::read_to_string(&path).map_err(|_| format!("unreadable {}", path.display()))?;
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("smelt");
+        let (result, input, station) = parse_smelting(name, &text)?;
+        book.add_heat(result, input, station);
+    }
+    Ok(())
+}
+
+fn parse_smelting(id: &str, text: &str) -> Result<(String, String, HeatStation), String> {
+    let root: Value = serde_json::from_str(text).map_err(|err| format!("{id}.json: {err}"))?;
+    let obj = root
+        .as_object()
+        .ok_or_else(|| format!("{id}.json must be an object"))?;
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "result" | "ingredient" | "station") {
+            return Err(format!("{id}.json has unknown field {key}"));
+        }
+    }
+    let pack = rebuild_world::Pack::builtin();
+    let known = |item: &str| pack.contains_item(item) || pack.tool_icon(item).is_some();
+    let result = match obj.get("result").and_then(Value::as_str) {
+        Some(result) if known(result) => result.to_string(),
+        Some(result) => return Err(format!("{id}.json result {result} is unknown")),
+        None => return Err(format!("{id}.json needs a result")),
+    };
+    let input = match obj.get("ingredient").and_then(Value::as_str) {
+        Some(input) if known(input) => input.to_string(),
+        Some(input) => return Err(format!("{id}.json ingredient {input} is unknown")),
+        None => return Err(format!("{id}.json needs an ingredient")),
+    };
+    let station = match obj.get("station").and_then(Value::as_str).unwrap_or("furnace") {
+        "furnace" => HeatStation::Furnace,
+        "smoker" => HeatStation::Smoker,
+        "blast" | "blast_furnace" => HeatStation::Blast,
+        other => return Err(format!("{id}.json station {other} is unknown")),
+    };
+    Ok((result, input, station))
 }
 
 pub fn parse_recipe(id: &str, text: &str) -> Result<Recipe, String> {
@@ -1216,5 +1335,33 @@ mod tests {
         assert_eq!(book.detail("stone"), "cobblestone makes stone");
         assert!(book.uses_of("cobblestone").iter().any(|id| id == "stone"));
         assert!(book.pattern_of("stone").is_none());
+    }
+
+    #[test]
+    fn smelting_files_and_script_heats_cook_in_the_book() {
+        let book = load_emi().unwrap();
+        assert_eq!(book.smelt("sand").as_deref(), Some("glass"));
+        assert_eq!(book.blast("sand").as_deref(), Some("glass"));
+        assert!(book.smoke("sand").is_none());
+        let pack = rebuild_world::Pack::builtin();
+        pack.set_smelt_recipe(
+            "torch",
+            "dirt",
+            rebuild_world::HeatStation::Furnace,
+            "smelt-test",
+        )
+        .unwrap();
+        let cooked = load_emi().unwrap();
+        assert_eq!(cooked.smelt("dirt").as_deref(), Some("torch"));
+        pack.set_smelt_recipe(
+            "apple",
+            "wheat",
+            rebuild_world::HeatStation::Smoker,
+            "smelt-test",
+        )
+        .unwrap();
+        let smoked = load_emi().unwrap();
+        assert_eq!(smoked.smoke("wheat").as_deref(), Some("apple"));
+        assert!(smoked.smelt("wheat").is_none());
     }
 }

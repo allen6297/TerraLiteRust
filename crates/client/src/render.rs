@@ -7842,6 +7842,24 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Furnace cooking dirt → craft:paver from recipe.smelt, then quit with a PNG.
+    pub fn arm_smelt_recipe_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+        // Reload EMI so craft-story smelt lines are in the furnace book.
+        self.gui = crate::gui::Gui::new();
+        if self.gui.open_furnace() {
+            let _ = self.gui.give_furnace("dirt");
+            let _ = self.gui.on_press(winit::keyboard::KeyCode::ArrowRight);
+            let _ = self.gui.give_furnace("oak_log");
+            self.gui.stoke(1.0);
+        }
+        self.gui.push_chat("smelt: dirt to paver");
+        let _ = self.window.focus_window();
+    }
+
     /// Dirt break drops + camp chest seeded from loot tables, then quit with a PNG.
     pub fn arm_loot_hook_shot(&mut self, path: std::path::PathBuf) {
         self.creative_shot_path = Some(path);

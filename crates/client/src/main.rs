@@ -164,6 +164,8 @@ struct Args {
     shot_mod_recipe: Option<std::path::PathBuf>,
     /// Datapack / mod loot table demo, then quit.
     shot_loot: Option<std::path::PathBuf>,
+    /// Mod / datapack furnace smelt recipe demo, then quit.
+    shot_smelt: Option<std::path::PathBuf>,
     /// Rich item tooltips plate, then quit.
     shot_tips: Option<std::path::PathBuf>,
     /// Inventory PLAYER / CRAFT tab strip, then quit.
@@ -373,6 +375,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_emi: args.shot_emi,
         shot_mod_recipe: args.shot_mod_recipe,
         shot_loot: args.shot_loot,
+        shot_smelt: args.shot_smelt,
         shot_tips: args.shot_tips,
         shot_tabs: args.shot_tabs,
         shot_hud: args.shot_hud,
@@ -475,6 +478,7 @@ struct App {
     shot_emi: Option<std::path::PathBuf>,
     shot_mod_recipe: Option<std::path::PathBuf>,
     shot_loot: Option<std::path::PathBuf>,
+    shot_smelt: Option<std::path::PathBuf>,
     shot_tips: Option<std::path::PathBuf>,
     shot_tabs: Option<std::path::PathBuf>,
     shot_hud: Option<std::path::PathBuf>,
@@ -655,6 +659,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_loot.take() {
                     state.arm_loot_hook_shot(path);
+                }
+                if let Some(path) = self.shot_smelt.take() {
+                    state.arm_smelt_recipe_shot(path);
                 }
                 if let Some(path) = self.shot_tips.take() {
                     state.arm_tips_shot(path);
@@ -988,6 +995,7 @@ where
         shot_emi: None,
         shot_mod_recipe: None,
         shot_loot: None,
+        shot_smelt: None,
         shot_tips: None,
         shot_tabs: None,
         shot_hud: None,
@@ -1230,6 +1238,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-loot".to_string())?;
                 parsed.shot_loot = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-smelt" | "--shot-smelting" | "--shot-smelt-recipe" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-smelt".to_string())?;
+                parsed.shot_smelt = Some(std::path::PathBuf::from(value));
             }
             "--shot-tips" | "--shot-tooltips" | "--shot-rich-tips" => {
                 let value = iter

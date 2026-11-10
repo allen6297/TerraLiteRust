@@ -294,6 +294,21 @@ struct ScriptLoot {
     source: String,
 }
 
+/// Heat cook from `recipe.smelt` / `smoke` / `blast` or datapack smelting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeatStation {
+    Furnace,
+    Smoker,
+    Blast,
+}
+
+struct ScriptSmelt {
+    result: String,
+    input: String,
+    station: HeatStation,
+    source: String,
+}
+
 struct ScriptScreen {
     id: String,
     source: String,
@@ -332,6 +347,8 @@ struct ScriptRegistry {
     blocks: Vec<ScriptBlock>,
     items: Vec<ScriptItem>,
     recipes: Vec<ScriptRecipe>,
+    /// Furnace / smoker / blast lines from mods or datapack smelting.
+    smelts: Vec<ScriptSmelt>,
     /// Break drops from `loot.block`.
     block_loots: Vec<ScriptLoot>,
     /// Chest `drops` overrides from `loot.chest`.
@@ -660,6 +677,7 @@ impl Pack {
                 blocks: Vec::new(),
                 items: Vec::new(),
                 recipes: Vec::new(),
+                smelts: Vec::new(),
                 block_loots: Vec::new(),
                 chest_loots: Vec::new(),
                 screens: Vec::new(),
@@ -1565,6 +1583,61 @@ impl Pack {
             .iter()
             .find(|loot| loot.id == table)
             .map(|loot| loot.drops.clone())
+    }
+
+    /// Furnace / smoker / blast cook. Same input may exist once per station.
+    pub fn set_smelt_recipe(
+        &self,
+        result: &str,
+        input: &str,
+        station: HeatStation,
+        source: &str,
+    ) -> Result<(), String> {
+        if result.is_empty() || input.is_empty() {
+            return Err("smelt id is empty".into());
+        }
+        if result == input {
+            return Err(format!("smelt {result} uses itself"));
+        }
+        if !self.contains_item(result) && self.tool_icon(result).is_none() {
+            return Err(format!("unknown smelt result {result}"));
+        }
+        if !self.contains_item(input) && self.tool_icon(input).is_none() {
+            return Err(format!("unknown smelt input {input}"));
+        }
+        let entry = ScriptSmelt {
+            result: result.to_string(),
+            input: input.to_string(),
+            station,
+            source: source.to_string(),
+        };
+        let mut script = self.script.lock().expect("script registry");
+        if let Some(existing) = script
+            .smelts
+            .iter_mut()
+            .find(|line| line.input == input && line.station == station)
+        {
+            if existing.result == result && (source.is_empty() || existing.source == source) {
+                return Ok(());
+            }
+            if !source.is_empty() && existing.source == source {
+                *existing = entry;
+                return Ok(());
+            }
+            return Err(format!("duplicate smelt {input}"));
+        }
+        script.smelts.push(entry);
+        Ok(())
+    }
+
+    /// `(result, input, station)` cook lines from mods and datapack smelting.
+    pub fn script_smelt_lines(&self) -> Vec<(String, String, HeatStation)> {
+        let script = self.script.lock().expect("script registry");
+        script
+            .smelts
+            .iter()
+            .map(|line| (line.result.clone(), line.input.clone(), line.station))
+            .collect()
     }
 
     pub fn script_recipes(&self) -> Vec<(String, String)> {
@@ -3874,6 +3947,7 @@ impl Pack {
                 blocks: Vec::new(),
                 items: Vec::new(),
                 recipes: Vec::new(),
+                smelts: Vec::new(),
                 block_loots: Vec::new(),
                 chest_loots: Vec::new(),
                 screens: Vec::new(),

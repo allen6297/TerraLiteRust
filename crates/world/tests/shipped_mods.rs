@@ -49,6 +49,13 @@ fn shipped_mods_still_load_with_the_guide() {
             ][..]
         )
     );
+    assert!(
+        pack.script_smelt_lines().iter().any(|(result, input, station)| {
+            result == "craft:paver"
+                && input == "dirt"
+                && *station == rebuild_world::HeatStation::Furnace
+        })
+    );
     assert!(pack.contains_item("ember:ember"));
     assert!(pack.is_script_block_entity("ember:glow_brick"));
     assert!(pack.is_block_entity("ember:glow_brick"));

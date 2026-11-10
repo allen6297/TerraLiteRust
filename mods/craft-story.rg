@@ -1,6 +1,6 @@
-// Craft story: ModAPI recipes + loot tables (block break + chest override).
-// Playtest: break dirt → torch + apple; open camp chest → craft:paver first pick;
-// break grass → dirt + wheat_seeds (datapack loot/blocks/grass.json).
+// Craft story: ModAPI recipes, loot tables, and furnace smelting.
+// Playtest: furnace dirt + oak_log → craft:paver; datapack sand → glass;
+// break dirt → torch + apple; camp chest → paver-first; grass → dirt + seeds.
 
 import ModAPI;
 import Blocks;
@@ -33,11 +33,14 @@ fn on_init() {
     );
     Register.shaped(pole.id, "oak_log,,,oak_log,,,oak_log,,");
 
+    // Furnace: dirt cooks into craft:paver (blast also accepts non-brick results).
+    Register.smelt(paver.id, "dirt");
+
     // Mod loot: dirt break drops torch + apple; camp chest drops start with paver.
     Register.blockLoot("dirt", "torch+apple");
     Register.chestLoot("camp_chest", "craft:paver+torch+apple+map");
 
-    Mod.log("registered " + paver.id + " + " + pole.id + " recipes + loot");
+    Mod.log("registered " + paver.id + " + " + pole.id + " recipes + smelt + loot");
 }
 
 fn main(): Int {

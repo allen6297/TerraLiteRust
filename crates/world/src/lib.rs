@@ -88,11 +88,10 @@ pub use net::{
     occupied_cells, read_frame, valid_save_name, world_size_from_radius, write_frame,
 };
 pub use pack::{
-    BlockEntry, ItemDisplay, Light, Pack, ShapeEntry, asset_png, asset_text,
+    BlockEntry, HeatStation, ItemDisplay, Light, Pack, ShapeEntry, asset_png, asset_text,
     block_definitions_file, break_loot_of, data_pack_root, for_each_collider, harvest_of,
-    held_light_of,
-    light_of, load_data_pack, resource_pack_root, shape_of, shelf_facing, shelf_filled,
-    shelf_meta,
+    held_light_of, light_of, load_data_pack, resource_pack_root, shape_of, shelf_facing,
+    shelf_filled, shelf_meta,
 };
 pub use rebuild_rosegold::{GuiElement, GuiScreen, SettingOption};
 pub use region::{load_chunk_from_path, load_chunk_from_region};
