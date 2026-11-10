@@ -177,13 +177,14 @@ impl Drops {
         }
     }
 
-    /// Soft warm motes that drift near water at dusk. Capped so the air stays quiet.
+    /// Soft warm motes that drift in night meadows / forest clearings (and shores).
+    /// Capped so the air stays quiet.
     pub fn firefly(&mut self, origin: [f32; 3]) {
-        const MAX_FLIES: usize = 36;
+        const MAX_FLIES: usize = 48;
         if self.firefly_count() >= MAX_FLIES {
             return;
         }
-        // Warm yellow-green glow; block channel keeps them lit at dusk.
+        // Warm yellow-green glow; block channel keeps them lit at night.
         const FLIES: [([f32; 3], [f32; 3], [f32; 3], f32); 3] = [
             (
                 [0.12, 0.05, -0.08],
@@ -218,8 +219,25 @@ impl Drops {
             life,
             rise: false,
             hover: true,
-            half: 0.05,
+            // Tiny warm points — blink grows half in tick_motes.
+            half: 0.035,
         });
+    }
+
+    /// Dawn: snuff night fireflies quickly so they do not linger into day.
+    pub fn dawn_fireflies(&mut self, dt: f32) -> bool {
+        let mut any = false;
+        let fade = (dt * 3.2).max(0.0);
+        for mote in &mut self.motes {
+            if mote.hover && !mote.rise {
+                mote.life -= fade;
+                any = true;
+            }
+        }
+        if any {
+            self.motes.retain(|mote| mote.life > 0.0);
+        }
+        any
     }
 
     /// A red cork bobber that hovers on the water for a cast beat.
@@ -1131,6 +1149,18 @@ mod tests {
         assert!(drops.tick_motes(8.0));
         assert_eq!(drops.firefly_count(), 0);
         assert!(drops.vertices().is_empty());
+    }
+
+    #[test]
+    fn dawn_snuffs_fireflies_quickly() {
+        let mut drops = Drops::new();
+        drops.firefly([4.0, 2.0, 4.0]);
+        drops.firefly([5.0, 2.2, 5.0]);
+        assert_eq!(drops.firefly_count(), 2);
+        assert!(drops.dawn_fireflies(0.5));
+        assert!(drops.firefly_count() <= 2);
+        assert!(drops.dawn_fireflies(2.0));
+        assert_eq!(drops.firefly_count(), 0);
     }
 
     #[test]

@@ -11174,6 +11174,7 @@ impl State {
     }
 
     /// Dusk fireflies over a shore pool, then quit with a PNG.
+    /// Night meadow fireflies over grass, then quit with a PNG.
     pub fn arm_firefly_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -11184,24 +11185,43 @@ impl State {
         self.zombie.hold();
         self.night = crate::mobs::NightHorde::new();
         self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.pig = crate::mobs::Pig::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.cat = crate::mobs::Cat::new();
+        self.wolf = crate::mobs::Wolf::new();
+        self.bee = crate::mobs::Bee::new();
+        self.axolotl = crate::mobs::Axolotl::new();
+        self.parrot = crate::mobs::Parrot::new();
+        self.frog = crate::mobs::Frog::new();
         self.rebuild_zombie();
         self.rebuild_guests();
-        // Early night so fireflies read against a dark sky.
-        self.clock.set_time_of_day(0.88);
+        // Deep night so warm points read against a dark sky.
+        self.clock.set_time_of_day(0.92);
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.wind_mix = 0.15;
 
         let mut changes = Vec::new();
-        for z in 20..=28 {
-            for x in 6..=12 {
+        // Open plains meadow pad — grass + a few wheat stalks, no roof.
+        for z in 6..=16 {
+            for x in 4..=14 {
                 changes.push(CellChange {
                     x,
                     y: 0,
                     z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
                     block: Block::new("grass", 0),
                 });
-                for y in 1..=4 {
+                for y in 2..=6 {
                     changes.push(CellChange {
                         x,
                         y,
@@ -11211,64 +11231,95 @@ impl State {
                 }
             }
         }
-        for z in 22..=26 {
-            for x in 7..=11 {
-                changes.push(CellChange {
-                    x,
-                    y: 0,
-                    z,
-                    block: Block::new("stone", 0),
-                });
-                changes.push(CellChange {
-                    x,
-                    y: 1,
-                    z,
-                    block: Block::new("water", 0),
-                });
+        for z in 8..=14 {
+            for x in 6..=12 {
+                if (x + z) % 3 == 0 {
+                    changes.push(CellChange {
+                        x,
+                        y: 2,
+                        z,
+                        block: Block::new("wheat_crop", 2),
+                    });
+                }
             }
         }
         apply_changes(&mut self.world, &changes);
         for change in &changes {
             self.chunk_bake.touch(change.x, change.z);
         }
+        self.chunk_bake.queue_unmeshed(&self.world);
 
-        let shore = [9.5, 2.2, 24.5];
+        // Fresh mote pool — only fireflies for this PNG.
+        self.drops = crate::drops::Drops::new();
+        let meadow = [9.0, 2.4, 11.0];
         for offset in [
-            [0.0, 0.4, 0.0],
-            [1.2, 0.8, -0.5],
-            [-1.0, 1.0, 0.9],
-            [0.5, 1.3, 1.4],
-            [-0.7, 0.6, -1.2],
-            [1.5, 1.1, 0.3],
-            [-1.4, 0.9, -0.4],
-            [0.2, 1.6, -1.0],
-            [0.9, 0.5, 1.1],
-            [-0.3, 1.4, 0.2],
-            [1.1, 0.7, -1.3],
-            [-1.2, 1.2, 1.5],
+            [0.0, 0.35, 0.0],
+            [1.4, 0.7, -0.6],
+            [-1.2, 0.95, 0.8],
+            [0.6, 1.2, 1.5],
+            [-0.8, 0.55, -1.3],
+            [1.8, 1.0, 0.4],
+            [-1.6, 0.8, -0.5],
+            [0.3, 1.45, -1.1],
+            [1.1, 0.5, 1.2],
+            [-0.4, 1.3, 0.3],
+            [2.1, 0.65, -1.0],
+            [-2.0, 1.1, 1.4],
+            [0.9, 1.55, -0.2],
+            [-1.0, 0.45, 1.7],
+            [1.5, 1.25, 1.0],
+            [-0.2, 0.9, -1.6],
+            [0.5, 0.75, 0.6],
+            [-1.3, 1.35, -0.8],
+            [1.7, 1.1, -1.4],
+            [-0.6, 0.6, 1.3],
         ] {
             self.drops.firefly([
-                shore[0] + offset[0],
-                shore[1] + offset[1],
-                shore[2] + offset[2],
+                meadow[0] + offset[0],
+                meadow[1] + offset[1],
+                meadow[2] + offset[2],
             ]);
         }
         // Advance a beat so half/twinkle is mid-pulse for the PNG.
-        let _ = self.drops.tick_motes(0.35);
+        let _ = self.drops.tick_motes(0.45);
         self.rebuild_drops();
         self.found_fireflies = true;
+        self.found_embers = false;
+        self.found_sway = false;
+        self.found_rustle = false;
         self.dusk_show = 1.0;
-        self.axolotl.place_at([-20.0, 3.0, -20.0]);
-        self.bee.place_at([-20.0, 4.0, -20.0]);
-        self.rebuild_axolotl();
-        self.rebuild_bee();
+        self.note_shot_at = None;
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.cat_buf = None;
+        self.cat_count = 0;
+        self.wolf_buf = None;
+        self.wolf_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.axolotl_buf = None;
+        self.axolotl_count = 0;
+        self.parrot_buf = None;
+        self.parrot_count = 0;
+        self.frog_buf = None;
+        self.frog_count = 0;
         self.hotbar.install_saved(0, &[]);
         self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
         self.gui.push_chat("fireflies");
 
-        let eye = glam::Vec3::new(9.5, 1.0 + 1.8 + body::EYE_HEIGHT, 20.2);
-        let focus = glam::Vec3::new(9.5, 2.6, 24.5);
+        let eye = glam::Vec3::new(6.2, 2.1 + body::EYE_HEIGHT, 14.8);
+        let focus = glam::Vec3::new(9.2, 2.8, 10.5);
         self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;
         self.cook_shot_yaw = yaw;
@@ -14504,6 +14555,54 @@ impl State {
         self.posed_pitch = self.cook_shot_pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        if self.found_fireflies {
+            // Keep night meadow quiet: no roaming animals, no tip stack, dusk plate on.
+            self.clock.set_time_of_day(0.92);
+            self.dusk_show = 1.0;
+            self.rain_mix = 0.0;
+            let light = self.sun_light();
+            self.wanted_sun = light.direction;
+            self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+            self.sheep = crate::sheep::Sheep::new();
+            self.fox = crate::mobs::Fox::new();
+            self.pig = crate::mobs::Pig::new();
+            self.chicken = crate::mobs::Chicken::new();
+            self.cat = crate::mobs::Cat::new();
+            self.wolf = crate::mobs::Wolf::new();
+            self.bee = crate::mobs::Bee::new();
+            self.axolotl = crate::mobs::Axolotl::new();
+            self.parrot = crate::mobs::Parrot::new();
+            self.frog = crate::mobs::Frog::new();
+            self.goat = crate::mobs::Goat::new();
+            self.sheep_buf = None;
+            self.sheep_count = 0;
+            self.fox_buf = None;
+            self.fox_count = 0;
+            self.pig_buf = None;
+            self.pig_count = 0;
+            self.goat_buf = None;
+            self.goat_count = 0;
+            self.chicken_buf = None;
+            self.chicken_count = 0;
+            self.cat_buf = None;
+            self.cat_count = 0;
+            self.wolf_buf = None;
+            self.wolf_count = 0;
+            self.bee_buf = None;
+            self.bee_count = 0;
+            self.axolotl_buf = None;
+            self.axolotl_count = 0;
+            self.parrot_buf = None;
+            self.parrot_count = 0;
+            self.frog_buf = None;
+            self.frog_count = 0;
+            self.hotbar.install_saved(0, &[]);
+            self.hotbar_dirty = true;
+            self.gui.age_chat(60.0);
+            if self.cook_shot_frames % 30 == 0 {
+                self.gui.push_chat("fireflies");
+            }
+        }
     }
 
     fn poll_cook_shot(&mut self) {
@@ -14534,6 +14633,9 @@ impl State {
                     sz as f32 + 0.5,
                 ];
                 self.drops.straw(head);
+            } else if self.found_fireflies {
+                // Night meadow shot: keep the warm pool, do not inject camp smoke.
+                let _ = self.drops.tick_motes(0.08);
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
                 if self.found_embers {
@@ -20109,16 +20211,28 @@ impl State {
             self.found_gull = true;
             self.gui.push_chat("gull");
         }
-        // Dusk / night fireflies drift near open-sky water.
+        // Night meadow / forest fireflies (and shores). Dawn snuffs the pool.
+        let biome = rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32);
+        let meadow: f32 = match biome {
+            rebuild_world::Biome::Plains | rebuild_world::Biome::Forest => 0.95,
+            rebuild_world::Biome::Hills => 0.4,
+            rebuild_world::Biome::Marsh => 0.2,
+        };
+        let habitat = meadow.max(shore_mix);
         let firefly_mood = if sky_open {
-            (night * (1.0 - wet * 0.7) * shore_mix.max(0.35)).clamp(0.0, 1.0)
+            (night * (1.0 - wet * 0.75) * habitat).clamp(0.0, 1.0)
         } else {
             0.0
         };
+        if night < 0.18 && self.drops.firefly_count() > 0 {
+            if self.drops.dawn_fireflies(dt) {
+                self.rebuild_drops();
+            }
+        }
         if self.playing
             && !self.menu.is_open()
             && !self.dead
-            && firefly_mood > 0.25
+            && firefly_mood > 0.22
             && self.shadows_shot_path.is_none()
             && self.bounce_shot_path.is_none()
             && self.water_shot_path.is_none()
@@ -20127,27 +20241,37 @@ impl State {
             && self.grass_shot_path.is_none()
         {
             if self.firefly_wait <= 0.0 {
-                self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
-                let base = shore_at.unwrap_or([
-                    eye[0] + 1.2,
-                    eye[1] - 0.4,
-                    eye[2] + 0.8,
-                ]);
-                // A few offsets so a quiet shore fills without one hot spot.
-                let offsets = [
-                    [0.0, 0.6, 0.0],
-                    [1.4, 0.9, -0.6],
-                    [-1.1, 1.1, 1.0],
-                    [0.6, 1.4, 1.5],
-                    [-0.8, 0.7, -1.3],
-                ];
-                let n = 1 + ((firefly_mood * 3.0) as usize).min(2);
-                for offset in offsets.iter().take(n) {
-                    self.drops.firefly([
-                        base[0] + offset[0],
-                        base[1] + offset[1],
-                        base[2] + offset[2],
+                self.firefly_wait = 0.18 + (1.0 - firefly_mood) * 0.5;
+                // Scatter near the player over grass; shore wins when closer.
+                let base = shore_at
+                    .filter(|_| shore_mix > meadow * 0.55)
+                    .unwrap_or([
+                        eye[0],
+                        eye[1] - body::EYE_HEIGHT + 1.15,
+                        eye[2],
                     ]);
+                let offsets = [
+                    [0.0, 0.55, 0.0],
+                    [1.6, 0.85, -0.7],
+                    [-1.4, 1.05, 1.1],
+                    [0.7, 1.35, 1.7],
+                    [-0.9, 0.65, -1.5],
+                    [2.2, 0.95, 0.4],
+                    [-2.0, 1.15, -0.5],
+                    [1.1, 1.5, -1.8],
+                ];
+                let n = 1 + ((firefly_mood * 3.5) as usize).min(3);
+                let seed = ((eye[0] * 5.1 + eye[2] * 2.7 + self.clock.seconds()).abs() as usize)
+                    % offsets.len();
+                for i in 0..n {
+                    let offset = offsets[(seed + i * 3) % offsets.len()];
+                    let px = base[0] + offset[0];
+                    let pz = base[2] + offset[2];
+                    // Prefer open grass tops when the column is clear.
+                    let py = rain_hit_surface(&self.world, px, pz, eye[1])
+                        .map(|y| y + 0.35 + offset[1].abs().min(0.9))
+                        .unwrap_or(base[1] + offset[1]);
+                    self.drops.firefly([px, py, pz]);
                 }
                 self.rebuild_drops();
                 if !self.found_fireflies && self.drops.firefly_count() > 0 {
