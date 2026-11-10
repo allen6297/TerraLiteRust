@@ -9,7 +9,8 @@
 use glam::Vec3;
 use rebuild_world::{
     Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts_meta, compound_host,
-    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, shape_of,
+    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, is_lamp, lamp_on,
+    shape_of,
 };
 
 use crate::look;
@@ -81,6 +82,10 @@ pub fn selection_lines(
 }
 
 fn outline_color(held: Option<&str>, host_id: &str, metadata: u8, fill: u8) -> [f32; 3] {
+    // Lit lamps read amber even with empty hand so powered state is obvious.
+    if is_lamp(host_id) && lamp_on(metadata) {
+        return AMBER;
+    }
     let Some(held) = held else {
         return WHITE;
     };
@@ -99,6 +104,9 @@ fn outline_color(held: Option<&str>, host_id: &str, metadata: u8, fill: u8) -> [
         "ember" => FILL_EMBER,
         _ => return WHITE,
     };
+    if is_lamp(host_id) && want == FILL_EMBER {
+        return AMBER;
+    }
     if !compound_accepts_meta(host_id, metadata, want) {
         return WHITE;
     }

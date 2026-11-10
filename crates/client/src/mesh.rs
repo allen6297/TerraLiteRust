@@ -42,7 +42,7 @@ use std::collections::{HashMap, HashSet};
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
     Plane, Shape, buffer_level, buffer_max, compound_accepts, conduit_edge_tube, conduit_fill_span,
-    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, shape_of,
+    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, is_lamp, lamp_on, shape_of,
 };
 
 use crate::daylight;
@@ -1572,6 +1572,24 @@ fn mesh_partial_shapes(
                     }
                     if let Some((fill, boxes)) = buffer_fill_boxes(block) {
                         let fill_shape = Shape::from_boxes(&boxes);
+                        mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                    }
+                    continue;
+                }
+                if is_lamp(block.id) {
+                    let shape = shape_of(block);
+                    if !shape.is_empty() {
+                        mesh_cell(block, shape, cell, sample, light, sun, mesh);
+                        if !shape.faces().is_empty() {
+                            mesh_faces(block, shape, cell, sample, light, sun, mesh);
+                        }
+                    }
+                    if lamp_on(block.metadata) {
+                        let fill = Block::new("magma", 0);
+                        let fill_shape = Shape::from_boxes(&[CellBox {
+                            min: [5, 3, 5],
+                            max: [11, 11, 11],
+                        }]);
                         mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
                     }
                     continue;

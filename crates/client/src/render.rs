@@ -7498,11 +7498,11 @@ impl State {
             let _ = self.hotbar.give_stack("ember_charge");
             (
                 glam::Vec3::new(
-                    (gx + 2) as f32 + 0.5,
-                    gy as f32 + 2.15 + body::EYE_HEIGHT,
-                    gz as f32 - 2.7,
+                    (gx + 1) as f32 + 0.2,
+                    gy as f32 + 2.05 + body::EYE_HEIGHT,
+                    gz as f32 - 2.5,
                 ),
-                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.65, gz as f32 + 0.5),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.7, gz as f32 + 0.45),
             )
         } else if battery_shot {
             let _ = self.hotbar.select_digit(1);
