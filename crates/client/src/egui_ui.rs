@@ -112,8 +112,27 @@ pub struct DeathView {
     /// Short line: `bed`, `anchor`, or `world spawn`.
     pub spawn: &'static str,
 }
+
+/// Fullscreen held-map overlay (explored terrain + player / landmark marks).
+#[derive(Clone, Debug)]
+pub struct MapView {
+    pub colors: Vec<[f32; 3]>,
+    pub span: usize,
+    pub yaw: f32,
+    pub zoom: u8,
+    pub camp: Option<(usize, usize)>,
+    pub mine: Option<(usize, usize)>,
+    pub stairs: Option<(usize, usize)>,
+    pub shrine: Option<(usize, usize)>,
+    pub clay: Option<(usize, usize)>,
+    pub note: String,
+}
+
 const TIP_EDGE: Color32 = Color32::from_rgb(237, 199, 107);
 const DETAIL: Color32 = Color32::from_rgb(255, 235, 140);
+const MAP_PAPER: Color32 = Color32::from_rgb(41, 33, 23);
+const MAP_INK: Color32 = Color32::from_rgb(237, 230, 209);
+const MAP_TEX_KEY: &str = "__held_map_overlay__";
 
 pub struct EguiHost {
     ctx: Context,
@@ -169,14 +188,15 @@ impl EguiHost {
     }
 
     /// True when egui should own pointer/keyboard instead of the world.
-    pub fn wants_input(menu: &Menu, gui: &Gui, dead: bool) -> bool {
-        dead || menu.is_open() || gui.bag_open() || gui.player_inv_open()
+    pub fn wants_input(menu: &Menu, gui: &Gui, dead: bool, map_open: bool) -> bool {
+        dead || menu.is_open() || gui.bag_open() || gui.player_inv_open() || map_open
     }
 
     /// Build menus for this frame. Returns tessellated output ready to paint.
     ///
     /// `death` is `Some` while survival health is zero — dark overlay with
     /// Respawn / Title / Quit. Creative never reaches this path.
+    /// `map` is `Some` while a held map sheet is open (use / M).
     pub fn run(
         &mut self,
         window: &Window,
@@ -187,11 +207,13 @@ impl EguiHost {
         armor: &mut Armor,
         binds: &mut Keybinds,
         death: Option<DeathView>,
+        map: Option<MapView>,
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
         let mut touched = false;
         let icons = &mut self.icons;
+        let map_view = map;
         let output = self.ctx.run_ui(raw, |ui| {
             apply_theme(ui.ctx());
             if let Some(view) = death {
@@ -204,6 +226,8 @@ impl EguiHost {
             } else if gui.player_inv_open() {
                 touched = draw_player_inventory(ui, gui, hotbar, bag, armor, icons);
                 draw_pinned_tip(ui, gui);
+            } else if let Some(view) = map_view.as_ref() {
+                draw_map_overlay(ui, view, icons);
             }
         });
         self.pending = pending;
@@ -440,6 +464,169 @@ fn draw_death(ui: &mut Ui, view: DeathView) -> MenuAction {
             });
         });
     action
+}
+
+fn rgb_u8(c: [f32; 3]) -> Color32 {
+    Color32::from_rgb(
+        (c[0].clamp(0.0, 1.0) * 255.0) as u8,
+        (c[1].clamp(0.0, 1.0) * 255.0) as u8,
+        (c[2].clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+
+fn map_overlay_texture(
+    ctx: &Context,
+    icons: &mut HashMap<String, TextureHandle>,
+    view: &MapView,
+) -> TextureId {
+    let span = view.span.max(1);
+    let mut rgba = vec![0u8; span * span * 4];
+    for (i, color) in view.colors.iter().take(span * span).enumerate() {
+        let o = i * 4;
+        rgba[o] = (color[0].clamp(0.0, 1.0) * 255.0) as u8;
+        rgba[o + 1] = (color[1].clamp(0.0, 1.0) * 255.0) as u8;
+        rgba[o + 2] = (color[2].clamp(0.0, 1.0) * 255.0) as u8;
+        rgba[o + 3] = 255;
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied([span, span], &rgba);
+    if let Some(handle) = icons.get_mut(MAP_TEX_KEY) {
+        handle.set(image, TextureOptions::NEAREST);
+        return handle.id();
+    }
+    let handle = ctx.load_texture(MAP_TEX_KEY, image, TextureOptions::NEAREST);
+    let id = handle.id();
+    icons.insert(MAP_TEX_KEY.to_string(), handle);
+    id
+}
+
+fn draw_map_overlay(ui: &mut Ui, view: &MapView, icons: &mut HashMap<String, TextureHandle>) {
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                let avail = ui.available_size();
+                let panel_w = (avail.x * 0.78).clamp(420.0, 860.0);
+                let panel_h = (avail.y * 0.86).clamp(380.0, 720.0);
+                ui.add_space(((avail.y - panel_h) * 0.5).max(8.0));
+                Frame::new()
+                    .fill(LIP)
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin {
+                        left: 1,
+                        right: 1,
+                        top: 3,
+                        bottom: 1,
+                    })
+                    .show(ui, |ui| {
+                        Frame::new()
+                            .fill(MAP_PAPER)
+                            .stroke(Stroke::new(1.0, SLOT_EDGE))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::symmetric(18, 14))
+                            .show(ui, |ui| {
+                                ui.set_width(panel_w);
+                                ui.set_min_height(panel_h);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("Map")
+                                            .font(FontId::proportional(22.0))
+                                            .color(MAP_INK)
+                                            .strong(),
+                                    );
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        let zoom = match view.zoom {
+                                            0 => "near",
+                                            1 => "wide",
+                                            _ => "far",
+                                        };
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{zoom} · Esc / M close · scroll zoom"
+                                            ))
+                                            .size(13.0)
+                                            .color(MUTED),
+                                        );
+                                    });
+                                });
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(&view.note).size(13.0).color(MAP_INK),
+                                );
+                                ui.add_space(8.0);
+                                let grid = (panel_w - 36.0)
+                                    .min(panel_h - 110.0)
+                                    .max(240.0);
+                                let (rect, _resp) = ui.allocate_exact_size(
+                                    Vec2::splat(grid),
+                                    Sense::hover(),
+                                );
+                                let tex = map_overlay_texture(ui.ctx(), icons, view);
+                                ui.painter().image(
+                                    tex,
+                                    rect,
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(1.0, 1.0),
+                                    ),
+                                    Color32::WHITE,
+                                );
+                                let span = view.span.max(1) as f32;
+                                let cell_px = rect.width() / span;
+                                let mark_at = |cell_xy: (usize, usize)| {
+                                    let (row, col) = cell_xy;
+                                    egui::pos2(
+                                        rect.min.x + (col as f32 + 0.5) * cell_px,
+                                        rect.min.y + (row as f32 + 0.5) * cell_px,
+                                    )
+                                };
+                                let paint_dot = |at: egui::Pos2, color: Color32, r: f32| {
+                                    ui.painter().circle_filled(at, r, color);
+                                    ui.painter().circle_stroke(
+                                        at,
+                                        r,
+                                        Stroke::new(1.0, Color32::from_black_alpha(120)),
+                                    );
+                                };
+                                let mark_r = cell_px * 0.28;
+                                if let Some(at) = view.stairs {
+                                    if at != (view.span / 2, view.span / 2) {
+                                        paint_dot(mark_at(at), rgb_u8(crate::map::STAIRS_RGB), mark_r);
+                                    }
+                                }
+                                if let Some(at) = view.mine {
+                                    paint_dot(mark_at(at), rgb_u8(crate::map::MINE_RGB), mark_r);
+                                }
+                                if let Some(at) = view.camp {
+                                    paint_dot(mark_at(at), rgb_u8(crate::map::CAMP_RGB), mark_r);
+                                }
+                                if let Some(at) = view.shrine {
+                                    paint_dot(mark_at(at), rgb_u8(crate::map::SHRINE_RGB), mark_r);
+                                }
+                                if let Some(at) = view.clay {
+                                    if at != (view.span / 2, view.span / 2) {
+                                        paint_dot(mark_at(at), rgb_u8(crate::map::CLAY_RGB), mark_r);
+                                    }
+                                }
+                                let center = rect.center();
+                                paint_dot(center, rgb_u8(crate::map::MARK_RGB), cell_px * 0.32);
+                                let (sin, cos) = view.yaw.sin_cos();
+                                let reach = cell_px * 0.9;
+                                let tip = egui::pos2(
+                                    center.x + cos * reach,
+                                    center.y - sin * reach,
+                                );
+                                paint_dot(tip, rgb_u8(crate::map::FACING_RGB), cell_px * 0.22);
+                                ui.painter().text(
+                                    egui::pos2(rect.center().x, rect.min.y - 4.0),
+                                    Align2::CENTER_BOTTOM,
+                                    "N",
+                                    FontId::proportional(16.0),
+                                    MAP_INK,
+                                );
+                            });
+                    });
+            });
+        });
 }
 
 fn draw_menu(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuAction {

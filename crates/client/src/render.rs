@@ -5381,6 +5381,77 @@ impl State {
             .is_some_and(|id| Pack::builtin().is_map(id))
     }
 
+    /// Sample explored terrain + landmark cells for the egui fullscreen sheet.
+    fn held_map_view(&self) -> crate::egui_ui::MapView {
+        let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+        let zoom = self.hotbar.map_zoom();
+        let span = crate::map::OVERLAY;
+        let colors = crate::map::sample_span(&self.world, eye, zoom, span);
+        let (yaw, _) = self.camera.yaw_pitch();
+        let camp = crate::map::cell_of(
+            eye[0],
+            eye[2],
+            zoom,
+            span,
+            rebuild_world::CAMP_FIRE.0,
+            rebuild_world::CAMP_FIRE.1,
+        );
+        let mine = crate::map::cell_of(
+            eye[0],
+            eye[2],
+            zoom,
+            span,
+            rebuild_world::SHAFT_MOUTH.0,
+            rebuild_world::SHAFT_MOUTH.1,
+        );
+        let stairs = crate::map::cell_of(
+            eye[0],
+            eye[2],
+            zoom,
+            span,
+            crate::camera::STAIRS_XZ[0].floor() as i32,
+            crate::camera::STAIRS_XZ[1].floor() as i32,
+        );
+        let shrine = crate::map::cell_of(
+            eye[0],
+            eye[2],
+            zoom,
+            span,
+            rebuild_world::SHRINE.0,
+            rebuild_world::SHRINE.1,
+        );
+        let clay = crate::map::cell_of(
+            eye[0],
+            eye[2],
+            zoom,
+            span,
+            rebuild_world::CLAY_BANK.0,
+            rebuild_world::CLAY_BANK.1,
+        );
+        let half = (span / 2, span / 2);
+        let stairs_shown = stairs.is_some_and(|cell| cell != half);
+        let clay_shown = clay.is_some_and(|cell| cell != half);
+        let note = crate::map::map_note(
+            camp.is_some(),
+            mine.is_some(),
+            stairs_shown,
+            shrine.is_some(),
+            clay_shown,
+        );
+        crate::egui_ui::MapView {
+            colors,
+            span,
+            yaw,
+            zoom,
+            camp,
+            mine,
+            stairs,
+            shrine,
+            clay,
+            note,
+        }
+    }
+
     fn looking_at_use(&self) -> bool {
         let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
             return false;
@@ -16401,6 +16472,63 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Held map egui overlay (cartography-widened), then quit with a PNG.
+    pub fn arm_held_map_overlay_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 1));
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_mine = true;
+        self.found_shrine = true;
+        self.found_clay = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("map");
+
+        let eye = glam::Vec3::new(8.5, 3.0 + body::EYE_HEIGHT, 8.5);
+        let yaw = -std::f32::consts::FRAC_PI_2; // look north
+        self.camera.restore(eye, yaw, -0.15);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("map");
+        let _ = self.hotbar.chart_map();
+        self.hotbar_dirty = true;
+        self.map_open = true;
+        self.clear_motion();
+        self.set_capture(false);
+
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = -0.15;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = -0.15;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(dx * 8, dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Look at the marsh clay bank under water, then quit with a PNG.
     pub fn arm_clay_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -19750,7 +19878,8 @@ impl State {
     }
 
     /// Forward a winit event to egui. True when the game should ignore it.
-    /// Escape is never blocked so pause / creative / items can still close.
+    /// Escape is never blocked so pause / creative / items / map can still close.
+    /// While the map sheet is open, scroll zoom and M also reach the game.
     /// While a keybind is listening, keyboard and mouse reach `set_key` / `set_mouse`.
     pub fn egui_on_event(&mut self, event: &winit::event::WindowEvent) -> bool {
         if self.menu.is_keybinds() && self.binds.listening.is_some() {
@@ -19762,18 +19891,30 @@ impl State {
             );
         }
         let consumed = self.egui.on_window_event(&self.window, event);
-        if !consumed || !crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui, self.dead)
+        if !consumed
+            || !crate::egui_ui::EguiHost::wants_input(
+                &self.menu,
+                &self.gui,
+                self.dead,
+                self.map_open,
+            )
         {
             return false;
         }
-        !matches!(
-            event,
-            winit::event::WindowEvent::KeyboardInput {
-                event: key,
-                ..
-            } if key.state == winit::event::ElementState::Pressed
-                && matches!(key.physical_key, winit::keyboard::PhysicalKey::Code(KeyCode::Escape))
-        )
+        let pass_through = match event {
+            winit::event::WindowEvent::KeyboardInput { event: key, .. }
+                if key.state == winit::event::ElementState::Pressed =>
+            {
+                match key.physical_key {
+                    winit::keyboard::PhysicalKey::Code(KeyCode::Escape) => true,
+                    winit::keyboard::PhysicalKey::Code(KeyCode::KeyM) if self.map_open => true,
+                    _ => false,
+                }
+            }
+            winit::event::WindowEvent::MouseWheel { .. } if self.map_open => true,
+            _ => false,
+        };
+        !pass_through
     }
 
     pub fn is_dead(&self) -> bool {
@@ -19864,6 +20005,12 @@ impl State {
             return;
         }
         if self.map_open {
+            if pressed && code == KeyCode::KeyM {
+                self.map_open = false;
+                self.clear_motion();
+                self.sync_pointer();
+                return;
+            }
             self.clear_motion();
             return;
         }
@@ -20393,6 +20540,11 @@ impl State {
                         self.gui.push_chat(&word);
                     }
                 }
+            }
+            KeyCode::KeyM if pressed && self.playing && self.holding_map() => {
+                self.map_open = true;
+                self.clear_motion();
+                self.set_capture(false);
             }
             KeyCode::KeyT if pressed && self.playing => {
                 if self.gui.open_chat() {
@@ -24573,55 +24725,8 @@ impl State {
             self.map_open = false;
             self.sync_pointer();
         }
-        if self.map_open && !self.menu.is_open() {
-            let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
-            let zoom = self.hotbar.map_zoom();
-            let colors = crate::map::sample_span(&self.world, eye, zoom, crate::map::SHEET);
-            let (yaw, _) = self.camera.yaw_pitch();
-            let camp = crate::map::cell_of(
-                eye[0],
-                eye[2],
-                zoom,
-                crate::map::SHEET,
-                rebuild_world::CAMP_FIRE.0,
-                rebuild_world::CAMP_FIRE.1,
-            );
-            let mine = crate::map::cell_of(
-                eye[0],
-                eye[2],
-                zoom,
-                crate::map::SHEET,
-                rebuild_world::SHAFT_MOUTH.0,
-                rebuild_world::SHAFT_MOUTH.1,
-            );
-            let stairs = crate::map::cell_of(
-                eye[0],
-                eye[2],
-                zoom,
-                crate::map::SHEET,
-                crate::camera::STAIRS_XZ[0].floor() as i32,
-                crate::camera::STAIRS_XZ[1].floor() as i32,
-            );
-            let shrine = crate::map::cell_of(
-                eye[0],
-                eye[2],
-                zoom,
-                crate::map::SHEET,
-                rebuild_world::SHRINE.0,
-                rebuild_world::SHRINE.1,
-            );
-            let clay = crate::map::cell_of(
-                eye[0],
-                eye[2],
-                zoom,
-                crate::map::SHEET,
-                rebuild_world::CLAY_BANK.0,
-                rebuild_world::CLAY_BANK.1,
-            );
-            quads.extend(crate::map::sheet_quads(
-                gui_w, gui_h, &colors, yaw, camp, mine, stairs, shrine, clay,
-            ));
-        } else if self.holding_map() && !self.menu.is_open() {
+        // Fullscreen sheet draws through egui (`MapView`); corner glance stays quads.
+        if self.holding_map() && !self.map_open && !self.menu.is_open() {
             let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
             let colors = crate::map::sample_at(&self.world, eye, self.hotbar.map_zoom());
             let (yaw, _) = self.camera.yaw_pitch();
@@ -24681,8 +24786,15 @@ impl State {
             pass.draw_indexed(0..ui_indices.len() as u32, 0, 0..1);
         }
 
-        if crate::egui_ui::EguiHost::wants_input(&self.menu, &self.gui, self.dead) {
+        if crate::egui_ui::EguiHost::wants_input(
+            &self.menu,
+            &self.gui,
+            self.dead,
+            self.map_open,
+        ) {
             let death = self.dead.then(|| self.death_view());
+            let map = (!self.dead && !self.menu.is_open() && !self.gui.is_open() && self.map_open)
+                .then(|| self.held_map_view());
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -24692,6 +24804,7 @@ impl State {
                 &mut self.armor,
                 &mut self.binds,
                 death,
+                map,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();

@@ -1,8 +1,9 @@
 //! A held map: a small north-up patch, and a full sheet you open to read.
 //!
-//! The corner chart stays a glance. Right-click opens the sheet: a larger
-//! north-up page, with you in the middle, north labeled, and the camp, mine,
-//! stairs, southeast shrine, and marsh clay bank marked when they fall on the page.
+//! The corner chart stays a glance. Right-click or M opens the sheet: a larger
+//! north-up page (egui overlay), with you in the middle, north labeled, and the
+//! camp, mine, stairs, southeast shrine, and marsh clay bank marked when they
+//! fall on the page. Cartography widen steps the same zoom the overlay samples.
 
 use rebuild_world::{Block, Cluster};
 
@@ -12,8 +13,10 @@ use crate::palette;
 
 /// Cells on a side of the corner chart. The player stands in the middle.
 pub const SPAN: usize = 9;
-/// Cells on a side of the sheet you open to read.
+/// Cells on a side of the legacy sheet path (kept for tests / glance parity).
 pub const SHEET: usize = 21;
+/// Cells on a side of the egui fullscreen overlay.
+pub const OVERLAY: usize = 31;
 /// Widest chart. Each step doubles the blocks one cell covers.
 pub const ZOOM_MAX: u8 = 2;
 
@@ -34,6 +37,15 @@ const CLAY: [f32; 3] = [0.20, 0.72, 0.78];
 const PAPER: [f32; 3] = [0.16, 0.13, 0.09];
 const INK: [f32; 3] = [0.93, 0.90, 0.82];
 const BACK: [f32; 3] = [0.04, 0.05, 0.06];
+
+/// Player mark / facing / landmark colors shared with the egui overlay.
+pub const MARK_RGB: [f32; 3] = MARK;
+pub const FACING_RGB: [f32; 3] = FACING;
+pub const CAMP_RGB: [f32; 3] = CAMP;
+pub const MINE_RGB: [f32; 3] = MINE;
+pub const STAIRS_RGB: [f32; 3] = STAIRS;
+pub const SHRINE_RGB: [f32; 3] = SHRINE;
+pub const CLAY_RGB: [f32; 3] = CLAY;
 
 /// The highest solid block in the column, or air when the column is empty.
 fn ground(world: &Cluster, x: i32, z: i32, feet_y: f32) -> Block {
@@ -310,7 +322,8 @@ pub fn sheet_quads(
     quads
 }
 
-fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool, clay: bool) -> String {
+/// Legend line for the open sheet / egui overlay.
+pub fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool, clay: bool) -> String {
     let mut bits = Vec::with_capacity(7);
     bits.push("you white");
     if camp {
@@ -448,18 +461,19 @@ mod tests {
         let tick = sheet.iter().find(|quad| quad.color == FACING).unwrap();
         assert!(tick.max[0] > mark.max[0], "yaw 0 looks east");
         assert!(sheet_quads(0.0, 600.0, &colors, 0.0, None, None, None, None, None).is_empty());
-        assert_eq!(sample_span_len(), SHEET * SHEET);
+        assert_eq!(sample_span_len(SHEET), SHEET * SHEET);
+        assert_eq!(sample_span_len(OVERLAY), OVERLAY * OVERLAY);
         assert!(map_note(true, false, false, true, false).contains("shrine green"));
         assert!(map_note(false, false, false, false, true).contains("clay teal"));
     }
 
-    fn sample_span_len() -> usize {
+    fn sample_span_len(span: usize) -> usize {
         let world = Cluster::try_from_chunks(
             0,
             0,
             [Chunk::from_blocks(0, 0, [(8u8, 0u16, 8u8, Block::new("stone", 0))]).unwrap()],
         )
         .unwrap();
-        sample_span(&world, [8.5, 1.0 + EYE_HEIGHT, 8.5], 0, SHEET).len()
+        sample_span(&world, [8.5, 1.0 + EYE_HEIGHT, 8.5], 0, span).len()
     }
 }

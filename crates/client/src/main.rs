@@ -226,6 +226,8 @@ struct Args {
     shot_elytra_glide: Option<std::path::PathBuf>,
     /// Crossbow load/fire bolt shot, then quit.
     shot_crossbow_fire: Option<std::path::PathBuf>,
+    /// Held map egui overlay (cartography widen), then quit.
+    shot_held_map_overlay: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -484,6 +486,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_offhand_slot: args.shot_offhand_slot,
         shot_elytra_glide: args.shot_elytra_glide,
         shot_crossbow_fire: args.shot_crossbow_fire,
+        shot_held_map_overlay: args.shot_held_map_overlay,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -620,6 +623,7 @@ struct App {
     shot_offhand_slot: Option<std::path::PathBuf>,
     shot_elytra_glide: Option<std::path::PathBuf>,
     shot_crossbow_fire: Option<std::path::PathBuf>,
+    shot_held_map_overlay: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -893,6 +897,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_crossbow_fire.take() {
                     state.arm_crossbow_fire_shot(path);
+                }
+                if let Some(path) = self.shot_held_map_overlay.take() {
+                    state.arm_held_map_overlay_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1259,6 +1266,7 @@ where
         shot_offhand_slot: None,
         shot_elytra_glide: None,
         shot_crossbow_fire: None,
+        shot_held_map_overlay: None,
         name: None,
         host: false,
         join: false,
@@ -1677,6 +1685,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-crossbow-fire".to_string())?;
                 parsed.shot_crossbow_fire = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-held-map-overlay" | "--shot-held-map" | "--shot-map-overlay" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-held-map-overlay".to_string())?;
+                parsed.shot_held_map_overlay = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2271,6 +2285,17 @@ mod tests {
         assert_eq!(
             args.shot_crossbow_fire.as_deref(),
             Some(std::path::Path::new("crossbow-fire.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-held-map-overlay".into(),
+            "held-map-overlay.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_held_map_overlay.as_deref(),
+            Some(std::path::Path::new("held-map-overlay.png"))
         );
     }
 }
