@@ -657,6 +657,8 @@ pub struct Gui {
     emi_query: String,
     /// Selected EMI item id. `None` hides CRAFTING / USES panels.
     emi_id: Option<String>,
+    /// Forced egui tip for cook shots (drawn pinned beside inventory).
+    pinned_tip: Option<ItemTip>,
     command_open: bool,
     command_selected: usize,
     /// `(id, label)` for registered commands. The label is what the screen draws.
@@ -835,6 +837,7 @@ impl Gui {
                 catalog_query: String::new(),
                 emi_query: String::new(),
                 emi_id: None,
+                pinned_tip: None,
                 command_open: false,
                 command_selected: 0,
                 commands: Vec::new(),
@@ -954,6 +957,7 @@ impl Gui {
                     catalog_query: String::new(),
                     emi_query: String::new(),
                     emi_id: None,
+                    pinned_tip: None,
                     command_open: false,
                     command_selected: 0,
                     commands: Vec::new(),
@@ -1083,6 +1087,7 @@ impl Gui {
             catalog_query: String::new(),
             emi_query: String::new(),
             emi_id: None,
+            pinned_tip: None,
             command_open: false,
             command_selected: 0,
             commands: Vec::new(),
@@ -1348,6 +1353,16 @@ impl Gui {
     fn clear_emi(&mut self) {
         self.emi_query.clear();
         self.emi_id = None;
+        self.pinned_tip = None;
+    }
+
+    /// Pin a tip for cook shots (drawn beside inventory until close).
+    pub fn pin_tip(&mut self, tip: ItemTip) {
+        self.pinned_tip = Some(tip);
+    }
+
+    pub fn pinned_tip(&self) -> Option<&ItemTip> {
+        self.pinned_tip.as_ref()
     }
 
     pub fn emi_query(&self) -> &str {
@@ -3954,7 +3969,7 @@ impl Rarity {
     }
 }
 
-/// Rich hover tip for inventory / creative / EMI (GUI plan L9).
+/// Rich hover tip for inventory / creative / EMI (GUI plan L9 / VG-544).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemTip {
     pub name: String,
@@ -3962,7 +3977,11 @@ pub struct ItemTip {
     pub line: String,
     pub rarity: Rarity,
     pub description: String,
-    /// Tool / armour lines; empty for plain stacks.
+    /// Raw item id (`torch`, `ember:glow_brick`).
+    pub id: String,
+    /// Mod / pack namespace when the id is `ns:…` (e.g. `ember`).
+    pub source: Option<String>,
+    /// Tool / armour / stack / light / fill lines; empty for plain stubs.
     pub stats: Vec<String>,
     /// Enchant name + short description pairs.
     pub enchants: Vec<(String, String)>,
@@ -3977,6 +3996,8 @@ impl ItemTip {
             rarity: Rarity::Common,
             description: line.clone(),
             line,
+            id: String::new(),
+            source: None,
             stats: Vec::new(),
             enchants: Vec::new(),
         }
@@ -4027,12 +4048,27 @@ pub fn tip_for_keen(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
 fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     let name = title_case(&crate::recipes::display_name(id));
     let pack = rebuild_world::Pack::builtin();
-    let line = if pack.food_of(id).is_some() {
-        "fills hunger".to_string()
+    let source = id
+        .split_once(':')
+        .map(|(ns, _)| ns.to_string())
+        .filter(|ns| !ns.is_empty() && ns != "terralite");
+    let food = pack.food_of(id);
+    let max_uses = pack.tool_uses(id);
+    let fill = pack.compound_fill_of(id);
+    let light = rebuild_world::held_light_of(&pack, id).map(|light| light.level);
+    let line = if let Some(heal) = food {
+        format!("restores {heal} hunger")
+    } else if let Some(kind) = fill {
+        format!("fills {kind}")
+    } else if let Some(level) = light {
+        format!("lights the air ({level})")
     } else if pack.armor_of(id).is_some() {
         "soaks heart damage".to_string()
-    } else if pack.tool_uses(id) > 0 {
-        "wears down with use".to_string()
+    } else if max_uses > 0 {
+        match tool_tier_name(&pack, id) {
+            Some(tier) => format!("{tier} tool — wears with use"),
+            None => "wears down with use".to_string(),
+        }
     } else if pack.contains_block(id) {
         "place on a face".to_string()
     } else {
@@ -4045,6 +4081,9 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     };
     let description = sentence(&line);
     let mut stats = Vec::new();
+    if let Some(heal) = food {
+        stats.push(format!("Heal +{heal}"));
+    }
     if let Some((slot, soak)) = pack.armor_of(id) {
         let piece = match slot {
             0 => "Head",
@@ -4055,14 +4094,24 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         stats.push(format!("{piece} armor"));
         stats.push(format!("Soak {soak}"));
     }
-    let max_uses = pack.tool_uses(id);
     if max_uses > 0 {
-        let left = count.unwrap_or(max_uses);
-        stats.push(format!("Uses {left}/{max_uses}"));
+        let left = count.unwrap_or(max_uses).min(max_uses);
+        stats.push(format!("Durability {left}/{max_uses}"));
+        if let Some(tier) = tool_tier_name(&pack, id) {
+            stats.push(format!("Tier {tier}"));
+        }
         let factor = pack.mine_factor(id, "stone");
         if factor > 1.0 {
             stats.push(format!("Mine ×{factor}"));
         }
+    } else if let Some(n) = count.filter(|n| *n > 0) {
+        stats.push(format!("Stack ×{n}"));
+    }
+    if let Some(level) = light {
+        stats.push(format!("Light {level}"));
+    }
+    if let Some(kind) = fill {
+        stats.push(format!("Fill {kind}"));
     }
     let mut enchants = Vec::new();
     if keen {
@@ -4076,8 +4125,24 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         line: description.clone(),
         rarity: Rarity::Common,
         description,
+        id: id.to_string(),
+        source,
         stats,
         enchants,
+    }
+}
+
+/// Wood / stone / iron / diamond from the pick mine factor, when `id` is a tool.
+fn tool_tier_name(pack: &rebuild_world::Pack, id: &str) -> Option<&'static str> {
+    if pack.tool_uses(id) == 0 {
+        return None;
+    }
+    match pack.mine_factor(id, "stone") as i32 {
+        2 => Some("Wood"),
+        4 => Some("Stone"),
+        6 => Some("Iron"),
+        8 => Some("Diamond"),
+        _ => None,
     }
 }
 
@@ -8353,6 +8418,7 @@ mod tests {
             catalog_query: String::new(),
             emi_query: String::new(),
             emi_id: None,
+            pinned_tip: None,
             command_open: false,
             command_selected: 0,
             commands: Vec::new(),
@@ -8646,9 +8712,30 @@ mod tests {
 
         let apple = item_tip("apple", None, false);
         assert_eq!(apple.name, "Apple");
-        assert_eq!(apple.line, "Fills hunger");
+        assert!(apple.line.to_lowercase().contains("hunger"), "{}", apple.line);
         assert_eq!(apple.rarity, Rarity::Common);
         assert_eq!(apple.description, apple.line);
+        assert_eq!(apple.id, "apple");
+        assert!(apple.stats.iter().any(|s| s.starts_with("Heal +")));
+
+        let pick = item_tip("iron_pickaxe", Some(40), false);
+        assert_eq!(pick.id, "iron_pickaxe");
+        assert!(pick.stats.iter().any(|s| s.contains("Durability")));
+        assert!(pick.stats.iter().any(|s| s.contains("Iron")));
+        assert!(pick.line.to_lowercase().contains("iron"));
+
+        let torch = item_tip("torch", Some(16), false);
+        assert!(torch.stats.iter().any(|s| s.starts_with("Light ")));
+        assert!(torch.stats.iter().any(|s| s.starts_with("Stack ×")));
+
+        let charge = item_tip("ember_charge", Some(4), false);
+        assert!(charge.line.to_lowercase().contains("ember"));
+        assert!(charge.stats.iter().any(|s| s == "Fill ember"));
+        assert!(charge.stats.iter().any(|s| s.starts_with("Stack ×")));
+
+        let modded = item_tip("ember:glow_brick", None, false);
+        assert_eq!(modded.source.as_deref(), Some("ember"));
+        assert_eq!(modded.id, "ember:glow_brick");
 
         let near = tooltip_quads(400.0, 300.0, 20.0, 40.0, "Cobblestone", "Place on a face");
         assert!(near.iter().any(|quad| quad.color == INK));

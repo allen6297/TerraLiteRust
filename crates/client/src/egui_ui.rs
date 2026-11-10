@@ -177,8 +177,10 @@ impl EguiHost {
                 pending = draw_menu(ui, menu, binds);
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
+                draw_pinned_tip(ui, gui);
             } else if gui.player_inv_open() {
                 touched = draw_player_inventory(ui, gui, hotbar, bag, armor, icons);
+                draw_pinned_tip(ui, gui);
             }
         });
         self.pending = pending;
@@ -1982,6 +1984,19 @@ fn close_button(ui: &mut Ui, label: &str) -> egui::Response {
     menu_button(ui, label, false)
 }
 
+/// Cook-shot helper: park a tip in the upper-right so the plate is visible.
+fn draw_pinned_tip(ui: &mut Ui, gui: &Gui) {
+    let Some(tip) = gui.pinned_tip().cloned() else {
+        return;
+    };
+    egui::Area::new(egui::Id::new("pinned_item_tip"))
+        .anchor(Align2::RIGHT_TOP, [-24.0, 48.0])
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
+            show_tip(ui, &tip);
+        });
+}
+
 fn show_tip(ui: &mut Ui, tip: &gui::ItemTip) {
     Frame::new()
         .fill(TIP_BG)
@@ -1989,23 +2004,31 @@ fn show_tip(ui: &mut Ui, tip: &gui::ItemTip) {
         .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_max_width(240.0);
+            // Keep tips compact — name / id / hint / a few stats.
+            ui.set_max_width(220.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&tip.name).size(14.0).color(INK).strong());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     rarity_chip(ui, tip.rarity);
                 });
             });
+            if !tip.id.is_empty() {
+                ui.add_space(1.0);
+                let id_line = match tip.source.as_deref() {
+                    Some(ns) => format!("{} · {}", tip.id, ns),
+                    None => tip.id.clone(),
+                };
+                ui.label(RichText::new(id_line).size(11.0).color(MUTED));
+            }
             if !tip.description.is_empty() {
-                ui.add_space(2.0);
+                ui.add_space(3.0);
                 ui.label(RichText::new(&tip.description).size(12.0).color(DETAIL));
             }
             if !tip.stats.is_empty() {
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(2.0);
-                ui.label(RichText::new("STATS").size(11.0).color(MUTED));
-                for line in &tip.stats {
+                for line in tip.stats.iter().take(4) {
                     ui.label(RichText::new(line).size(12.0).color(INK));
                 }
             }
@@ -2014,17 +2037,9 @@ fn show_tip(ui: &mut Ui, tip: &gui::ItemTip) {
                 ui.separator();
                 ui.add_space(2.0);
                 ui.label(RichText::new("ENCHANTS").size(11.0).color(MUTED));
-                for (name, desc) in &tip.enchants {
+                for (name, desc) in tip.enchants.iter().take(2) {
                     ui.label(RichText::new(name).size(12.0).color(DETAIL));
-                    Frame::new()
-                        .fill(SLOT_WELL)
-                        .stroke(Stroke::new(1.0, SLOT_EDGE))
-                        .corner_radius(CornerRadius::same(3))
-                        .inner_margin(Margin::symmetric(6, 4))
-                        .show(ui, |ui| {
-                            ui.set_max_width(220.0);
-                            ui.label(RichText::new(desc).size(11.0).color(MUTED));
-                        });
+                    ui.label(RichText::new(desc).size(11.0).color(MUTED));
                 }
             }
         });
@@ -2181,7 +2196,8 @@ mod tests {
         assert!(!tip.line.is_empty());
         assert_eq!(tip.rarity, gui::Rarity::Common);
         assert_eq!(tip.description, tip.line);
-        assert!(tip.stats.is_empty());
+        assert_eq!(tip.id, "cobblestone");
+        assert!(tip.stats.iter().any(|s| s == "Stack ×1"));
         assert!(tip.enchants.is_empty());
     }
 
@@ -2203,12 +2219,26 @@ mod tests {
     #[test]
     fn rich_tip_tool_lists_uses_and_keen_enchant() {
         let plain = gui::tip_for("iron_pickaxe", Some(32));
-        assert!(plain.stats.iter().any(|s| s.contains("Uses")));
+        assert!(plain.stats.iter().any(|s| s.contains("Durability")));
+        assert!(plain.stats.iter().any(|s| s.contains("Iron")));
         assert!(plain.enchants.is_empty());
         let keen = gui::tip_for_keen("iron_pickaxe", Some(20), true);
         assert_eq!(keen.enchants.len(), 1);
         assert_eq!(keen.enchants[0].0, "Efficiency");
         assert!(!keen.enchants[0].1.is_empty());
+    }
+
+    #[test]
+    fn rich_tip_shows_id_light_food_and_fill() {
+        let torch = gui::tip_for("torch", Some(8));
+        assert_eq!(torch.id, "torch");
+        assert!(torch.stats.iter().any(|s| s.starts_with("Light ")));
+        let apple = gui::tip_for("apple", None);
+        assert!(apple.stats.iter().any(|s| s.starts_with("Heal +")));
+        let fill = gui::tip_for("ember_charge", Some(2));
+        assert!(fill.stats.iter().any(|s| s == "Fill ember"));
+        let modded = gui::tip_for("ember:glow_brick", None);
+        assert_eq!(modded.source.as_deref(), Some("ember"));
     }
 
     #[test]

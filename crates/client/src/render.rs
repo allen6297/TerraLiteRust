@@ -7829,6 +7829,27 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open inventory with a pinned rich tip (iron pick), then quit with a PNG.
+    pub fn arm_tips_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+        self.gui.open_player_craft();
+        self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        let _ = self.hotbar.give_stack("apple");
+        let _ = self.hotbar.give_stack("torch");
+        let _ = self.hotbar.give_stack("ember_charge");
+        self.hotbar_dirty = true;
+        let tip = crate::gui::tip_for_keen("iron_pickaxe", Some(28), true);
+        self.gui.pin_tip(tip);
+        self.gui.select_emi("iron_pickaxe");
+        self.gui.push_chat("rich tip: name id stats");
+        let _ = self.window.focus_window();
+    }
+
     /// Midnight outdoor horde in view, then quit with a PNG.
     pub fn arm_night_spawn_shot(&mut self, path: std::path::PathBuf) {
         self.night_spawn_shot_path = Some(path);
