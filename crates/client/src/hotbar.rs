@@ -76,6 +76,17 @@ pub fn compost_word(next: u8) -> &'static str {
     }
 }
 
+/// Blast-furnace one-step lines. Food stays on the smoker; clay stays on the furnace.
+fn blast_result(id: &str) -> Option<&'static str> {
+    match id {
+        "cobblestone" => Some("stone"),
+        "stone" => Some("smooth_stone"),
+        "stone_bricks" => Some("cracked_stone_bricks"),
+        "netherrack" => Some("nether_bricks"),
+        _ => None,
+    }
+}
+
 /// Plants and food a composter accepts. Bone meal itself does not go back in.
 pub fn is_compost(id: &str) -> bool {
     matches!(
@@ -1015,6 +1026,31 @@ impl Hotbar {
         }
         self.camp_heat = 1;
         self.finish_cook_raw()
+    }
+
+    /// One-step blast: hold cobble or stone, use a blast furnace, get the cook.
+    pub fn blast_now(&mut self) -> &'static str {
+        let Some(item) = self.item(self.selected) else {
+            return "need blast";
+        };
+        let Some(out) = blast_result(item.id) else {
+            return "need blast";
+        };
+        let count = item.count;
+        if count > 1 && !self.room_for(out) {
+            return "no room";
+        }
+        if count == 1 {
+            if let Some(slot) = self.slots.get_mut(self.selected) {
+                *slot = Some(fresh(out, 1));
+            }
+            return out;
+        }
+        self.consume_at(self.selected);
+        if !self.collect(out) {
+            return "no room";
+        }
+        out
     }
 
     fn finish_cook_raw(&mut self) -> &'static str {
@@ -2400,6 +2436,24 @@ mod tests {
         assert!(bar.select_digit(4));
         assert_eq!(bar.cook_raw_now(), "cooked");
         assert_eq!(bar.slot(3), Some("cooked"));
+    }
+
+    #[test]
+    fn a_blast_furnace_cooks_cobble_in_one_use() {
+        let mut bar = Hotbar::new();
+        assert!(bar.select_digit(2));
+        assert_eq!(bar.blast_now(), "need blast");
+        assert!(bar.select_digit(1));
+        assert_eq!(bar.slot(0), Some("cobblestone"));
+        let before = bar.count(0);
+        assert_eq!(bar.blast_now(), "stone");
+        assert_eq!(bar.slot(0), Some("cobblestone"));
+        assert_eq!(bar.count(0), before - 1);
+        assert_eq!(bar.slot(1), Some("stone"));
+        assert!(bar.select_digit(2));
+        assert_eq!(bar.blast_now(), "smooth_stone");
+        assert_eq!(bar.slot(1), Some("smooth_stone"));
+        assert_eq!(bar.blast_now(), "need blast");
     }
 
     #[test]

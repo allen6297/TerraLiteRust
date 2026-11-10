@@ -3298,7 +3298,13 @@ impl State {
                     self.gui.open_smoker()
                 }
             }
-            "blast_furnace" => self.gui.open_blast(),
+            "blast_furnace" => {
+                if self.try_blast_heat() {
+                    true
+                } else {
+                    self.gui.open_blast()
+                }
+            }
             "beehive" => self.gui.open_hive(hit.block, block.metadata),
             "cauldron" => self.gui.open_cauldron(hit.block, block.metadata),
             "bell" => self.gui.open_bell(hit.block),
@@ -3760,6 +3766,40 @@ impl State {
             return;
         }
         self.chest_dirty = false;
+    }
+
+    /// Hold cobble or stone and use a looked-at blast furnace in one step.
+    fn try_blast_heat(&mut self) -> bool {
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "blast_furnace"
+        {
+            return false;
+        }
+        let word = self.hotbar.blast_now();
+        if word == "need blast" {
+            return false;
+        }
+        self.gui.push_chat(word);
+        if word != "no room" {
+            self.hotbar_dirty = true;
+            let at = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 0.9,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.play_world(crate::audio::Sound::Crackle, at);
+            self.drops.smoke(at);
+            self.drops
+                .smoke([at[0] - 0.06, at[1] + 0.1, at[2] + 0.04]);
+            self.rebuild_drops();
+        }
+        true
     }
 
     /// Hold raw food and use a looked-at campfire or smoker to cook in one step.
@@ -5075,6 +5115,7 @@ impl State {
             || self.try_cat()
             || self.try_wolf()
             || self.try_cook_heat()
+            || self.try_blast_heat()
             || self.try_eat()
             || self.try_key()
             || self.try_wind()
@@ -6188,6 +6229,78 @@ impl State {
     /// Hold cooked food over a smoker after a one-step cook, then quit with a PNG.
     pub fn arm_smoker_cook_shot(&mut self, path: std::path::PathBuf) {
         self.arm_heat_cook_shot(path, "smoker");
+    }
+
+    /// Hold stone over a blast furnace after a one-step blast, then quit with a PNG.
+    pub fn arm_blast_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.45);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let fx = 8;
+        let fy = 2;
+        let fz = 10;
+        let mut changes = Vec::new();
+        for z in 8..=12 {
+            for x in 6..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: fx,
+            y: fy,
+            z: fz,
+            block: Block::new("blast_furnace", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let _ = self.hotbar.select_digit(1);
+        let word = self.hotbar.blast_now();
+        self.gui.push_chat(word);
+        self.hotbar_dirty = true;
+        let fire = glam::Vec3::new(fx as f32 + 0.5, fy as f32 + 0.85, fz as f32 + 0.5);
+        self.drops.smoke([fire.x, fire.y + 0.2, fire.z]);
+        self.drops.smoke([fire.x - 0.08, fire.y + 0.3, fire.z + 0.05]);
+        self.rebuild_drops();
+        let eye = glam::Vec3::new(
+            fx as f32 + 0.5,
+            fy as f32 + 1.05 + body::EYE_HEIGHT,
+            fz as f32 - 3.4,
+        );
+        let look = glam::Vec3::new(fire.x, fire.y + 0.55, fire.z);
+        self.camera = Camera::looking_at(eye, look);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
     }
 
     /// Look at the camp smoker beside the fire, then quit with a PNG.
