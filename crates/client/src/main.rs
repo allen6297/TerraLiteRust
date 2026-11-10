@@ -83,7 +83,7 @@ Keys 1 through 9 and 0 while it is open stash one from that hotbar slot. Those n
 slots, the hotbar, and where you stand are written into the same save. G opens the guide.
 C lists registered commands. Enter runs the selected one.
 T opens chat. Enter sends a line of letters; solo echoes into the HUD log, and on a Host/Join listen peers see the line too.
-Joined players show as another body with a short nameplate (Player2 by join order, or `--name`). A long fall spends hearts, and at none you
+Joined players show as another body with a short nameplate (Player2 by join order, or `--name`) and the item in their selected hotbar slot. A long fall spends hearts, and at none you
 respawn by the stairs. F opens a chest, a crafting table, or a furnace. Settings world size also changes a
 dedicated server.
 The hotbar stays.
@@ -196,6 +196,8 @@ struct Args {
     shot_localhost_chat: Option<std::path::PathBuf>,
     /// Peer nameplates above Host/Join bodies, then quit.
     shot_peer_nameplates: Option<std::path::PathBuf>,
+    /// Peer held hotbar item in-hand, then quit.
+    shot_peer_held_item: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -441,6 +443,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_localhost_join: args.shot_localhost_join,
         shot_localhost_chat: args.shot_localhost_chat,
         shot_peer_nameplates: args.shot_peer_nameplates,
+        shot_peer_held_item: args.shot_peer_held_item,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -564,6 +567,7 @@ struct App {
     shot_localhost_join: Option<std::path::PathBuf>,
     shot_localhost_chat: Option<std::path::PathBuf>,
     shot_peer_nameplates: Option<std::path::PathBuf>,
+    shot_peer_held_item: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -798,6 +802,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_peer_nameplates.take() {
                     state.arm_peer_nameplates_shot(path);
+                }
+                if let Some(path) = self.shot_peer_held_item.take() {
+                    state.arm_peer_held_item_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1151,6 +1158,7 @@ where
         shot_localhost_join: None,
         shot_localhost_chat: None,
         shot_peer_nameplates: None,
+        shot_peer_held_item: None,
         name: None,
         host: false,
         join: false,
@@ -1491,6 +1499,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-peer-nameplates".to_string())?;
                 parsed.shot_peer_nameplates = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-peer-held-item" | "--shot-held-item" | "--shot-peer-hand" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-peer-held-item".to_string())?;
+                parsed.shot_peer_held_item = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -1943,5 +1957,16 @@ mod tests {
             Some(std::path::Path::new("peer-nameplates.png"))
         );
         assert_eq!(args.name.as_deref(), Some("Kalob"));
+        let Parsed::Run(args) = parse_args([
+            "--shot-peer-held-item".into(),
+            "peer-held-item.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_peer_held_item.as_deref(),
+            Some(std::path::Path::new("peer-held-item.png"))
+        );
     }
 }

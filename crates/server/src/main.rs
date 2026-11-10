@@ -169,6 +169,7 @@ struct LivePlayer {
     z: f32,
     yaw: f32,
     name: String,
+    held: String,
 }
 
 /// One chat line waiting for other Host/Join peers.
@@ -292,8 +293,10 @@ fn note_peer(
     z: f32,
     yaw: f32,
     name: &str,
+    held: &str,
 ) {
     let cleaned = rebuild_world::player_label(name);
+    let held = rebuild_world::item_id(held);
     if let Some(peer) = peers.iter_mut().find(|peer| peer.id == id) {
         peer.x = x;
         peer.y = y;
@@ -302,6 +305,7 @@ fn note_peer(
         if !cleaned.is_empty() {
             peer.name = cleaned;
         }
+        peer.held = held;
         return;
     }
     peers.push(LivePlayer {
@@ -315,6 +319,7 @@ fn note_peer(
         } else {
             cleaned
         },
+        held,
     });
 }
 
@@ -323,7 +328,9 @@ fn other_peers(peers: &[LivePlayer], id: u32) -> Vec<PeerPose> {
         .iter()
         .filter(|peer| peer.id != id)
         .map(|peer| {
-            PeerPose::new(peer.x, peer.y, peer.z, peer.yaw).with_name(&peer.name)
+            PeerPose::new(peer.x, peer.y, peer.z, peer.yaw)
+                .with_name(&peer.name)
+                .with_held(&peer.held)
         })
         .collect()
 }
@@ -352,6 +359,7 @@ fn session(
             5.12,
             sz as f32 + 0.5,
             -1.57,
+            "",
             "",
         );
         let cells = occupied_cells(&guard.world);
@@ -386,12 +394,13 @@ fn session(
             yaw,
             pitch,
             name,
+            held,
         } = &request
         {
             if let Some(path) = save.as_deref() {
                 store_pose(path, *x, *y, *z, *yaw, *pitch);
             }
-            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw, name);
+            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw, name, held);
             // Peer chat rides ahead of the pose list; client drains TAG_CHAT then peers.
             deliver_chats(&mut stream, &guard, id, &mut last_chat)?;
             let others = other_peers(&guard.peers, id);
@@ -988,7 +997,7 @@ mod tests {
 
         write_frame(
             &mut second,
-            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2"),
+            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2", "torch"),
         )
         .unwrap();
         let seen = decode_peers(&read_frame(&mut second).unwrap()).unwrap();
@@ -1001,8 +1010,14 @@ mod tests {
         let echo = decode_client(&read_frame(&mut first).unwrap()).unwrap();
         assert!(matches!(echo, ClientRequest::Chat { text } if text == "hello there"));
         write_frame(
+            &mut first,
+            &encode_pose(8.5, 5.12, 14.5, -1.57, 0.0, "Host", "cobblestone"),
+        )
+        .unwrap();
+        let _ = decode_peers(&read_frame(&mut first).unwrap()).unwrap();
+        write_frame(
             &mut second,
-            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2"),
+            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2", "torch"),
         )
         .unwrap();
         let chat_frame = read_frame(&mut second).unwrap();
@@ -1010,6 +1025,7 @@ mod tests {
         assert!(matches!(got, ClientRequest::Chat { text } if text == "hello there"));
         let seen_again = decode_peers(&read_frame(&mut second).unwrap()).unwrap();
         assert_eq!(seen_again.len(), 1);
+        assert_eq!(seen_again[0].held(), "cobblestone");
 
         let save = std::env::temp_dir().join(format!("terralite-size-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&save);

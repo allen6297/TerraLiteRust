@@ -2,19 +2,23 @@
 //!
 //! Each one is the same Blockbench player body as the local avatar, posed at the
 //! eye the server sent. They are not saved and they do not block a walk. A solo
-//! world has none. A short nameplate rides above the head in screen space.
+//! world has none. A short nameplate rides above the head in screen space. The
+//! selected hotbar item is drawn as a small cube in the right hand.
 
 use glam::{Mat4, Vec3, Vec4};
 
 use crate::gui;
 use crate::hotbar::Quad;
 use crate::mesh::Vertex;
+use crate::palette;
 use crate::player;
 
 pub struct Other {
     pub eye: [f32; 3],
     pub yaw: f32,
     pub name: String,
+    /// Selected hotbar item id; empty when bare-handed.
+    pub held: String,
 }
 
 pub fn mesh(players: &[Other]) -> Vec<Vertex> {
@@ -24,6 +28,9 @@ pub fn mesh(players: &[Other]) -> Vec<Vertex> {
         let (sy, cy) = player.yaw.sin_cos();
         let model_yaw = cy.atan2(sy);
         out.extend(player::peer_mesh(player.eye, model_yaw));
+        if !player.held.is_empty() {
+            out.extend(held_cube(player.eye, player.yaw, &player.held));
+        }
     }
     out
 }
@@ -31,6 +38,96 @@ pub fn mesh(players: &[Other]) -> Vec<Vertex> {
 /// Default Host/Join label when the peer sent no name (`Player2`, `Player3`, …).
 pub fn default_label(index: usize) -> String {
     format!("Player{}", index + 2)
+}
+
+/// Right-hand grip in world space for a peer facing `yaw` (camera convention).
+pub fn hand_pos(eye: [f32; 3], yaw: f32) -> [f32; 3] {
+    let (sy, cy) = yaw.sin_cos();
+    let forward = [cy, 0.0, sy];
+    let right = [-sy, 0.0, cy];
+    [
+        eye[0] + right[0] * 0.38 + forward[0] * 0.28,
+        eye[1] - 0.42,
+        eye[2] + right[2] * 0.38 + forward[2] * 0.28,
+    ]
+}
+
+fn held_cube(eye: [f32; 3], yaw: f32, id: &str) -> Vec<Vertex> {
+    let center = hand_pos(eye, yaw);
+    let half = 0.14;
+    let textured = crate::texture::block_face(id);
+    let color = if textured > 0.0 {
+        [1.0, 1.0, 1.0]
+    } else {
+        palette::color(id, 0)
+    };
+    let block = if textured > 0.0 {
+        [0.55, 0.55, 0.55]
+    } else {
+        color
+    };
+    let min = [
+        center[0] - half,
+        center[1] - half,
+        center[2] - half,
+    ];
+    let max = [
+        center[0] + half,
+        center[1] + half,
+        center[2] + half,
+    ];
+    let corner = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], max[2]],
+        [min[0], max[1], max[2]],
+    ];
+    const FACES: [[usize; 4]; 6] = [
+        [0, 1, 2, 3],
+        [5, 4, 7, 6],
+        [4, 5, 1, 0],
+        [3, 2, 6, 7],
+        [4, 0, 3, 7],
+        [1, 5, 6, 2],
+    ];
+    const NORMALS: [[f32; 3]; 6] = [
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+    ];
+    // Face UVs so atlas textures still read on the tiny grip cube.
+    const UV: [[f32; 2]; 4] = [[0.0, 0.999], [0.999, 0.999], [0.999, 0.0], [0.0, 0.0]];
+    let mut out = Vec::with_capacity(36);
+    for (face, normal) in FACES.into_iter().zip(NORMALS) {
+        let tri = [
+            (face[0], 0),
+            (face[1], 1),
+            (face[2], 2),
+            (face[0], 0),
+            (face[2], 2),
+            (face[3], 3),
+        ];
+        for (index, uv_i) in tri {
+            out.push(Vertex {
+                position: corner[index],
+                color,
+                normal,
+                uv: UV[uv_i],
+                textured,
+                block,
+                bounce: [0.0, 0.0, 0.0],
+                ao: 1.0,
+            });
+        }
+    }
+    out
 }
 
 /// World-space nameplates projected into HUD pixels. Fade out past ~32 blocks.
@@ -128,21 +225,27 @@ mod tests {
                 eye: [8.5, 5.12, 14.5],
                 yaw: 0.0,
                 name: "Player2".into(),
+                held: "torch".into(),
             },
             Other {
                 eye: [10.0, 5.12, 12.0],
                 yaw: 1.0,
                 name: String::new(),
+                held: String::new(),
             },
         ];
         let body = mesh(&players);
         assert!(!body.is_empty());
+        // Body quads (36 verts each) + one held cube (36) for the torch peer.
         assert_eq!(body.len() % 36, 0);
+        assert!(body.len() > 72);
         assert!(body.iter().any(|vertex| vertex.color[2] > 0.6));
         assert!(body.iter().any(|vertex| vertex.position[1] > 5.0));
         assert!(mesh(&[]).is_empty());
         assert_eq!(default_label(0), "Player2");
         assert_eq!(default_label(1), "Player3");
+        let hand = hand_pos([8.5, 5.12, 14.5], 0.0);
+        assert!((hand[1] - (5.12 - 0.42)).abs() < 0.01);
     }
 
     #[test]
@@ -155,6 +258,7 @@ mod tests {
             eye: [10.0, 5.12, 12.0],
             yaw: 0.0,
             name: "Player2".into(),
+            held: String::new(),
         }];
         let plates = nameplate_quads(&players, vp, 1280.0, 720.0, eye);
         assert!(!plates.is_empty());

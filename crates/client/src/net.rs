@@ -416,6 +416,7 @@ fn local_pump(
                 yaw,
                 pitch,
                 name: _,
+                held: _,
             } => {
                 store_pose(&save, x, y, z, yaw, pitch);
                 continue;

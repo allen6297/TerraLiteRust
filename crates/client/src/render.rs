@@ -2868,11 +2868,13 @@ impl State {
                 eye: [10.2, 1.0 + crate::body::EYE_HEIGHT, 10.5],
                 yaw: -0.8,
                 name: "Player2".into(),
+                held: "torch".into(),
             },
             crate::peers::Other {
                 eye: [6.8, 1.0 + crate::body::EYE_HEIGHT, 9.2],
                 yaw: 0.6,
                 name: "Kalob".into(),
+                held: "cobblestone".into(),
             },
         ];
         self.rebuild_peers();
@@ -2881,6 +2883,81 @@ impl State {
 
         let eye = glam::Vec3::new(8.5, 3.4 + crate::body::EYE_HEIGHT, 14.0);
         let focus = glam::Vec3::new(8.5, 2.2, 9.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Peer held hotbar item in-hand, then quit with a PNG.
+    pub fn arm_peer_held_item_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        // Close: one peer with a torch, one with cobble — grips readable.
+        self.others = vec![
+            crate::peers::Other {
+                eye: [9.4, 1.0 + crate::body::EYE_HEIGHT, 11.0],
+                yaw: 3.4,
+                name: "Player2".into(),
+                held: "torch".into(),
+            },
+            crate::peers::Other {
+                eye: [7.6, 1.0 + crate::body::EYE_HEIGHT, 10.4],
+                yaw: -0.2,
+                name: "Kalob".into(),
+                held: "cobblestone".into(),
+            },
+        ];
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        let eye = glam::Vec3::new(8.5, 2.2 + crate::body::EYE_HEIGHT, 13.2);
+        let focus = glam::Vec3::new(8.5, 1.7, 10.6);
         self.camera = crate::camera::Camera::looking_at(eye, focus);
         self.camera.on_ground = true;
         self.camera.velocity_y = 0.0;
@@ -7846,6 +7923,7 @@ impl State {
                             } else {
                                 name
                             },
+                            held: peer.held().to_string(),
                         }
                     })
                     .collect();
@@ -19013,6 +19091,7 @@ impl State {
                 yaw,
                 pitch,
                 &self.player_name,
+                self.hotbar.slot(self.hotbar.selected()).unwrap_or(""),
             ))
             .is_err()
         {
@@ -19149,6 +19228,8 @@ impl State {
     fn note_hotbar_swap(&mut self, prev: usize) {
         if self.hotbar.selected() != prev {
             self.swap_kick = 1.0;
+            // Peer held-item sync rides pose; mark dirty so the new grip ships.
+            self.pose_dirty = true;
         }
     }
 
