@@ -176,6 +176,41 @@ impl Drops {
         });
     }
 
+    /// Warm pollen crumbs that hang and drift behind a loaded bee.
+    pub fn pollen_trail(&mut self, origin: [f32; 3]) {
+        const CRUMBS: [([f32; 3], [f32; 3], f32); 4] = [
+            ([0.04, 0.18, -0.02], [0.96, 0.72, 0.18], 0.85),
+            ([-0.06, 0.12, 0.05], [0.92, 0.55, 0.12], 0.7),
+            ([0.02, 0.22, 0.04], [0.98, 0.82, 0.28], 0.95),
+            ([-0.03, 0.08, -0.06], [0.88, 0.48, 0.1], 0.6),
+        ];
+        let pollen_n = self
+            .motes
+            .iter()
+            .filter(|mote| mote.hover && mote.color[0] > 0.85 && mote.color[1] > 0.4)
+            .count();
+        if pollen_n >= 24 {
+            return;
+        }
+        for (i, (vel, color, life)) in CRUMBS.into_iter().enumerate() {
+            let wobble = (i as f32) * 0.03;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.04,
+                    origin[1] + 0.08,
+                    origin[2] - wobble * 0.4,
+                ],
+                velocity: vel,
+                color,
+                block: color,
+                life,
+                rise: false,
+                hover: true,
+                half: 0.035,
+            });
+        }
+    }
+
     /// Soft cyan bubbles rising from a brewing stand.
     pub fn brew_bubbles(&mut self, origin: [f32; 3]) {
         const BUBBLES: [([f32; 3], [f32; 3], f32); 6] = [
@@ -921,6 +956,21 @@ mod tests {
         let before = drops.motes[0].center[1];
         assert!(drops.tick_motes(0.15));
         assert!(drops.motes[0].center[1] > before);
+    }
+
+    #[test]
+    fn pollen_trail_hangs_warm_and_caps() {
+        let mut drops = Drops::new();
+        drops.pollen_trail([5.0, 2.5, 5.0]);
+        assert_eq!(drops.motes.len(), 4);
+        assert!(drops.motes.iter().all(|mote| mote.hover));
+        assert!(drops.motes.iter().all(|mote| mote.color[0] > mote.color[2]));
+        for _ in 0..20 {
+            drops.pollen_trail([5.0, 2.5, 5.0]);
+        }
+        assert!(drops.motes.len() <= 28);
+        assert!(drops.tick_motes(2.0));
+        assert!(drops.motes.is_empty());
     }
 
     #[test]

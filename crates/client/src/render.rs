@@ -992,6 +992,10 @@ pub struct State {
     /// HUD plate amount for the gallop cue, `0`..`1`.
     horse_show: f32,
     horse_stroke: f32,
+    /// HUD plate while the bee carries pollen, `0`..`1`.
+    pollen_show: f32,
+    /// Seconds until the next pollen trail drip.
+    pollen_drip: f32,
     /// One-shot idle horse vs gallop FOV stitch, then quit.
     horse_shot_path: Option<std::path::PathBuf>,
     horse_shot_frames: u32,
@@ -2055,6 +2059,8 @@ impl State {
             horse_kick: 0.0,
             horse_show: 0.0,
             horse_stroke: 0.0,
+            pollen_show: 0.0,
+            pollen_drip: 0.0,
             horse_shot_path: None,
             horse_shot_frames: 0,
             horse_shot_phase: HorseShotPhase::Idle,
@@ -10919,6 +10925,92 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Bee mid-flight with a pollen trail from the pad flower toward the hive.
+    pub fn arm_pollen_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: 14,
+                    y: 1,
+                    z: 6,
+                    block: Block::new("flower", 0),
+                },
+                CellChange {
+                    x: 12,
+                    y: 1,
+                    z: 6,
+                    block: Block::new("beehive", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(14, 6);
+        self.chunk_bake.touch(12, 6);
+
+        self.bee = crate::mobs::Bee::new();
+        let feet = [0.0, 1.0, 0.0];
+        let mut got = false;
+        for _ in 0..40 {
+            if matches!(
+                self.bee.tick(1, feet, &self.world),
+                Some(crate::mobs::BeeWork::Pollen)
+            ) {
+                got = true;
+                break;
+            }
+        }
+        assert!(got, "bee should pick up pollen");
+        assert!(self.bee.pollen());
+        for _ in 0..8 {
+            let _ = self.bee.tick(1, feet, &self.world);
+        }
+        self.rebuild_bee();
+        let spot = self.bee.origin();
+        for _ in 0..5 {
+            self.drops.pollen_trail(spot);
+            self.drops.pollen_trail([spot[0] + 0.25, spot[1], spot[2]]);
+            self.drops.pollen_trail([spot[0] + 0.5, spot[1] - 0.05, spot[2]]);
+        }
+        self.rebuild_drops();
+        self.pollen_show = 1.0;
+        self.gui.push_chat("pollen");
+
+        let focus = glam::Vec3::new(spot[0], spot[1] + 0.1, spot[2]);
+        let eye = glam::Vec3::new(spot[0] + 2.6, spot[1] + 0.85 + body::EYE_HEIGHT, spot[2] + 2.4);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("flower");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(13 + dx * 8, 6 + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the camp beehive panel mid-fill with a mote, then quit with a PNG.
     pub fn arm_hive_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -16902,9 +16994,17 @@ impl State {
                     crate::mobs::BeeWork::Pollen => {
                         if self.bee.pollen() {
                             self.gui.push_chat("pollen");
+                            self.pollen_show = 1.0;
+                            let spot = self.bee.origin();
+                            self.drops.pollen_trail(spot);
+                            self.drops.puff(spot, [0.95, 0.62, 0.16]);
+                            self.rebuild_drops();
                         }
                     }
-                    crate::mobs::BeeWork::Fill(at, _) => self.bee_fill(at),
+                    crate::mobs::BeeWork::Fill(at, _) => {
+                        self.pollen_show = 0.0;
+                        self.bee_fill(at);
+                    }
                     crate::mobs::BeeWork::Sting => {
                         let spot = self.bee.origin();
                         self.play_world(crate::audio::Sound::Step, spot);
@@ -16912,6 +17012,18 @@ impl State {
                         self.gui.push_chat("sting");
                     }
                 }
+            }
+            if self.bee.pollen() {
+                self.pollen_show = (self.pollen_show + 0.35).min(1.0);
+                self.pollen_drip -= steps as f32 * 0.05;
+                if self.pollen_drip <= 0.0 {
+                    self.pollen_drip = 0.14;
+                    self.drops.pollen_trail(self.bee.origin());
+                    self.rebuild_drops();
+                }
+            } else {
+                self.pollen_drip = 0.0;
+                self.pollen_show = (self.pollen_show - steps as f32 * 0.08).max(0.0);
             }
             self.rebuild_bee();
             let treat = if self.fox.holding().is_none() {
@@ -17621,6 +17733,9 @@ impl State {
         }
         if self.horse_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::horse_quads(gui_w, gui_h, self.horse_show));
+        }
+        if self.pollen_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::pollen_quads(gui_w, gui_h, self.pollen_show));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));

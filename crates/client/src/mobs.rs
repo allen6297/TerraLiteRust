@@ -3449,7 +3449,8 @@ fn frog_spot(steps: u32) -> [f32; 3] {
 
 /// A beehive at this level is full. The bee looks for a lower one.
 const HIVE_FULL: u8 = 3;
-const BEE_HOME: [f32; 3] = [14.0, 2.6, 6.0];
+/// Feet the bee drifts around. Flower and hive sit just west on the demo pad.
+pub const BEE_HOME: [f32; 3] = [14.0, 2.6, 6.0];
 const BEE_SCAN: i32 = 8;
 const BEE_STEP: f32 = 0.22;
 const BEE_ANGER: u32 = 120;

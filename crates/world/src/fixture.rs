@@ -91,6 +91,9 @@ fn synthetic_chunk_at(x: i32, z: i32) -> Chunk {
         blocks.push((12, 1, 10, Block::new("wire", 0)));
         blocks.push((13, 1, 10, crate::chunk::battery_at(4)));
         blocks.push((14, 1, 10, lamp_at(true)));
+        // Bee pad: flower then hive so pollen trails west of the home hover.
+        blocks.push((14, 1, 6, Block::new("flower", 0)));
+        blocks.push((12, 1, 6, Block::new("beehive", 0)));
         return Chunk::from_blocks(0, 0, blocks).expect("center chunk");
     }
     let mut blocks = wool_floor(neighbor_wool(x, z));
@@ -212,11 +215,11 @@ mod tests {
         let demo = synthetic_chunk();
         // Center demo is 267 blocks, plus the east-edge cobblestone, the
         // stairs, four compound hosts, the coal ore, the iron ore, the sign,
-        // the lantern, the perch, and the seven compound-demo cells (285).
-        // Eight wool floors are 256 each. The east neighbor adds cobblestone,
-        // the hitch fence, and the stable ring (17 fence + 1 gate); four
-        // corners each add one cobblestone: 285 + 8 * 256 + 24 = 2357.
-        // The rest of the 31×31 square is empty.
+        // the lantern, the perch, the seven compound-demo cells, and the bee
+        // flower + hive (287). Eight wool floors are 256 each. The east
+        // neighbor adds cobblestone, the hitch fence, and the stable ring
+        // (17 fence + 1 gate); four corners each add one cobblestone:
+        // 287 + 8 * 256 + 24 = 2359. The rest of the 31×31 square is empty.
         let side = crate::WorldSize::Small.side();
         let radius = crate::WorldSize::Small.chunk_radius();
         assert_eq!(cluster.center(), (0, 0));
@@ -231,8 +234,8 @@ mod tests {
                 (radius + 1) * 16
             )
         );
-        assert_eq!(center.non_air_count(), 285);
-        assert_eq!(cluster.non_air_count(), 2357);
+        assert_eq!(center.non_air_count(), 287);
+        assert_eq!(cluster.non_air_count(), 2359);
         assert_eq!(center.block(15, 1, 8), Block::new("cobblestone", 0));
         assert_eq!(center.block(8, 1, 12), Block::new(OAK_STAIRS, 0));
         assert_eq!(center.block(9, 1, 13), Block::new(COAL_ORE, 0));
@@ -247,6 +250,8 @@ mod tests {
         assert_eq!(center.block(12, 1, 10).id, "wire");
         assert_eq!(center.block(13, 1, 10).id, "battery");
         assert_eq!(center.block(14, 1, 10).id, "lamp");
+        assert_eq!(center.block(14, 1, 6).id, "flower");
+        assert_eq!(center.block(12, 1, 6).id, "beehive");
         assert!(demo.block(15, 1, 8).is_air());
         assert!(demo.block(8, 1, 12).is_air());
         assert!(demo.block(9, 1, 13).is_air());
@@ -272,6 +277,8 @@ mod tests {
             (12, 1, 10),
             (13, 1, 10),
             (14, 1, 10),
+            (14, 1, 6),
+            (12, 1, 6),
         ];
         for y in 0..256u16 {
             for z in 0..16u8 {
