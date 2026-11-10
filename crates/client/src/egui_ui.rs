@@ -22,6 +22,7 @@ use rebuild_world::Pack;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::advancements::ToastView;
 use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab, SettingsControl};
 use crate::hotbar::{self, Hotbar};
@@ -142,6 +143,8 @@ pub struct EguiHost {
     pending: MenuAction,
     /// True when the last `run` mutated hotbar / bag / armor.
     touched: bool,
+    /// True when the last `run` took a 2×2 inventory craft result.
+    crafted: bool,
     /// Soft-rendered slot icons keyed by item id.
     icons: HashMap<String, TextureHandle>,
 }
@@ -170,6 +173,7 @@ impl EguiHost {
             renderer,
             pending: MenuAction::None,
             touched: false,
+            crafted: false,
             icons: HashMap::new(),
         }
     }
@@ -187,6 +191,11 @@ impl EguiHost {
         std::mem::replace(&mut self.touched, false)
     }
 
+    /// True when the last `run` pulled a player-inventory craft result.
+    pub fn take_crafted(&mut self) -> bool {
+        std::mem::replace(&mut self.crafted, false)
+    }
+
     /// True when egui should own pointer/keyboard instead of the world.
     pub fn wants_input(menu: &Menu, gui: &Gui, dead: bool, map_open: bool) -> bool {
         dead || menu.is_open() || gui.bag_open() || gui.player_inv_open() || map_open
@@ -197,6 +206,8 @@ impl EguiHost {
     /// `death` is `Some` while survival health is zero — dark overlay with
     /// Respawn / Title / Quit. Creative never reaches this path.
     /// `map` is `Some` while a held map sheet is open (use / M).
+    /// `toast` is `Some` while an advancement popup is visible (always drawn
+    /// on top when present, including during play with no other egui screen).
     pub fn run(
         &mut self,
         window: &Window,
@@ -208,12 +219,15 @@ impl EguiHost {
         binds: &mut Keybinds,
         death: Option<DeathView>,
         map: Option<MapView>,
+        toast: Option<ToastView>,
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
         let mut touched = false;
+        let mut crafted = false;
         let icons = &mut self.icons;
         let map_view = map;
+        let toast_view = toast;
         let output = self.ctx.run_ui(raw, |ui| {
             apply_theme(ui.ctx());
             if let Some(view) = death {
@@ -224,14 +238,21 @@ impl EguiHost {
                 draw_creative(ui, gui, hotbar, bag, icons);
                 draw_pinned_tip(ui, gui);
             } else if gui.player_inv_open() {
-                touched = draw_player_inventory(ui, gui, hotbar, bag, armor, icons);
+                let (inv_touched, inv_crafted) =
+                    draw_player_inventory(ui, gui, hotbar, bag, armor, icons);
+                touched = inv_touched;
+                crafted = inv_crafted;
                 draw_pinned_tip(ui, gui);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
+            if let Some(toast) = toast_view.as_ref() {
+                draw_advancement_toast(ui, toast);
+            }
         });
         self.pending = pending;
         self.touched = touched;
+        self.crafted = crafted;
         self.winit
             .handle_platform_output(window, output.platform_output.clone());
         output
@@ -415,6 +436,47 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
         .corner_radius(CornerRadius::same(4))
         .min_size(Vec2::new(ui.available_width().max(280.0), 34.0));
     ui.add(btn)
+}
+
+fn draw_advancement_toast(ui: &mut Ui, toast: &ToastView) {
+    let alpha = toast.alpha.clamp(0.0, 1.0);
+    if alpha <= 0.01 {
+        return;
+    }
+    let mul = |c: Color32| -> Color32 {
+        Color32::from_rgba_unmultiplied(
+            c.r(),
+            c.g(),
+            c.b(),
+            ((c.a() as f32) * alpha).round() as u8,
+        )
+    };
+    egui::Area::new(egui::Id::new("advancement_toast"))
+        .anchor(Align2::RIGHT_TOP, [toast.slide - 18.0, 18.0])
+        .interactable(false)
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            Frame::new()
+                .fill(mul(WELL))
+                .stroke(Stroke::new(1.5, mul(SELECT)))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.set_min_width(250.0);
+                    ui.label(
+                        RichText::new(&toast.title)
+                            .size(16.0)
+                            .color(mul(INK))
+                            .strong(),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(&toast.subtitle)
+                            .size(13.0)
+                            .color(mul(MUTED)),
+                    );
+                });
+        });
 }
 
 fn draw_death(ui: &mut Ui, view: DeathView) -> MenuAction {
@@ -1443,8 +1505,9 @@ fn draw_player_inventory(
     bag: &mut hotbar::Bag,
     armor: &mut Armor,
     icons: &mut HashMap<String, TextureHandle>,
-) -> bool {
+) -> (bool, bool) {
     let mut touched = false;
+    let mut crafted = false;
     egui::CentralPanel::default()
         .frame(Frame::new().fill(backdrop()))
         .show(ui, |ui| {
@@ -1463,20 +1526,28 @@ fn draw_player_inventory(
                         if side_by_side {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
-                                if draw_player_inventory_panel(
+                                let (panel_touched, panel_crafted) = draw_player_inventory_panel(
                                     ui, gui, hotbar, bag, armor, icons, panel_w,
-                                ) {
+                                );
+                                if panel_touched {
                                     touched = true;
+                                }
+                                if panel_crafted {
+                                    crafted = true;
                                 }
                                 if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
                                     touched = true;
                                 }
                             });
                         } else {
-                            if draw_player_inventory_panel(
+                            let (panel_touched, panel_crafted) = draw_player_inventory_panel(
                                 ui, gui, hotbar, bag, armor, icons, panel_w,
-                            ) {
+                            );
+                            if panel_touched {
                                 touched = true;
+                            }
+                            if panel_crafted {
+                                crafted = true;
                             }
                             ui.add_space(10.0);
                             if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
@@ -1486,7 +1557,7 @@ fn draw_player_inventory(
                     });
             });
         });
-    touched
+    (touched, crafted)
 }
 
 fn draw_player_inventory_panel(
@@ -1497,8 +1568,9 @@ fn draw_player_inventory_panel(
     armor: &mut Armor,
     icons: &mut HashMap<String, TextureHandle>,
     panel_w: f32,
-) -> bool {
+) -> (bool, bool) {
     let mut touched = false;
+    let mut crafted = false;
     let grid_w = grid_pitch(INV_COLS);
     show_panel(ui, panel_w, |ui| {
         ui.set_min_width(grid_w.min(panel_w));
@@ -1519,8 +1591,12 @@ fn draw_player_inventory_panel(
             }
             PlayerInvTab::Craft => {
                 // Focus the 2×2 + OUT; bag stays for ingredients. EMI stays beside.
-                if draw_craft_detail(ui, gui, hotbar, bag, icons) {
+                let (craft_touched, craft_done) = draw_craft_detail(ui, gui, hotbar, bag, icons);
+                if craft_touched {
                     touched = true;
+                }
+                if craft_done {
+                    crafted = true;
                 }
                 ui.add_space(12.0);
                 ui.label(RichText::new("bag").color(MUTED).size(12.0));
@@ -1540,7 +1616,7 @@ fn draw_player_inventory_panel(
             gui.close_items();
         }
     });
-    touched
+    (touched, crafted)
 }
 
 /// Segmented PLAYER | CRAFT strip under the inventory title.
@@ -2102,8 +2178,9 @@ fn draw_craft_detail(
     hotbar: &mut Hotbar,
     bag: &mut hotbar::Bag,
     icons: &mut HashMap<String, TextureHandle>,
-) -> bool {
+) -> (bool, bool) {
     let mut touched = false;
+    let mut crafted = false;
     let preview = gui.inv_craft_preview();
     Frame::new()
         .fill(ROW)
@@ -2140,6 +2217,7 @@ fn draw_craft_detail(
                     ui.add_space(2.0);
                     if craft_out_slot(ui, gui, hotbar, bag, icons, preview.as_deref()) {
                         touched = true;
+                        crafted = true;
                     }
                 });
             });
@@ -2168,7 +2246,7 @@ fn draw_craft_detail(
                     ui.label(RichText::new(line).size(12.0).color(DETAIL));
                 });
         });
-    touched
+    (touched, crafted)
 }
 
 fn craft_input_slot(

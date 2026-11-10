@@ -74,6 +74,8 @@ struct Aside {
     hotbar: Option<HotbarSave>,
     player: Option<PlayerPlace>,
     chests: Vec<StoredChest>,
+    /// Baked milestone ids the player has unlocked (advancement toasts).
+    advancements: Vec<String>,
 }
 
 /// Read `path`. A file that is not there is an empty list.
@@ -115,6 +117,25 @@ pub fn write_player(path: &Path, player: PlayerPlace) -> Result<(), String> {
     let mut aside = read_aside(path)?;
     aside.player = Some(player);
     write_document(path, &changes, &aside)
+}
+
+/// Write unlocked advancement ids. Cells, inventory, hotbar, and player stay.
+pub fn write_advancements(path: &Path, ids: &[String]) -> Result<(), String> {
+    let changes = read_changes(path)?;
+    let mut aside = read_aside(path)?;
+    aside.advancements = ids.to_vec();
+    write_document(path, &changes, &aside)
+}
+
+/// Unlocked advancement ids in `path`. Missing file / field is empty.
+pub fn read_advancements(path: &Path) -> Result<Vec<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            parse_advancements(&text).map_err(|err| format!("{}: {err}", path.display()))
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(format!("{}: {err}", path.display())),
+    }
 }
 
 /// Replace the chest list. Cells, inventory, hotbar, and player stay.
@@ -255,6 +276,7 @@ fn parse_aside(text: &str) -> Result<Aside, String> {
         hotbar: parse_hotbar(text)?,
         player: parse_player(text)?,
         chests: parse_chests(text)?,
+        advancements: parse_advancements(text)?,
     })
 }
 
@@ -270,6 +292,7 @@ fn write_document(path: &Path, changes: &[CellChange], aside: &Aside) -> Result<
         aside.hotbar.as_ref(),
         aside.player,
         &aside.chests,
+        &aside.advancements,
     );
     fs::write(path, text).map_err(|err| format!("{}: {err}", path.display()))
 }
@@ -336,7 +359,7 @@ pub fn parse_changes(text: &str) -> Result<Vec<CellChange>, String> {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn format_changes(changes: &[CellChange]) -> String {
-    format_document(changes, &[], None, None, &[])
+    format_document(changes, &[], None, None, &[], &[])
 }
 
 fn format_document(
@@ -345,6 +368,7 @@ fn format_document(
     hotbar: Option<&HotbarSave>,
     player: Option<PlayerPlace>,
     chests: &[StoredChest],
+    advancements: &[String],
 ) -> String {
     let mut cells = changes.to_vec();
     cells.sort_by_key(|cell| (cell.z, cell.y, cell.x));
@@ -393,6 +417,9 @@ fn format_document(
     if !chests.is_empty() {
         sections.push(format_chests(chests));
     }
+    if !advancements.is_empty() {
+        sections.push(format_advancements(advancements));
+    }
     let mut out = String::from("{\n");
     for (index, section) in sections.iter().enumerate() {
         out.push_str(section);
@@ -403,6 +430,42 @@ fn format_document(
     }
     out.push_str("}\n");
     out
+}
+
+fn format_advancements(ids: &[String]) -> String {
+    let mut ordered = ids.to_vec();
+    ordered.sort();
+    ordered.dedup();
+    let mut out = String::from("  \"advancements\": [\n");
+    for (index, id) in ordered.iter().enumerate() {
+        let comma = if index + 1 == ordered.len() { "" } else { "," };
+        out.push_str(&format!("    {}{comma}\n", json_string(id)));
+    }
+    out.push_str("  ]");
+    out
+}
+
+pub fn parse_advancements(text: &str) -> Result<Vec<String>, String> {
+    let root = save_object(text)?;
+    let Some(entries) = root.get("advancements") else {
+        return Ok(Vec::new());
+    };
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| "advancements must be an array".to_string())?;
+    let mut ids = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let id = entry
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 32)
+            .ok_or_else(|| format!("advancement {index} needs a short string id"))?
+            .to_string();
+        if ids.iter().any(|have| have == &id) {
+            return Err(format!("advancement {id} is listed twice"));
+        }
+        ids.push(id);
+    }
+    Ok(ids)
 }
 
 fn format_hotbar(hotbar: &HotbarSave) -> String {
@@ -934,6 +997,42 @@ mod tests {
             parse_changes(r#"{"blocks":[{"x":0,"y":0,"z":0,"id":"stone","metadata":16}]}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn advancements_survive_a_later_block_edit() {
+        let path: PathBuf = std::env::temp_dir().join(format!(
+            "rebuild-advancements-{}.json",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        assert!(read_advancements(&path).unwrap().is_empty());
+        write_advancements(&path, &["craft".into(), "kill".into()]).unwrap();
+        let edit = [CellChange {
+            x: 2,
+            y: 1,
+            z: 4,
+            block: Block::new("dirt", 0),
+        }];
+        write_changes(&path, &edit).unwrap();
+        assert_eq!(read_changes(&path).unwrap(), edit);
+        assert_eq!(
+            read_advancements(&path).unwrap(),
+            vec!["craft".to_string(), "kill".to_string()]
+        );
+        write_hotbar(
+            &path,
+            &HotbarSave {
+                selected: 0,
+                slots: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_advancements(&path).unwrap(),
+            vec!["craft".to_string(), "kill".to_string()]
+        );
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

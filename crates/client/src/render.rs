@@ -1260,6 +1260,8 @@ pub struct State {
     compound_flow_told: bool,
     /// The full map sheet is open.
     map_open: bool,
+    /// Baked milestone unlocks + active egui toast.
+    advancements: crate::advancements::Advancements,
     /// F is down on a held spyglass.
     zoom_key: bool,
     /// Seconds until a held goat horn can sound again.
@@ -2450,6 +2452,7 @@ impl State {
             gen_charge_wait: 0,
             compound_flow_told: false,
             map_open: false,
+            advancements: crate::advancements::Advancements::new(),
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
@@ -2792,6 +2795,21 @@ impl State {
             }
             Ok(None) => {}
             Err(err) => eprintln!("player: {err}"),
+        }
+        match rebuild_world::read_advancements(path) {
+            Ok(ids) => self.advancements.install(&ids),
+            Err(err) => eprintln!("advancements: {err}"),
+        }
+    }
+
+    fn flush_advancements(&mut self) {
+        if !self.advancements.take_dirty() {
+            return;
+        }
+        let path = crate::net::world_file(&self.loaded_world);
+        let ids = self.advancements.list();
+        if let Err(err) = rebuild_world::write_advancements(&path, &ids) {
+            eprintln!("could not save advancements: {err}");
         }
     }
 
@@ -5891,6 +5909,7 @@ impl State {
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
         self.note_dawn();
         self.gui.push_chat("slept until morning");
+        let _ = self.advancements.unlock("sleep");
     }
 
     /// True when a living hostile sits inside the night-spawn min ring.
@@ -6487,6 +6506,7 @@ impl State {
         }
         self.hotbar_dirty = true;
         self.bag_dirty = true;
+        let _ = self.advancements.unlock("craft");
     }
 
     fn take_furnace_output(&mut self) {
@@ -7696,6 +7716,7 @@ impl State {
         self.elytra_whoosh = 1.6;
         self.audio.play(crate::audio::Sound::Gust);
         self.gui.push_chat("glide");
+        let _ = self.advancements.unlock("elytra");
         true
     }
 
@@ -7760,6 +7781,7 @@ impl State {
                 origin[1].floor() as i32,
                 origin[2].floor() as i32,
             );
+            let _ = self.advancements.unlock("kill");
         }
         dropped
     }
@@ -9477,6 +9499,7 @@ impl State {
         }
         if self.holding_map() {
             self.map_open = true;
+            let _ = self.advancements.unlock("map");
             self.clear_motion();
             self.set_capture(false);
             return;
@@ -16529,6 +16552,51 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Mid-hold advancement toast (crafting milestone), then quit with a PNG.
+    pub fn arm_advancement_toast_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.found_flight = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("crafting_table");
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        // Settled mid-toast so the shot catches title + subtitle fully opaque.
+        self.advancements
+            .show_for_shot("craft", crate::advancements::TOAST_SLIDE + 0.6);
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Look at the marsh clay bank under water, then quit with a PNG.
     pub fn arm_clay_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -20543,6 +20611,7 @@ impl State {
             }
             KeyCode::KeyM if pressed && self.playing && self.holding_map() => {
                 self.map_open = true;
+                let _ = self.advancements.unlock("map");
                 self.clear_motion();
                 self.set_capture(false);
             }
@@ -22553,6 +22622,8 @@ impl State {
     }
 
     pub fn tick(&mut self, dt: f32) {
+        self.advancements.tick(dt);
+        self.flush_advancements();
         self.flush_hotbar();
         self.flush_bag();
         self.flush_pose(dt);
@@ -24786,12 +24857,14 @@ impl State {
             pass.draw_indexed(0..ui_indices.len() as u32, 0, 0..1);
         }
 
+        let toast = self.advancements.view();
         if crate::egui_ui::EguiHost::wants_input(
             &self.menu,
             &self.gui,
             self.dead,
             self.map_open,
-        ) {
+        ) || toast.is_some()
+        {
             let death = self.dead.then(|| self.death_view());
             let map = (!self.dead && !self.menu.is_open() && !self.gui.is_open() && self.map_open)
                 .then(|| self.held_map_view());
@@ -24805,9 +24878,11 @@ impl State {
                 &mut self.binds,
                 death,
                 map,
+                toast,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();
+            let crafted = self.egui.take_crafted();
             self.egui.paint(
                 &self.device,
                 &self.queue,
@@ -24817,6 +24892,9 @@ impl State {
                 self.size.height,
                 full,
             );
+            if crafted {
+                let _ = self.advancements.unlock("craft");
+            }
             if action != gui::MenuAction::None {
                 self.hotbar_dirty = true;
                 self.bag_dirty = true;
