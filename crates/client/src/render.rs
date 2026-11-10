@@ -5047,6 +5047,9 @@ impl State {
     }
 
     /// Empty hand: move fill from the looked-at host into the host past that face.
+    ///
+    /// Tanks move units (all into another tank, one into a conduit). Underfilled
+    /// same-kind tanks accept a top-up transfer.
     fn try_compound_transfer(&mut self) -> bool {
         if self.hotbar.slot(self.hotbar.selected()).is_some() {
             return false;
@@ -5063,18 +5066,63 @@ impl State {
         let dest = self
             .world
             .block_at(hit.place[0], hit.place[1], hit.place[2]);
-        if !compound_host(dest.id) || dest.fill != FILL_NONE {
+        if !compound_host(dest.id) {
             return false;
         }
+        if dest.fill != FILL_NONE
+            && !(is_tank(dest.id) && dest.fill == src.fill && tank_level(dest) < TANK_MAX)
+        {
+            return false;
+        }
+        if !compound_accepts_meta(dest.id, dest.metadata, src.fill) {
+            return false;
+        }
+        let fill = src.fill;
+        let src_units = if is_tank(src.id) {
+            tank_level(src).max(1)
+        } else {
+            1
+        };
+        let (src_next, dest_next) = if is_tank(dest.id) {
+            let room = if dest.fill == FILL_NONE {
+                TANK_MAX
+            } else {
+                TANK_MAX.saturating_sub(tank_level(dest))
+            };
+            let moved = src_units.min(room).max(1);
+            let dest_level = if dest.fill == FILL_NONE {
+                moved
+            } else {
+                tank_level(dest) + moved
+            };
+            let src_left = src_units.saturating_sub(moved);
+            let src_next = if !is_tank(src.id) {
+                src.with_fill(FILL_NONE)
+            } else if src_left == 0 {
+                Block::new("tank", 0)
+            } else {
+                tank_at(fill, src_left)
+            };
+            (src_next, tank_at(fill, dest_level))
+        } else if is_tank(src.id) {
+            // One unit into a conduit; leave the rest in the tank.
+            let src_next = if src_units <= 1 {
+                Block::new("tank", 0)
+            } else {
+                tank_at(fill, src_units - 1)
+            };
+            (src_next, dest.with_fill(fill))
+        } else {
+            (src.with_fill(FILL_NONE), dest.with_fill(fill))
+        };
         let (min, max) = body::player_box_bounds(self.camera.eye);
         let player = PlayerBox { min, max };
-        let fill = src.fill;
         self.send_edit(
             encode_place(
                 hit.block[0],
                 hit.block[1],
                 hit.block[2],
-                src.with_fill(FILL_NONE),
+                src_next,
                 player,
             ),
             TAG_PLACE,
@@ -5085,7 +5133,7 @@ impl State {
                 hit.place[0],
                 hit.place[1],
                 hit.place[2],
-                dest.with_fill(fill),
+                dest_next,
                 player,
             ),
             TAG_PLACE,
@@ -5114,7 +5162,36 @@ impl State {
             let block = self
                 .world
                 .block_at(hit.block[0], hit.block[1], hit.block[2]);
-            if block.id != "water" || !self.bucket_fits(slot, "bucket", "water_bucket") {
+            if !self.bucket_fits(slot, "bucket", "water_bucket") {
+                return true;
+            }
+            // Scoop from a water tank: take up to a bucket of units.
+            if is_tank(block.id) && block.fill == FILL_WATER {
+                let level = tank_level(block);
+                if level == 0 {
+                    return true;
+                }
+                let take = level.min(TANK_BUCKET);
+                let next = if level <= take {
+                    Block::new("tank", 0)
+                } else {
+                    tank_at(FILL_WATER, level - take)
+                };
+                let (min, max) = body::player_box_bounds(self.camera.eye);
+                self.send_edit(
+                    encode_place(
+                        hit.block[0],
+                        hit.block[1],
+                        hit.block[2],
+                        next,
+                        PlayerBox { min, max },
+                    ),
+                    TAG_PLACE,
+                    Some(slot),
+                );
+                return true;
+            }
+            if block.id != "water" {
                 return true;
             }
             self.send_edit(
@@ -5971,16 +6048,29 @@ impl State {
                 }
             }
             if let Some(slot) = pending.and_then(|edit| edit.slot) {
-                if before.id == cell.block.id
+                let tank_level_changed = is_tank(cell.block.id)
+                    && before.id == cell.block.id
+                    && tank_level(before) != tank_level(cell.block);
+                let fill_changed = before.id == cell.block.id
                     && before.fill != cell.block.fill
-                    && compound_host(cell.block.id)
-                {
-                    if cell.block.fill != FILL_NONE {
-                        // Filled a host.
+                    && compound_host(cell.block.id);
+                if fill_changed || tank_level_changed {
+                    let rose = tank_level(cell.block) > tank_level(before)
+                        || (before.fill == FILL_NONE && cell.block.fill != FILL_NONE);
+                    let fell = tank_level(cell.block) < tank_level(before)
+                        || (before.fill != FILL_NONE && cell.block.fill == FILL_NONE);
+                    if rose {
+                        // Filled / topped up a host (including tank level++).
                         if self.hotbar.slot(slot) == Some("water_bucket") {
                             if self.exchange_bucket(slot, "water_bucket", "bucket") {
-                                self.gui.push_chat("waterlogged");
+                                self.gui.push_chat(if is_tank(cell.block.id) {
+                                    "tank"
+                                } else {
+                                    "waterlogged"
+                                });
                             }
+                        } else if self.hotbar.slot(slot) == Some("bucket") {
+                            // Scoop path should not land here; ignore.
                         } else {
                             self.hotbar.consume_at(slot);
                             self.hotbar_dirty = true;
@@ -5988,17 +6078,28 @@ impl State {
                                 self.gui.push_chat(name);
                             }
                         }
-                    } else {
-                        // Drained a host — refund the fill item when possible.
-                        let refund = match before.fill {
-                            FILL_WATER => "water_bucket",
-                            FILL_EMBER => "ember_charge",
-                            _ => "",
-                        };
-                        if !refund.is_empty() && self.hotbar.collect(refund) {
-                            self.hotbar_dirty = true;
+                    } else if fell {
+                        // Drained / scooped a host — refund when holding an empty bucket.
+                        if before.fill == FILL_WATER
+                            && self.hotbar.slot(slot) == Some("bucket")
+                            && self.exchange_bucket(slot, "bucket", "water_bucket")
+                        {
+                            self.gui.push_chat(if is_tank(before.id) {
+                                "scooped"
+                            } else {
+                                "drained"
+                            });
+                        } else {
+                            let refund = match before.fill {
+                                FILL_WATER => "water_bucket",
+                                FILL_EMBER => "ember_charge",
+                                _ => "",
+                            };
+                            if !refund.is_empty() && self.hotbar.collect(refund) {
+                                self.hotbar_dirty = true;
+                            }
+                            self.gui.push_chat("drained");
                         }
-                        self.gui.push_chat("drained");
                     }
                 } else if cell.block.id == "water" && self.hotbar.slot(slot) == Some("water_bucket") {
                     if self.exchange_bucket(slot, "water_bucket", "bucket") {

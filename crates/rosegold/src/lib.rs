@@ -291,6 +291,12 @@ pub enum Query {
         y: i32,
         z: i32,
     },
+    /// Tank stored units (`0..=8`). Non-tanks report `1` when filled, else `0`.
+    FillLevel {
+        x: i32,
+        y: i32,
+        z: i32,
+    },
     /// Set compound fill to `water` / `ember`, or clear with `""` / `none`.
     SetFill {
         x: i32,
@@ -793,6 +799,11 @@ fn query_of(name: &str, args: &[Value]) -> Result<Query, String> {
             meta: int_at(args, 3)?,
         }),
         "world.get_fill" => Ok(Query::Fill {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+        }),
+        "world.fill_level" => Ok(Query::FillLevel {
             x: int_at(args, 0)?,
             y: int_at(args, 1)?,
             z: int_at(args, 2)?,

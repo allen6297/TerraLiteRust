@@ -2020,6 +2020,20 @@ fn answer(
                     .to_string(),
             ))
         }
+        Query::FillLevel { x, y, z } => {
+            if !world.in_bounds(x, y, z) {
+                return Ok(Answer::Int(0));
+            }
+            let block = world.block_at(x, y, z);
+            let level = if crate::chunk::is_tank(block.id) {
+                i64::from(crate::chunk::tank_level(block))
+            } else if block.fill != crate::chunk::FILL_NONE {
+                1
+            } else {
+                0
+            };
+            Ok(Answer::Int(level))
+        }
         Query::SetFill { x, y, z, kind } => {
             if !matches!(gate, ScriptWrites::Open) || !world.in_bounds(x, y, z) {
                 return Ok(Answer::Bool(false));

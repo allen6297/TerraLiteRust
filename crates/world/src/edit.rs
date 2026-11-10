@@ -283,6 +283,58 @@ mod tests {
     }
 
     #[test]
+    fn a_tank_can_change_level_without_swapping_fill_kind() {
+        use crate::chunk::{TANK_BUCKET, TANK_MAX, tank_at, tank_level};
+        let chunk = Chunk::from_blocks(0, 0, [(2, 1, 2, tank_at(FILL_WATER, 3))]).unwrap();
+        let mut world = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: tank_at(FILL_WATER, 7),
+                player: far_player(),
+            }
+        ));
+        assert_eq!(tank_level(world.block_at(2, 1, 2)), 7);
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: tank_at(FILL_WATER, 1),
+                player: far_player(),
+            }
+        ));
+        assert_eq!(tank_level(world.block_at(2, 1, 2)), 1);
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: Block::new("tank", 0),
+                player: far_player(),
+            }
+        ));
+        assert_eq!(world.block_at(2, 1, 2).fill, 0);
+        assert_eq!(tank_level(world.block_at(2, 1, 2)), 0);
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: tank_at(FILL_WATER, TANK_BUCKET.min(TANK_MAX)),
+                player: far_player(),
+            }
+        ));
+        assert_eq!(tank_level(world.block_at(2, 1, 2)), TANK_BUCKET.min(TANK_MAX));
+    }
+
+    #[test]
     fn a_grate_takes_water_or_ember_without_replacing_the_host() {
         let chunk =
             Chunk::from_blocks(0, 0, [(2, 1, 2, Block::new("copper_grate", 0))]).unwrap();
