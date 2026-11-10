@@ -5402,6 +5402,10 @@ pub fn wolf_quads(width: f32, height: f32, amount: f32, sitting: bool) -> Vec<Qu
     )
 }
 
+pub fn dusk_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "dusk")
+}
+
 pub fn chew_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "chew")
 }

@@ -119,19 +119,19 @@ impl Drops {
                 [0.12, 0.05, -0.08],
                 [1.0, 0.92, 0.35],
                 [0.85, 0.72, 0.12],
-                4.2,
+                6.4,
             ),
             (
                 [-0.1, 0.08, 0.1],
                 [0.95, 1.0, 0.4],
                 [0.7, 0.85, 0.15],
-                3.6,
+                5.6,
             ),
             (
                 [0.05, -0.04, 0.12],
                 [1.0, 0.85, 0.28],
                 [0.9, 0.65, 0.08],
-                4.8,
+                7.0,
             ),
         ];
         let seed = ((origin[0] * 3.1 + origin[2] * 1.7).abs() as usize) % FLIES.len();
@@ -367,17 +367,24 @@ impl Drops {
             mote.center[1] += mote.velocity[1] * step;
             mote.center[2] += mote.velocity[2] * step;
             if mote.hover {
-                // Soft bob and drift; reverse when the mote climbs or sinks too far.
-                mote.velocity[1] += (0.35 - mote.velocity[1]) * (1.4 * step).min(1.0);
-                if mote.life.sin().abs() > 0.92 {
-                    mote.velocity[0] = -mote.velocity[0] * 0.85;
-                    mote.velocity[2] = -mote.velocity[2] * 0.85;
+                // Sin bob + twinkle so dusk flies read against the night sky.
+                let bob = (mote.life * 2.9).sin() * 0.75;
+                mote.velocity[1] += (bob - mote.velocity[1]) * (2.4 * step).min(1.0);
+                if mote.life.sin().abs() > 0.9 {
+                    mote.velocity[0] = -mote.velocity[0] * 0.88;
+                    mote.velocity[2] = -mote.velocity[2] * 0.88;
                 }
-                let damp = (1.0 - 0.35 * step).max(0.0);
+                let damp = (1.0 - 0.28 * step).max(0.0);
                 mote.velocity[0] *= damp;
                 mote.velocity[2] *= damp;
-                // Pulse a little so the glow reads against dusk.
-                mote.half = 0.04 + 0.02 * (mote.life * 3.1).sin().abs();
+                let twinkle = (mote.life * 5.4).sin().abs();
+                mote.half = 0.03 + 0.05 * twinkle;
+                // Brighten toward the lit color from the block ember as they pulse.
+                mote.color = [
+                    (mote.block[0] + (1.0 - mote.block[0]) * twinkle).min(1.0),
+                    (mote.block[1] + (1.0 - mote.block[1]) * twinkle).min(1.0),
+                    (mote.block[2] + (0.45 - mote.block[2]).max(0.0) * twinkle).min(1.0),
+                ];
             } else if mote.rise {
                 mote.velocity[1] += 0.28 * step;
                 let damp = (1.0 - 1.1 * step).max(0.0);
@@ -881,9 +888,15 @@ mod tests {
         assert_eq!(drops.firefly_count(), 2);
         let before = drops.vertices().len();
         assert!(before >= 2 * 36);
+        let half_a = drops.motes[0].half;
         assert!(drops.tick_motes(0.2));
         assert_eq!(drops.firefly_count(), 2);
-        assert!(drops.tick_motes(6.0));
+        assert!(
+            (drops.motes[0].half - half_a).abs() > 0.001
+                || drops.motes.iter().any(|m| m.half > 0.04),
+            "twinkle should pulse the mote size"
+        );
+        assert!(drops.tick_motes(8.0));
         assert_eq!(drops.firefly_count(), 0);
         assert!(drops.vertices().is_empty());
     }

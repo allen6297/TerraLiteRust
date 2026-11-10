@@ -1002,6 +1002,8 @@ pub struct State {
     axolotl_held_lead: bool,
     /// HUD plate while a tamed wolf sits or heels, `0`..`1`.
     wolf_show: f32,
+    /// HUD plate while dusk fireflies drift nearby, `0`..`1`.
+    dusk_show: f32,
     /// One-shot idle horse vs gallop FOV stitch, then quit.
     horse_shot_path: Option<std::path::PathBuf>,
     horse_shot_frames: u32,
@@ -2070,6 +2072,7 @@ impl State {
             leash_show: 0.0,
             axolotl_held_lead: false,
             wolf_show: 0.0,
+            dusk_show: 0.0,
             horse_shot_path: None,
             horse_shot_frames: 0,
             horse_shot_phase: HorseShotPhase::Idle,
@@ -9731,8 +9734,17 @@ impl State {
                 shore[2] + offset[2],
             ]);
         }
+        // Advance a beat so half/twinkle is mid-pulse for the PNG.
+        let _ = self.drops.tick_motes(0.35);
         self.rebuild_drops();
         self.found_fireflies = true;
+        self.dusk_show = 1.0;
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
         self.gui.push_chat("fireflies");
 
         let eye = glam::Vec3::new(9.5, 1.0 + 1.8 + body::EYE_HEIGHT, 20.2);
@@ -16507,6 +16519,11 @@ impl State {
                 }
             }
         }
+        if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0 {
+            self.dusk_show = (self.dusk_show + 0.35).min(1.0);
+        } else {
+            self.dusk_show = (self.dusk_show - dt * 0.8).max(0.0);
+        }
         if self.playing && !self.menu.is_open() && !self.dead {
             if was_dry && self.rain_mix >= 0.35 && !self.rain_told {
                 self.rain_told = true;
@@ -17817,6 +17834,9 @@ impl State {
                 self.wolf_show,
                 self.wolf.sitting(),
             ));
+        }
+        if self.dusk_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::dusk_quads(gui_w, gui_h, self.dusk_show));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));
