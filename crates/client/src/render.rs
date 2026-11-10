@@ -1364,6 +1364,8 @@ pub struct State {
     found_dungeon: bool,
     /// Once: walked into the abandoned mineshaft spur.
     found_mineshaft: bool,
+    /// Once: walked into the nether fortress spur by the hellish pad.
+    found_fortress: bool,
     found_rails: bool,
     found_clay: bool,
     /// Once: walked up to the starter compound demo by the pad.
@@ -2610,6 +2612,7 @@ impl State {
             found_village: false,
             found_dungeon: false,
             found_mineshaft: false,
+            found_fortress: false,
             found_rails: false,
             found_clay: false,
             found_compound: false,
@@ -6498,6 +6501,15 @@ impl State {
             self.found_mineshaft = true;
             self.gui.push_chat("an abandoned mineshaft");
         }
+        if !self.found_fortress
+            && near(
+                rebuild_world::NETHER_FORTRESS.0,
+                rebuild_world::NETHER_FORTRESS.1,
+            )
+        {
+            self.found_fortress = true;
+            self.gui.push_chat("a nether fortress");
+        }
         if !self.found_lodestone
             && near(
                 rebuild_world::SHAFT_LODESTONE.0,
@@ -7058,7 +7070,8 @@ impl State {
             .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_village(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
-            .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen));
+            .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_fortress(has_record, hit.block[0], hit.block[2], self.omen));
         if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
@@ -8495,6 +8508,96 @@ impl State {
         self.rebuild_chicken();
         self.gui.push_chat("egg");
         true
+    }
+
+    /// Nether fortress spur west of the hellish pad — brick corridor + chest.
+    pub fn arm_nether_fortress_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.20);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (fx, fz) = rebuild_world::NETHER_FORTRESS;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        let (cx, cz) = rebuild_world::NETHER_FORTRESS_CHEST;
+        let (bx, bz) = rebuild_world::NETHER_FORTRESS_BLAZE;
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: fx,
+                    y: fy - 1,
+                    z: fz,
+                    block: Block::new("nether_bricks", 0),
+                },
+                CellChange {
+                    x: cx,
+                    y: fy,
+                    z: cz,
+                    block: Block::new("chest", 0),
+                },
+                CellChange {
+                    x: bx,
+                    y: fy,
+                    z: bz,
+                    block: Block::new("soul_sand", 0),
+                },
+                CellChange {
+                    x: bx,
+                    y: fy + 1,
+                    z: bz,
+                    block: Block::new("trial_spawner", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(fx, fz);
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a nether fortress");
+
+        // Stand on the brick bed mid-spur looking west toward chest + blaze cage.
+        let focus = glam::Vec3::new(cx as f32 + 0.5, fy as f32 + 1.15, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            fx as f32 + 0.5,
+            fy as f32 + body::EYE_HEIGHT,
+            fz as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("torch");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(fx + dx * 8, fz + dz * 8);
+                self.chunk_bake.touch(
+                    rebuild_world::NETHER_PAD.0 + dx * 8,
+                    rebuild_world::NETHER_PAD.1 + dz * 8,
+                );
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Abandoned mineshaft spur east of the pit — rails, timber, chest.
@@ -28328,6 +28431,11 @@ fn mineshaft_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::MINESHAFT_CHEST
 }
 
+/// The nether fortress remnant chest.
+fn fortress_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::NETHER_FORTRESS_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -28991,6 +29099,28 @@ fn fresh_mineshaft(has_record: bool, x: i32, z: i32, omen: bool) -> Option<Strin
     mineshaft_loot(x, z, omen)
 }
 
+/// One drop from the nether fortress chest, read from the data pack.
+fn fortress_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !fortress_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_fortress_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the nether fortress remnant chest.
+fn fresh_fortress(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    fortress_loot(x, z, omen)
+}
+
 /// One drop from this chest, read from the data pack. The same cell always
 /// yields the same item. `omen` uses the richer list. `None` means the file
 /// could not be read.
@@ -29570,6 +29700,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_mineshaft(true, x, z, false).is_none());
         assert!(super::fresh_mineshaft(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_fortress_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::NETHER_FORTRESS_CHEST;
+        assert!(super::fortress_cell(x, z));
+        assert!(!super::fortress_cell(
+            rebuild_world::NETHER_FORTRESS.0,
+            rebuild_world::NETHER_FORTRESS.1
+        ));
+        assert!(!super::portal_cell(x, z));
+        assert!(!super::mineshaft_cell(x, z));
+        let table = crate::loot::load_fortress_chest().unwrap();
+        let paid = super::fresh_fortress(false, x, z, false).unwrap();
+        let rich = super::fresh_fortress(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_fortress(true, x, z, false).is_none());
+        assert!(super::fresh_fortress(false, 0, 0, false).is_none());
     }
 
     #[test]

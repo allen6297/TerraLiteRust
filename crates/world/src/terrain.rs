@@ -157,6 +157,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
     stamp_nether_pocket(&mut blocks, chunk_x, chunk_z);
+    stamp_nether_fortress(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
@@ -437,6 +438,21 @@ pub const NETHER_PORTAL_IN: (i32, i32) = (NETHER_PAD.0 + 1, NETHER_PAD.1);
 
 /// Interior standing cell of the overworld ruined portal once lit.
 pub const RUINED_PORTAL_IN: (i32, i32) = (RUINED_PORTAL.0 + 1, RUINED_PORTAL.1);
+
+/// Nether-brick fortress spur west of the hellish pocket chamber.
+///
+/// Same chunk as [`NETHER_PAD`] (`(-2, -3)`). Short corridor + loot chest +
+/// blaze-cage stub (trial spawner on soul sand).
+pub const NETHER_FORTRESS: (i32, i32) = (NETHER_PAD.0 - 6, NETHER_PAD.1);
+
+/// Loot chest at the west stub of the fortress corridor.
+pub const NETHER_FORTRESS_CHEST: (i32, i32) = (NETHER_PAD.0 - 7, NETHER_PAD.1 + 1);
+
+/// Blaze-cage stub on the south flank of the corridor (trial spawner on soul sand).
+pub const NETHER_FORTRESS_BLAZE: (i32, i32) = (NETHER_PAD.0 - 5, NETHER_PAD.1 - 1);
+
+/// Floor under the fortress spur (matches the nether pocket floor).
+pub const NETHER_FORTRESS_FLOOR: u16 = 4;
 
 const PORTAL_CHUNK: (i32, i32) = (-2, -2);
 const NETHER_CHUNK: (i32, i32) = (-2, -3);
@@ -728,6 +744,80 @@ fn stamp_nether_pocket(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     }
     // Return portal — already lit so the trip home works.
     push_portal_frame(blocks, chunk_x, chunk_z, cx, cz, floor, true);
+}
+
+/// Short nether-brick corridor west of the pocket — chest + blaze-cage stub.
+fn stamp_nether_fortress(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != NETHER_CHUNK {
+        return;
+    }
+    let floor = NETHER_FORTRESS_FLOOR;
+    let brick = Block::new("nether_bricks", 0);
+    let cracked = Block::new("cracked_nether_bricks", 0);
+    let chiseled = Block::new("chiseled_nether_bricks", 0);
+    let red = Block::new("red_nether_bricks", 0);
+    let soul = Block::new("soul_sand", 0);
+    let (pad_x, pad_z) = NETHER_PAD;
+    // Corridor from the west chamber wall out to the chest stub.
+    let (start_x, end_x) = (pad_x - 7, pad_x - 4);
+    let cz = pad_z;
+    for wx in start_x..=end_x {
+        for wz in (cz - 1)..=(cz + 1) {
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 3)
+            });
+            let bed = if (wx + wz).rem_euclid(3) == 0 {
+                cracked
+            } else {
+                brick
+            };
+            blocks.push((lx, floor - 1, lz, bed));
+            // Side walls + ceiling; leave the mid-row hollow as the walkway.
+            if wz != cz {
+                for dy in 0..3u16 {
+                    let wall = if dy == 1 && (wx - start_x).rem_euclid(2) == 0 {
+                        chiseled
+                    } else if (wx + dy as i32).rem_euclid(4) == 0 {
+                        red
+                    } else {
+                        brick
+                    };
+                    blocks.push((lx, floor + dy, lz, wall));
+                }
+            }
+            blocks.push((lx, floor + 3, lz, brick));
+        }
+        // Center walkway stays air above the brick bed (feet at `floor`).
+    }
+    // Punch a doorway through the pocket's west wall into the corridor.
+    let door_x = ((pad_x - 4) - chunk_x * 16) as u8;
+    let door_z = (cz - chunk_z * 16) as u8;
+    for dy in 1..=2u16 {
+        blocks.retain(|(x, y, z, _)| !(*x == door_x && *z == door_z && *y == floor + dy));
+    }
+    // Blaze-cage stub on the south flank — soul sand + trial spawner (walkway stays clear).
+    let (bx, bz) = NETHER_FORTRESS_BLAZE;
+    let blaze_x = (bx - chunk_x * 16) as u8;
+    let blaze_z = (bz - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| {
+        !(*x == blaze_x && *z == blaze_z && *y >= floor && *y <= floor + 2)
+    });
+    blocks.push((blaze_x, floor, blaze_z, soul));
+    blocks.push((blaze_x, floor + 1, blaze_z, Block::new("trial_spawner", 0)));
+    blocks.push((blaze_x, floor + 2, blaze_z, chiseled));
+    // Chest on the north flank of the west stub.
+    let (chest_wx, chest_wz) = NETHER_FORTRESS_CHEST;
+    let chest_x = (chest_wx - chunk_x * 16) as u8;
+    let chest_z = (chest_wz - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == chest_x && *z == chest_z && *y == floor));
+    blocks.push((chest_x, floor, chest_z, Block::new("chest", 0)));
+    // Glowstone keystone over the doorway so the spur reads from the chamber.
+    let key_x = door_x;
+    let key_z = door_z;
+    blocks.retain(|(x, y, z, _)| !(*x == key_x && *z == key_z && *y == floor + 3));
+    blocks.push((key_x, floor + 3, key_z, Block::new("glowstone", 0)));
 }
 
 /// Incomplete portal frame + apron + chest. Guaranteed in [`PORTAL_CHUNK`];
@@ -2006,6 +2096,48 @@ mod tests {
         );
         assert_ne!(NETHER_CHUNK, PORTAL_CHUNK);
         assert_ne!(NETHER_CHUNK, CAMP_CHUNK);
+    }
+
+    #[test]
+    fn a_nether_fortress_spur_runs_west_of_the_pocket() {
+        let pocket = generate_chunk(NETHER_CHUNK.0, NETHER_CHUNK.1);
+        let floor = NETHER_FORTRESS_FLOOR;
+        let (fx, fz) = NETHER_FORTRESS;
+        let lx = (fx - NETHER_CHUNK.0 * 16) as u8;
+        let lz = (fz - NETHER_CHUNK.1 * 16) as u8;
+        assert!(
+            pocket.block(lx, floor - 1, lz).id == "nether_bricks"
+                || pocket.block(lx, floor - 1, lz).id == "chiseled_nether_bricks"
+                || pocket.block(lx, floor - 1, lz).id == "cracked_nether_bricks",
+            "fortress bed should be nether brick"
+        );
+        assert_eq!(
+            pocket.block(lx, floor + 1, lz).id,
+            "air",
+            "fortress walkway should stay clear"
+        );
+        let (cx, cz) = NETHER_FORTRESS_CHEST;
+        let chest_lx = (cx - NETHER_CHUNK.0 * 16) as u8;
+        let chest_lz = (cz - NETHER_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            pocket.block(chest_lx, floor, chest_lz).id,
+            "chest",
+            "loot chest at the west stub"
+        );
+        let (bx, bz) = NETHER_FORTRESS_BLAZE;
+        let blaze_lx = (bx - NETHER_CHUNK.0 * 16) as u8;
+        let blaze_lz = (bz - NETHER_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            pocket.block(blaze_lx, floor, blaze_lz).id,
+            "soul_sand",
+            "blaze-cage soul sand"
+        );
+        assert_eq!(
+            pocket.block(blaze_lx, floor + 1, blaze_lz).id,
+            "trial_spawner",
+            "blaze-cage trial spawner stub"
+        );
+        assert_eq!(NETHER_FORTRESS.1, NETHER_PAD.1);
     }
 
     #[test]
