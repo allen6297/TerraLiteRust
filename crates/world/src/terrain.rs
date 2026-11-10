@@ -178,6 +178,9 @@ pub const CAMP_SIGN: (i32, i32) = (CAMP_FIRE.0, CAMP_FIRE.1 + 3);
 /// Jukebox east of the fire (between the log and the chest side).
 pub const CAMP_JUKEBOX: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 - 1);
 
+/// Composter southwest of the fire (south of the smoker).
+pub const CAMP_COMPOST: (i32, i32) = (CAMP_FIRE.0 - 2, CAMP_FIRE.1 - 2);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.
@@ -236,6 +239,10 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
     blocks.push((local_x, floor + 1, local_z + 3, Block::new("hanging_sign", 0)));
     // East of the fire: insert a music disc to play.
     blocks.push((local_x + 2, floor, local_z - 1, Block::new("jukebox", 0)));
+    // Southwest of the fire: fill plants for bone meal.
+    blocks.push((local_x - 2, floor, local_z - 2, Block::new("composter", 0)));
+    // A flower beside it so the fill loop is findable without creative give.
+    blocks.push((local_x - 1, floor, local_z - 2, Block::new("flower", 0)));
 }
 
 /// The open pit of the mine mouth, west and south of the demo pad.
@@ -800,6 +807,12 @@ mod tests {
             (2 * 16 + i32::from(x + 2), -2 * 16 + i32::from(z - 1)),
             CAMP_JUKEBOX
         );
+        assert_eq!(camp.block(x - 2, y, z - 2).id, "composter");
+        assert_eq!(
+            (2 * 16 + i32::from(x - 2), -2 * 16 + i32::from(z - 2)),
+            CAMP_COMPOST
+        );
+        assert_eq!(camp.block(x - 1, y, z - 2).id, "flower");
         let elsewhere = generate_chunk(3, 0);
         for local_z in 0..16u8 {
             for local_x in 0..16u8 {
