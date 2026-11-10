@@ -4828,6 +4828,59 @@ impl State {
         true
     }
 
+    /// Till dirt or grass into farmland with a hoe. True when holding a hoe.
+    fn try_till(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_hoe(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "dirt" && block.id != "grass" {
+            self.gui.push_chat("need dirt");
+            return true;
+        }
+        let slot = self.hotbar.selected();
+        if !self.hotbar.wear_use(slot) {
+            self.gui.push_chat("broken");
+            return true;
+        }
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                hit.block[0],
+                hit.block[1],
+                hit.block[2],
+                Block::new("farmland", 0),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            None,
+        );
+        let mote = [
+            hit.block[0] as f32 + 0.5,
+            hit.block[1] as f32 + 1.05,
+            hit.block[2] as f32 + 0.5,
+        ];
+        self.drops.puff(mote, [0.55, 0.38, 0.22]);
+        self.rebuild_drops();
+        self.hotbar_dirty = true;
+        self.gui.push_chat("till");
+        if self.hotbar.slot(slot).is_none() {
+            self.gui.push_chat("the hoe breaks");
+        }
+        true
+    }
+
     /// Plant wheat seeds on dirt or grass. True when holding seeds.
     fn try_plant_seeds(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -6448,6 +6501,7 @@ impl State {
             || self.try_arrow()
             || self.try_fish()
             || self.try_plant_seeds()
+            || self.try_till()
             || self.try_fertilize()
         {
             return;
@@ -8917,7 +8971,90 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Mid-climb on the shaft ladder looking into the pit, then quit with a PNG.
+    /// Fresh farmland beside dirt with a till puff, then quit with a PNG.
+    pub fn arm_farmland_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 11;
+        let cz = 16;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 1)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: 1,
+            z: cz,
+            block: Block::new("farmland", 0),
+        });
+        changes.push(CellChange {
+            x: cx,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, 1.85, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(cx as f32 - 2.2, 2.1 + body::EYE_HEIGHT, cz as f32 + 2.5);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote = [cx as f32 + 0.5, 2.15, cz as f32 + 0.5];
+        self.note_shot_at = Some(mote);
+        self.note_shot_pitch = 2;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(mote, [0.55, 0.38, 0.22]);
+        self.drops.note(mote, 2);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(2), mote);
+        self.found_compound = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("wooden_hoe");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("till");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Ripe wheat on dirt mid-harvest with a mote, then quit with a PNG.
     pub fn arm_wheat_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);

@@ -6173,6 +6173,11 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.hoe_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.wind_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
@@ -6336,6 +6341,8 @@ fn tab_of(id: &str) -> &'static str {
             | "wheat"
             | "wheat_crop"
             | "wheat_seeds"
+            | "farmland"
+            | "wooden_hoe"
     ) {
         "nature"
     } else if matches!(
@@ -9297,7 +9304,7 @@ mod tests {
         assert_eq!(gui.selected_id().as_deref(), Some("dirt"));
         assert_eq!(
             gui.selected_detail(),
-            "used to make clay and flower pot and hay bale and sand"
+            "used to make clay and flower pot and hay bale and sand and wooden hoe"
         );
         assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("door"));
@@ -9516,7 +9523,7 @@ mod tests {
         assert_eq!(gui.selected_id().as_deref(), Some("dirt"));
         assert_eq!(
             gui.selected_detail(),
-            "used to make clay and flower pot and hay bale and sand"
+            "used to make clay and flower pot and hay bale and sand and wooden hoe"
         );
         assert!(gui.on_press(KeyCode::ArrowUp));
         assert_eq!(gui.selected_id().as_deref(), Some("deepslate_tiles"));

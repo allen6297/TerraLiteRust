@@ -641,6 +641,7 @@ mod tests {
                 "wheat_seeds".to_string(),
                 "wind_charge".to_string(),
                 "wire".to_string(),
+                "wooden_hoe".to_string(),
                 "wooden_pickaxe".to_string(),
                 "wool".to_string(),
             ]

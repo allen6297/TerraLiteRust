@@ -177,10 +177,11 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
         && current.fill != 0
         && current.fill == block.fill
         && current.metadata != block.metadata;
-    if !current.is_air() && !swing && !fill_update && !buffer_level {
+    let till = block.id == "farmland" && (current.id == "dirt" || current.id == "grass");
+    if !current.is_air() && !swing && !fill_update && !buffer_level && !till {
         return false;
     }
-    if fill_update {
+    if fill_update || till {
         return true;
     }
     let shape = shape_of(block);

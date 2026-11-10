@@ -480,6 +480,12 @@ struct SeedsDef {
     icon: String,
 }
 
+struct HoeDef {
+    id: String,
+    uses: u16,
+    icon: String,
+}
+
 struct CoreDef {
     id: String,
     icon: String,
@@ -554,6 +560,8 @@ pub struct Pack {
     fishings: Vec<FishingDef>,
     /// Crop seeds from the data pack. Plant on soil.
     seeds: Vec<SeedsDef>,
+    /// Hoes from the data pack. One tills dirt into farmland.
+    hoes: Vec<HoeDef>,
     /// Heavy cores from the data pack. A smithing table sets one into a mace.
     cores: Vec<CoreDef>,
     /// Trial keys from the data pack. One opens a copper chest a single time.
@@ -614,6 +622,7 @@ impl Pack {
             rods: Vec::new(),
             fishings: Vec::new(),
             seeds: Vec::new(),
+            hoes: Vec::new(),
             cores: Vec::new(),
             keys: Vec::new(),
             omens: Vec::new(),
@@ -2250,6 +2259,12 @@ impl Pack {
                     .map(|seed| seed.icon.as_str())
             })
             .or_else(|| {
+                self.hoes
+                    .iter()
+                    .find(|hoe| hoe.id == id)
+                    .map(|hoe| hoe.icon.as_str())
+            })
+            .or_else(|| {
                 self.cores
                     .iter()
                     .find(|core| core.id == id)
@@ -2429,6 +2444,16 @@ impl Pack {
     /// Seed item ids, in data-pack order.
     pub fn seed_ids(&self) -> Vec<String> {
         self.seeds.iter().map(|seed| seed.id.clone()).collect()
+    }
+
+    /// True when `id` tills dirt into farmland.
+    pub fn is_hoe(&self, id: &str) -> bool {
+        self.hoes.iter().any(|hoe| hoe.id == id)
+    }
+
+    /// Hoe ids, in data-pack order.
+    pub fn hoe_ids(&self) -> Vec<String> {
+        self.hoes.iter().map(|hoe| hoe.id.clone()).collect()
     }
 
     /// True when `id` is a heavy core.
@@ -2685,6 +2710,12 @@ impl Pack {
                     .find(|mace| mace.id == id)
                     .map(|mace| mace.uses)
             })
+            .or_else(|| {
+                self.hoes
+                    .iter()
+                    .find(|hoe| hoe.id == id)
+                    .map(|hoe| hoe.uses)
+            })
             .unwrap_or(0)
     }
 
@@ -2756,6 +2787,7 @@ impl Pack {
         let mut rods = Vec::new();
         let mut fishings = Vec::new();
         let mut seeds = Vec::new();
+        let mut hoes = Vec::new();
         let mut cores = Vec::new();
         let mut keys = Vec::new();
         let mut omens = Vec::new();
@@ -2796,6 +2828,7 @@ impl Pack {
                 || rods.iter().any(|rod: &RodDef| rod.id == id)
                 || fishings.iter().any(|rod: &FishingDef| rod.id == id)
                 || seeds.iter().any(|seed: &SeedsDef| seed.id == id)
+                || hoes.iter().any(|hoe: &HoeDef| hoe.id == id)
                 || cores.iter().any(|core: &CoreDef| core.id == id)
                 || keys.iter().any(|key: &KeyDef| key.id == id)
                 || omens.iter().any(|omen: &OmenDef| omen.id == id)
@@ -2832,6 +2865,7 @@ impl Pack {
                 PackItem::Rod(rod) => rods.push(rod),
                 PackItem::Fishing(rod) => fishings.push(rod),
                 PackItem::Seeds(seed) => seeds.push(seed),
+                PackItem::Hoe(hoe) => hoes.push(hoe),
                 PackItem::Core(core) => cores.push(core),
                 PackItem::Key(key) => keys.push(key),
                 PackItem::Omen(omen) => omens.push(omen),
@@ -2863,6 +2897,7 @@ impl Pack {
         self.rods = rods;
         self.fishings = fishings;
         self.seeds = seeds;
+        self.hoes = hoes;
         self.cores = cores;
         self.keys = keys;
         self.omens = omens;
@@ -2897,6 +2932,7 @@ enum PackItem {
     Rod(RodDef),
     Fishing(FishingDef),
     Seeds(SeedsDef),
+    Hoe(HoeDef),
     Core(CoreDef),
     Key(KeyDef),
     Omen(OmenDef),
@@ -3330,6 +3366,31 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("hoe") {
+        require_only(obj, &["hoe", "uses", "icon"], &format!("{id}.json"))?;
+        if obj.get("hoe") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json hoe must be true"));
+        }
+        let uses = obj
+            .get("uses")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("{id}.json uses must be a whole number"))?;
+        if !(1..=256).contains(&uses) {
+            return Err(format!("{id}.json uses must be from 1 to 256"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Hoe(HoeDef {
+            id: id.to_string(),
+            uses: uses as u16,
+            icon: icon.to_string(),
+        }));
+    }
     if obj.contains_key("core") {
         require_only(obj, &["core", "icon"], &format!("{id}.json"))?;
         if obj.get("core") != Some(&Value::Bool(true)) {
@@ -3607,6 +3668,7 @@ impl Pack {
             rods: Vec::new(),
             fishings: Vec::new(),
             seeds: Vec::new(),
+            hoes: Vec::new(),
             cores: Vec::new(),
             keys: Vec::new(),
             omens: Vec::new(),
@@ -7201,6 +7263,12 @@ mod tests {
         assert_eq!(pack.food_of("wheat"), Some(2));
         assert_eq!(pack.tool_icon("wheat"), Some("hay_bale"));
         assert_eq!(pack.hardness_of(Block::new("wheat_crop", 0)), Some(0.1));
+        assert!(pack.is_hoe("wooden_hoe"));
+        assert!(!pack.is_hoe("wooden_pickaxe"));
+        assert_eq!(pack.tool_uses("wooden_hoe"), 32);
+        assert_eq!(pack.tool_icon("wooden_hoe"), Some("stick"));
+        assert!(pack.hoe_ids().contains(&"wooden_hoe".to_string()));
+        assert_eq!(pack.hardness_of(Block::new("farmland", 0)), Some(0.5));
         assert!(pack.is_eye("eye_of_ender"));
         assert!(!pack.is_eye("ender_pearl"));
         assert!(!pack.is_pearl("eye_of_ender"));
