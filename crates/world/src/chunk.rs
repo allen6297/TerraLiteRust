@@ -9,28 +9,84 @@ use crate::error::Error;
 use crate::ids::{anvil_id, anvil_name, intern};
 use crate::nbt::Tag;
 
-/// A block: a string id plus 4 bits of metadata.
+/// No compound fill in the cell.
+pub const FILL_NONE: u8 = 0;
+/// Water occupying a compound host (waterlogging-like).
+pub const FILL_WATER: u8 = 1;
+/// Ember energy occupying a compound host.
+pub const FILL_EMBER: u8 = 2;
+
+/// A block: a string id, 4 bits of metadata, and an optional compound fill.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Block {
     pub id: &'static str,
     pub metadata: u8,
+    /// Secondary occupancy: [`FILL_NONE`], [`FILL_WATER`], or [`FILL_EMBER`].
+    pub fill: u8,
 }
 
 impl Block {
     pub const AIR: Self = Self {
         id: "air",
         metadata: 0,
+        fill: FILL_NONE,
     };
 
     pub fn new(id: &str, metadata: u8) -> Self {
         Self {
             id: intern(id),
             metadata: metadata & 0x0F,
+            fill: FILL_NONE,
+        }
+    }
+
+    /// Same host with a compound fill. Fill is masked to `0..=3`.
+    pub fn with_fill(self, fill: u8) -> Self {
+        Self {
+            fill: fill & 0x03,
+            ..self
         }
     }
 
     pub fn is_air(self) -> bool {
         self.id == "air"
+    }
+
+    /// True when this cell carries a compound fluid or energy fill.
+    pub fn has_fill(self) -> bool {
+        self.fill != FILL_NONE
+    }
+}
+
+/// Hosts that can hold water or ember without replacing the solid.
+pub fn compound_host(id: &str) -> bool {
+    matches!(
+        id,
+        "copper_grate"
+            | "fence"
+            | "slab"
+            | "oak_stairs"
+            | "stone_stairs"
+            | "chain"
+            | "glass"
+    )
+}
+
+/// Pack fill byte for a named compound kind.
+pub fn fill_kind(kind: &str) -> Option<u8> {
+    match kind {
+        "water" => Some(FILL_WATER),
+        "ember" => Some(FILL_EMBER),
+        _ => None,
+    }
+}
+
+/// Named kind for a fill byte, when it is a known compound.
+pub fn fill_name(fill: u8) -> Option<&'static str> {
+    match fill {
+        FILL_WATER => Some("water"),
+        FILL_EMBER => Some("ember"),
+        _ => None,
     }
 }
 
@@ -39,6 +95,7 @@ struct Section {
     y: u8,
     blocks: [&'static str; 4096],
     meta: [u8; 4096],
+    fills: [u8; 4096],
 }
 
 impl Section {
@@ -47,6 +104,7 @@ impl Section {
             y,
             blocks: ["air"; 4096],
             meta: [0; 4096],
+            fills: [FILL_NONE; 4096],
         }
     }
 }
@@ -99,6 +157,7 @@ impl Chunk {
                 if pred(Block {
                     id,
                     metadata: section.meta[index],
+                    fill: section.fills[index],
                 }) {
                     return true;
                 }
@@ -131,6 +190,7 @@ impl Chunk {
                     Block {
                         id,
                         metadata: section.meta[index],
+                        fill: section.fills[index],
                     },
                 );
             }
@@ -149,6 +209,7 @@ impl Chunk {
         Block {
             id: section.blocks[index],
             metadata: section.meta[index],
+            fill: section.fills[index],
         }
     }
 
@@ -169,6 +230,7 @@ impl Chunk {
             let index = block_index(x, (y & 15) as u8, z);
             section.blocks[index] = block.id;
             section.meta[index] = block.metadata;
+            section.fills[index] = block.fill;
         }
         Ok(chunk)
     }
@@ -183,6 +245,11 @@ impl Chunk {
         let index = block_index(x, (y & 15) as u8, z);
         section.blocks[index] = block.id;
         section.meta[index] = block.metadata;
+        section.fills[index] = if block.is_air() {
+            FILL_NONE
+        } else {
+            block.fill
+        };
     }
 
     fn empty(x: i32, z: i32) -> Self {

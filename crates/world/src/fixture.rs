@@ -4,9 +4,10 @@
 //! center 3×3 of those chunks holds the scene. Every other chunk stays empty.
 //!
 //! The center chunk is the old single-chunk scene, plus one cobblestone on
-//! its east edge, plus oak stairs just south of the log, plus coal ore and
-//! iron ore beside those stairs, plus a sign just west of the coal, plus an
-//! orange lantern just southwest of that sign, plus a perch beside the chicken.
+//! its east edge, plus oak stairs just south of the log, plus a copper grate
+//! for compound fills, plus coal ore and iron ore beside those stairs, plus a
+//! sign just west of the coal, plus an orange lantern just southwest of that
+//! sign, plus a perch beside the chicken.
 //! Public ids:
 //! grass, cobblestone, coal ore, iron ore, deepslate, oak log, oak stairs, sign, lantern, wool, and
 //! `marker` (stored above 255 in the region file so the Add nibble is exercised). The stairs are two boxes
@@ -60,6 +61,8 @@ fn synthetic_chunk_at(x: i32, z: i32) -> Chunk {
         blocks.push((15, 1, 8, Block::new("cobblestone", 0)));
         // South of the log, on the line the start camera looks along.
         blocks.push((8, 1, 12, Block::new(OAK_STAIRS, 0)));
+        // Compound host for water/ember fills (waterlogging-like).
+        blocks.push((11, 1, 12, Block::new("copper_grate", 0)));
         // Just east of the stairs, in view from the start camera.
         blocks.push((9, 1, 13, Block::new(COAL_ORE, 0)));
         // One block further east, so a walk past the coal reaches the other ore.

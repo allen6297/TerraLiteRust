@@ -406,6 +406,20 @@ struct BucketDef {
     icon: String,
 }
 
+/// Places a compound fill (water or ember) into a host block.
+struct FillDef {
+    id: String,
+    /// `water` or `ember`.
+    kind: String,
+    icon: String,
+}
+
+/// Removes a compound fill from a host block.
+struct DrainDef {
+    id: String,
+    icon: String,
+}
+
 struct SaddleDef {
     id: String,
     icon: String,
@@ -502,6 +516,10 @@ pub struct Pack {
     maces: Vec<MaceDef>,
     /// Buckets from the data pack. An empty one scoops water.
     buckets: Vec<BucketDef>,
+    /// Compound fill charges (ember, extra fluid vials).
+    fills: Vec<FillDef>,
+    /// Drain tools that clear compound fills from hosts.
+    drains: Vec<DrainDef>,
     /// Saddles from the data pack. One goes on the pig.
     saddles: Vec<SaddleDef>,
     /// Clocks from the data pack. Holding one shows the time of day.
@@ -568,6 +586,8 @@ impl Pack {
             horns: Vec::new(),
             maces: Vec::new(),
             buckets: Vec::new(),
+            fills: Vec::new(),
+            drains: Vec::new(),
             saddles: Vec::new(),
             clocks: Vec::new(),
             maps: Vec::new(),
@@ -2097,6 +2117,18 @@ impl Pack {
                     .map(|bucket| bucket.icon.as_str())
             })
             .or_else(|| {
+                self.fills
+                    .iter()
+                    .find(|fill| fill.id == id)
+                    .map(|fill| fill.icon.as_str())
+            })
+            .or_else(|| {
+                self.drains
+                    .iter()
+                    .find(|drain| drain.id == id)
+                    .map(|drain| drain.icon.as_str())
+            })
+            .or_else(|| {
                 self.saddles
                     .iter()
                     .find(|saddle| saddle.id == id)
@@ -2389,6 +2421,25 @@ impl Pack {
             .any(|bucket| bucket.id == id && bucket.fills.as_deref() == Some("water"))
     }
 
+    /// Compound fill kind for `id`: `water` or `ember`. Water buckets count as water.
+    pub fn compound_fill_of(&self, id: &str) -> Option<&'static str> {
+        if self.is_water_bucket(id) {
+            return Some("water");
+        }
+        self.fills.iter().find(|fill| fill.id == id).map(|fill| {
+            match fill.kind.as_str() {
+                "water" => "water",
+                "ember" => "ember",
+                _ => "ember",
+            }
+        })
+    }
+
+    /// True when `id` drains compound fills from a host.
+    pub fn is_drain(&self, id: &str) -> bool {
+        self.drains.iter().any(|drain| drain.id == id)
+    }
+
     /// Bucket ids, in data-pack order.
     pub fn bucket_ids(&self) -> Vec<String> {
         self.buckets
@@ -2595,6 +2646,8 @@ impl Pack {
         let mut horns = Vec::new();
         let mut maces = Vec::new();
         let mut buckets = Vec::new();
+        let mut fills = Vec::new();
+        let mut drains = Vec::new();
         let mut saddles = Vec::new();
         let mut clocks = Vec::new();
         let mut maps = Vec::new();
@@ -2631,6 +2684,8 @@ impl Pack {
                 || horns.iter().any(|horn: &HornDef| horn.id == id)
                 || maces.iter().any(|mace: &MaceDef| mace.id == id)
                 || buckets.iter().any(|bucket: &BucketDef| bucket.id == id)
+                || fills.iter().any(|fill: &FillDef| fill.id == id)
+                || drains.iter().any(|drain: &DrainDef| drain.id == id)
                 || saddles.iter().any(|saddle: &SaddleDef| saddle.id == id)
                 || clocks.iter().any(|clock: &ClockDef| clock.id == id)
                 || maps.iter().any(|map: &MapDef| map.id == id)
@@ -2663,6 +2718,8 @@ impl Pack {
                 PackItem::Horn(horn) => horns.push(horn),
                 PackItem::Mace(mace) => maces.push(mace),
                 PackItem::Bucket(bucket) => buckets.push(bucket),
+                PackItem::Fill(fill) => fills.push(fill),
+                PackItem::Drain(drain) => drains.push(drain),
                 PackItem::Saddle(saddle) => saddles.push(saddle),
                 PackItem::Clock(clock) => clocks.push(clock),
                 PackItem::Map(map) => maps.push(map),
@@ -2690,6 +2747,8 @@ impl Pack {
         self.horns = horns;
         self.maces = maces;
         self.buckets = buckets;
+        self.fills = fills;
+        self.drains = drains;
         self.saddles = saddles;
         self.clocks = clocks;
         self.maps = maps;
@@ -2720,6 +2779,8 @@ enum PackItem {
     Horn(HornDef),
     Mace(MaceDef),
     Bucket(BucketDef),
+    Fill(FillDef),
+    Drain(DrainDef),
     Saddle(SaddleDef),
     Clock(ClockDef),
     Map(MapDef),
@@ -3033,6 +3094,47 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
         return Ok(PackItem::Bucket(BucketDef {
             id: id.to_string(),
             fills,
+            icon: icon.to_string(),
+        }));
+    }
+    if obj.contains_key("fill") {
+        require_only(obj, &["fill", "icon"], &format!("{id}.json"))?;
+        let kind = match obj.get("fill").and_then(Value::as_str) {
+            Some("water") | Some("ember") => obj
+                .get("fill")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_string(),
+            Some(other) => return Err(format!("{id}.json fill {other} is unknown")),
+            None => return Err(format!("{id}.json needs a fill kind")),
+        };
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Fill(FillDef {
+            id: id.to_string(),
+            kind,
+            icon: icon.to_string(),
+        }));
+    }
+    if obj.contains_key("drain") {
+        require_only(obj, &["drain", "icon"], &format!("{id}.json"))?;
+        if obj.get("drain") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json drain must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Drain(DrainDef {
+            id: id.to_string(),
             icon: icon.to_string(),
         }));
     }
@@ -3350,6 +3452,8 @@ impl Pack {
             horns: Vec::new(),
             maces: Vec::new(),
             buckets: Vec::new(),
+            fills: Vec::new(),
+            drains: Vec::new(),
             saddles: Vec::new(),
             clocks: Vec::new(),
             maps: Vec::new(),

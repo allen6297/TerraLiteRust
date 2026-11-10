@@ -10,9 +10,10 @@ use std::sync::Arc;
 
 use bytemuck::bytes_of;
 use rebuild_world::{
-    BAG_SLOTS, Block, CellChange, Cluster, Emitter, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK,
-    TAG_PLACE, apply_changes, encode_bag, encode_break, encode_chat, encode_chest, encode_hotbar,
-    encode_place, encode_pose, held_light_of, load_dir, shape_of,
+    BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
+    PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, compound_host, encode_bag,
+    encode_break, encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind,
+    fill_name, held_light_of, load_dir, shape_of,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -4784,6 +4785,78 @@ impl State {
         true
     }
 
+    /// Place water or ember into a looked-at compound host (grate, fence, …).
+    fn try_compound_fill(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        let Some(kind) = Pack::builtin().compound_fill_of(id) else {
+            return false;
+        };
+        let Some(fill) = fill_kind(kind) else {
+            return false;
+        };
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        let host = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if !compound_host(host.id) || host.fill != FILL_NONE {
+            // Let water_bucket fall through to pour a full water cell.
+            return false;
+        }
+        let next = host.with_fill(fill);
+        let slot = self.hotbar.selected();
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                hit.block[0],
+                hit.block[1],
+                hit.block[2],
+                next,
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            Some(slot),
+        );
+        true
+    }
+
+    /// Clear compound fill from a host with the drain sponge.
+    fn try_compound_drain(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_drain(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        let host = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if !compound_host(host.id) || host.fill == FILL_NONE {
+            return true;
+        }
+        let next = host.with_fill(FILL_NONE);
+        let slot = self.hotbar.selected();
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                hit.block[0],
+                hit.block[1],
+                hit.block[2],
+                next,
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            Some(slot),
+        );
+        true
+    }
+
     /// Scoop water into an empty bucket, or pour a full one into air.
     fn try_bucket(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -5306,7 +5379,12 @@ impl State {
         {
             return;
         }
-        if self.try_saddle() || self.try_bucket() || self.try_place_boat() {
+        if self.try_saddle()
+            || self.try_compound_fill()
+            || self.try_compound_drain()
+            || self.try_bucket()
+            || self.try_place_boat()
+        {
             return;
         }
         let Some(held) = self.hotbar.selected_block() else {
@@ -5603,7 +5681,36 @@ impl State {
                 }
             }
             if let Some(slot) = pending.and_then(|edit| edit.slot) {
-                if cell.block.id == "water" && self.hotbar.slot(slot) == Some("water_bucket") {
+                if before.id == cell.block.id
+                    && before.fill != cell.block.fill
+                    && compound_host(cell.block.id)
+                {
+                    if cell.block.fill != FILL_NONE {
+                        // Filled a host.
+                        if self.hotbar.slot(slot) == Some("water_bucket") {
+                            if self.exchange_bucket(slot, "water_bucket", "bucket") {
+                                self.gui.push_chat("waterlogged");
+                            }
+                        } else {
+                            self.hotbar.consume_at(slot);
+                            self.hotbar_dirty = true;
+                            if let Some(name) = fill_name(cell.block.fill) {
+                                self.gui.push_chat(name);
+                            }
+                        }
+                    } else {
+                        // Drained a host — refund the fill item when possible.
+                        let refund = match before.fill {
+                            FILL_WATER => "water_bucket",
+                            FILL_EMBER => "ember_charge",
+                            _ => "",
+                        };
+                        if !refund.is_empty() && self.hotbar.collect(refund) {
+                            self.hotbar_dirty = true;
+                        }
+                        self.gui.push_chat("drained");
+                    }
+                } else if cell.block.id == "water" && self.hotbar.slot(slot) == Some("water_bucket") {
                     if self.exchange_bucket(slot, "water_bucket", "bucket") {
                         self.gui.push_chat("emptied");
                     }
@@ -6410,6 +6517,120 @@ impl State {
     /// Hold cooked food over a smoker after a one-step cook, then quit with a PNG.
     pub fn arm_smoker_cook_shot(&mut self, path: std::path::PathBuf) {
         self.arm_heat_cook_shot(path, "smoker");
+    }
+
+    /// Look at a waterlogged copper grate with cyan outline, then quit with a PNG.
+    pub fn arm_compound_shot(&mut self, path: std::path::PathBuf) {
+        let ember = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains("ember"));
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let gx = 11;
+        let gy = 1;
+        let gz = 12;
+        let mut changes = vec![
+            CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+            },
+            CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(FILL_EMBER),
+            },
+        ];
+        for z in 10..=14 {
+            for x in 9..=14 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                // Clear clutter so the filled grate reads cleanly.
+                for y in 1..=3 {
+                    if !(x == gx && z == gz && y == gy) && !(x == gx + 2 && z == gz && y == gy) {
+                        changes.push(CellChange {
+                            x,
+                            y,
+                            z,
+                            block: Block::AIR,
+                        });
+                    }
+                }
+            }
+        }
+        // Keep the two filled hosts after the air sweep.
+        changes.push(CellChange {
+            x: gx,
+            y: gy,
+            z: gz,
+            block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+        });
+        changes.push(CellChange {
+            x: gx + 2,
+            y: gy,
+            z: gz,
+            block: Block::new("copper_grate", 0).with_fill(FILL_EMBER),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        let (eye, focus) = if ember {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("ember_charge");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 1.55 + body::EYE_HEIGHT,
+                    gz as f32 - 2.8,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.5),
+            )
+        } else {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            (
+                glam::Vec3::new(
+                    gx as f32 + 0.5,
+                    gy as f32 + 1.55 + body::EYE_HEIGHT,
+                    gz as f32 - 2.8,
+                ),
+                glam::Vec3::new(gx as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.5),
+            )
+        };
+        self.hotbar_dirty = true;
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
     }
 
     /// Look at the marsh clay bank under water, then quit with a PNG.
@@ -11798,8 +12019,13 @@ impl State {
             .map(|target| target.view.clone())
             .unwrap_or_else(|| color_view.clone());
 
-        let outline =
-            crate::outline::selection_lines(self.camera.eye, self.camera.forward(), &self.world);
+        let held = self.hotbar.slot(self.hotbar.selected());
+        let outline = crate::outline::selection_lines(
+            self.camera.eye,
+            self.camera.forward(),
+            &self.world,
+            held,
+        );
         let outline_count = outline.len().min(OUTLINE_VERTEX_CAP as usize) & !1usize;
         if outline_count >= 2 {
             self.queue.write_buffer(

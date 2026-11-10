@@ -40,7 +40,8 @@
 use std::collections::{HashMap, HashSet};
 
 use rebuild_world::{
-    Block, Chunk, Cluster, Emitter, LIGHT_REACH, LightField, Pack, Plane, Shape, shape_of,
+    Block, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack, Plane,
+    Shape, shape_of,
 };
 
 use crate::daylight;
@@ -1547,7 +1548,7 @@ fn mesh_partial_shapes(
             for x in 0..16u8 {
                 let block = chunk.block(x, y, z);
                 let shape = shape_of(block);
-                if shape.is_empty() {
+                if shape.is_empty() && !block.has_fill() {
                     continue;
                 }
                 let cell = [
@@ -1555,14 +1556,32 @@ fn mesh_partial_shapes(
                     i32::from(y),
                     chunk.z() * 16 + i32::from(z),
                 ];
-                if !shape.is_full_cube() {
-                    mesh_cell(block, shape, cell, sample, light, sun, mesh);
+                if !shape.is_empty() {
+                    if !shape.is_full_cube() {
+                        mesh_cell(block, shape, cell, sample, light, sun, mesh);
+                    }
+                    if !shape.faces().is_empty() {
+                        mesh_faces(block, shape, cell, sample, light, sun, mesh);
+                    }
                 }
-                if !shape.faces().is_empty() {
-                    mesh_faces(block, shape, cell, sample, light, sun, mesh);
+                if let Some(fill) = compound_fill_proxy(block) {
+                    // Slightly inset so the host lattice stays readable over the fill.
+                    let fill_shape = shape_of(fill);
+                    if !fill_shape.is_empty() {
+                        mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                    }
                 }
             }
         }
+    }
+}
+
+/// Visual proxy for a compound fill: water or ember (magma look).
+fn compound_fill_proxy(block: Block) -> Option<Block> {
+    match block.fill {
+        FILL_WATER => Some(Block::new("water", 0)),
+        FILL_EMBER => Some(Block::new("magma", 0)),
+        _ => None,
     }
 }
 

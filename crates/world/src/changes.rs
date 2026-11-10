@@ -305,7 +305,19 @@ pub fn parse_changes(text: &str) -> Result<Vec<CellChange>, String> {
                 metadata as u8
             }
         };
-        let block = Block::new(id, metadata);
+        let fill = match obj.get("fill") {
+            None => 0,
+            Some(value) => {
+                let fill = value
+                    .as_u64()
+                    .ok_or_else(|| format!("block {index} fill must be an integer"))?;
+                if fill > 3 {
+                    return Err(format!("block {index} fill {fill} is above 3"));
+                }
+                fill as u8
+            }
+        };
+        let block = Block::new(id, metadata).with_fill(fill);
         if let Some(existing) = changes
             .iter_mut()
             .find(|cell| cell.x == x && cell.y == y && cell.z == z)
@@ -335,14 +347,26 @@ fn format_document(
     let mut blocks = String::from("  \"blocks\": [\n");
     for (index, cell) in cells.iter().enumerate() {
         let comma = if index + 1 == cells.len() { "" } else { "," };
-        blocks.push_str(&format!(
-            "    {{ \"x\": {}, \"y\": {}, \"z\": {}, \"id\": {}, \"metadata\": {} }}{comma}\n",
-            cell.x,
-            cell.y,
-            cell.z,
-            json_string(cell.block.id),
-            cell.block.metadata
-        ));
+        if cell.block.fill == 0 {
+            blocks.push_str(&format!(
+                "    {{ \"x\": {}, \"y\": {}, \"z\": {}, \"id\": {}, \"metadata\": {} }}{comma}\n",
+                cell.x,
+                cell.y,
+                cell.z,
+                json_string(cell.block.id),
+                cell.block.metadata
+            ));
+        } else {
+            blocks.push_str(&format!(
+                "    {{ \"x\": {}, \"y\": {}, \"z\": {}, \"id\": {}, \"metadata\": {}, \"fill\": {} }}{comma}\n",
+                cell.x,
+                cell.y,
+                cell.z,
+                json_string(cell.block.id),
+                cell.block.metadata,
+                cell.block.fill
+            ));
+        }
     }
     blocks.push_str("  ]");
     let mut sections = vec![blocks];
@@ -892,6 +916,15 @@ mod tests {
         assert!(written.find("\"z\": -1").unwrap() < written.find("\"z\": 3").unwrap());
         assert!(parse_changes("[]").is_err());
         assert!(parse_changes(r#"{"blocks":[{"x":0,"y":0,"z":0}]}"#).is_err());
+        assert_eq!(
+            parse_changes(
+                r#"{"blocks":[{"x":0,"y":0,"z":0,"id":"copper_grate","metadata":0,"fill":1}]}"#
+            )
+            .unwrap()[0]
+                .block
+                .fill,
+            1
+        );
         assert!(
             parse_changes(r#"{"blocks":[{"x":0,"y":0,"z":0,"id":"stone","metadata":16}]}"#)
                 .is_err()

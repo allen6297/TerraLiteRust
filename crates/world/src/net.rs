@@ -660,6 +660,7 @@ fn push_id(out: &mut Vec<u8>, id: &str) {
 fn push_block(out: &mut Vec<u8>, block: Block) {
     push_id(out, block.id);
     out.push(block.metadata);
+    out.push(block.fill);
 }
 
 fn push_cell(out: &mut Vec<u8>, cell: &NetCell) {
@@ -724,7 +725,8 @@ impl<'a> Reader<'a> {
     fn block(&mut self) -> Result<Block, String> {
         let id = self.id()?;
         let metadata = self.u8()?;
-        Ok(Block::new(&id, metadata))
+        let fill = self.u8()?;
+        Ok(Block::new(&id, metadata).with_fill(fill))
     }
 
     fn cell(&mut self) -> Result<NetCell, String> {

@@ -8,7 +8,7 @@
 //! the player, does not change the world. A block from `block.register`
 //! places. A script item does not.
 
-use crate::chunk::Block;
+use crate::chunk::{Block, compound_host};
 use crate::cluster::Cluster;
 use crate::pack::{Pack, for_each_collider, shape_of};
 
@@ -155,8 +155,17 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
     }
     let current = world.block_at(x, y, z);
     let swing = swings(current.id) && current.id == block.id && current.metadata != block.metadata;
-    if !current.is_air() && !swing {
+    // Same host: empty↔fill only (drain or place; no kind swap without drain).
+    let fill_update = compound_host(current.id)
+        && current.id == block.id
+        && current.metadata == block.metadata
+        && current.fill != block.fill
+        && (current.fill == 0 || block.fill == 0);
+    if !current.is_air() && !swing && !fill_update {
         return false;
+    }
+    if fill_update {
+        return true;
     }
     let shape = shape_of(block);
     if shape.is_empty() {
@@ -251,7 +260,7 @@ fn overlaps(min: [f32; 3], max: [f32; 3], other_min: [f32; 3], other_max: [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk::{Block, Chunk};
+    use crate::chunk::{Block, Chunk, FILL_EMBER, FILL_WATER};
     use crate::fixture::synthetic_cluster;
     use crate::pack::{Pack, light_of};
 
@@ -260,6 +269,59 @@ mod tests {
             min: [40.0, 40.0, 40.0],
             max: [40.6, 41.8, 40.6],
         }
+    }
+
+    #[test]
+    fn a_grate_takes_water_or_ember_without_replacing_the_host() {
+        let chunk =
+            Chunk::from_blocks(0, 0, [(2, 1, 2, Block::new("copper_grate", 0))]).unwrap();
+        let mut world = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
+        let wet = Block::new("copper_grate", 0).with_fill(FILL_WATER);
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: wet,
+                player: far_player(),
+            }
+        ));
+        assert_eq!(world.block_at(2, 1, 2), wet);
+        let hot = wet.with_fill(FILL_EMBER);
+        assert!(!apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: hot,
+                player: far_player(),
+            }
+        ), "occupied fill does not swap kinds without drain");
+        let clear = wet.with_fill(0);
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: clear,
+                player: far_player(),
+            }
+        ));
+        assert_eq!(world.block_at(2, 1, 2).fill, 0);
+        assert!(apply(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: Block::new("copper_grate", 0).with_fill(FILL_EMBER),
+                player: far_player(),
+            }
+        ));
+        assert_eq!(world.block_at(2, 1, 2).fill, FILL_EMBER);
     }
 
     #[test]

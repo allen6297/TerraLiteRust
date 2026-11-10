@@ -48,7 +48,9 @@ pub use changes::{
     remove_chest, store_chest_slots, write_changes, write_chests, write_hotbar, write_inventory,
     write_player,
 };
-pub use chunk::{Block, Chunk};
+pub use chunk::{
+    Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, compound_host, fill_kind, fill_name,
+};
 pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};
 pub use error::Error;
