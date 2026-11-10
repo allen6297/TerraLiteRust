@@ -300,6 +300,9 @@ pub const JUMP_FOV: f32 = 4.0;
 /// Degrees the view tightens on a successful block place (before view-bob scale).
 pub const PLACE_FOV: f32 = 2.5;
 
+/// Degrees the view tightens when a block breaks (before view-bob scale).
+pub const BREAK_FOV: f32 = 3.5;
+
 /// Degrees the view flicks wider on a hotbar swap (before view-bob scale).
 pub const SWAP_FOV: f32 = 2.0;
 
@@ -384,6 +387,7 @@ mod tests {
         );
         assert_eq!(JUMP_FOV, 4.0);
         assert_eq!(PLACE_FOV, 2.5);
+        assert_eq!(BREAK_FOV, 3.5);
         assert_eq!(SWAP_FOV, 2.0);
         assert_eq!(head_bob(0.4, 0.0), (0.0, 0.0));
         let (full_side, full_rise) = head_bob(1.2, Bob::Full.scale());

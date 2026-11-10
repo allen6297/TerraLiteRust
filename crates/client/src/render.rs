@@ -918,6 +918,14 @@ pub struct State {
     swap_shot_eye: glam::Vec3,
     swap_shot_yaw: f32,
     swap_shot_pitch: f32,
+    /// One-shot idle vs break FOV stitch, then quit.
+    break_shot_path: Option<std::path::PathBuf>,
+    break_shot_frames: u32,
+    break_shot_phase: BreakShotPhase,
+    break_shot_idle: Option<CapturedRgba>,
+    break_shot_eye: glam::Vec3,
+    break_shot_yaw: f32,
+    break_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -934,6 +942,8 @@ pub struct State {
     slot_punch: f32,
     /// Brief FOV flick after changing the selected hotbar slot.
     swap_kick: f32,
+    /// Brief FOV tighten when a block breaks.
+    break_kick: f32,
     /// Walk cycle for the view. The body stays where it is.
     bob_phase: f32,
     /// `0` while still, `1` once a step is showing in the view.
@@ -1841,6 +1851,13 @@ impl State {
             swap_shot_eye: glam::Vec3::ZERO,
             swap_shot_yaw: 0.0,
             swap_shot_pitch: 0.0,
+            break_shot_path: None,
+            break_shot_frames: 0,
+            break_shot_phase: BreakShotPhase::Idle,
+            break_shot_idle: None,
+            break_shot_eye: glam::Vec3::ZERO,
+            break_shot_yaw: 0.0,
+            break_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1851,6 +1868,7 @@ impl State {
             sprint_blocked: false,
             slot_punch: 0.0,
             swap_kick: 0.0,
+            break_kick: 0.0,
             bob_phase: 0.0,
             bob_amount: 0.0,
             crouch: 0.0,
@@ -4962,6 +4980,7 @@ impl State {
                 cell.z as f32 + 0.5,
             ];
             self.play_world(crate::audio::break_for(before.id), origin);
+            self.break_kick = 1.0;
             self.drops.puff(origin, crate::drops::chip_color(before.id));
             self.rebuild_drops();
             let remains = shape_of(cell.block).is_full_cube();
@@ -5712,6 +5731,61 @@ impl State {
                 self.boat_show = 1.0;
                 self.boat_stroke = 0.2;
                 self.bob_amount = 0.45;
+            }
+        }
+    }
+
+    /// Idle FOV then break FOV from the stairs overlook, stitched side by side.
+    pub fn arm_break_shot(&mut self, path: std::path::PathBuf) {
+        self.break_shot_path = Some(path);
+        self.break_shot_frames = 0;
+        self.break_shot_phase = BreakShotPhase::WaitingIdle;
+        self.break_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.break_kick = 0.0;
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.break_shot_eye = eye;
+        self.break_shot_yaw = yaw;
+        self.break_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_break_shot_camera(&mut self) {
+        if self.break_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.break_shot_eye,
+            self.break_shot_yaw,
+            self.break_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.break_shot_eye;
+        self.posed_yaw = self.break_shot_yaw;
+        self.posed_pitch = self.break_shot_pitch;
+        self.pose_dirty = true;
+        match self.break_shot_phase {
+            BreakShotPhase::WaitingIdle | BreakShotPhase::Idle => {
+                self.break_kick = 0.0;
+            }
+            BreakShotPhase::WaitingBreak => {
+                self.break_kick = 1.0;
             }
         }
     }
@@ -6878,6 +6952,75 @@ impl State {
                 }
             }
             SwapShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_break_shot(&mut self) {
+        let Some(path) = self.break_shot_path.clone() else {
+            return;
+        };
+        self.pin_break_shot_camera();
+        self.break_shot_frames = self.break_shot_frames.saturating_add(1);
+        if self.break_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.break_shot_frames > 600 {
+                eprintln!("break shot timed out");
+                self.break_shot_path = None;
+                self.break_shot_phase = BreakShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.break_shot_phase {
+            BreakShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.break_shot_idle = Some(idle);
+                    self.break_shot_frames = 0;
+                    self.break_shot_phase = BreakShotPhase::WaitingBreak;
+                }
+                Err(err) => {
+                    eprintln!("break idle capture failed: {err}");
+                    if self.break_shot_frames > 400 {
+                        self.break_shot_path = None;
+                        self.break_shot_phase = BreakShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            BreakShotPhase::WaitingBreak => {
+                let Some(idle) = self.break_shot_idle.take() else {
+                    self.break_shot_path = None;
+                    self.break_shot_phase = BreakShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(broken) => match stitch_held_light_proof(&idle, &broken, &path) {
+                        Ok(()) => {
+                            eprintln!("break shot wrote {}", path.display());
+                            self.break_shot_path = None;
+                            self.break_shot_phase = BreakShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("break stitch failed: {err}");
+                            self.break_shot_path = None;
+                            self.break_shot_phase = BreakShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("break capture failed: {err}");
+                        self.break_shot_idle = Some(idle);
+                        if self.break_shot_frames > 400 {
+                            self.break_shot_path = None;
+                            self.break_shot_phase = BreakShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            BreakShotPhase::Idle => {}
         }
     }
 
@@ -9407,6 +9550,7 @@ impl State {
         self.jump_kick = 0.0;
         self.slot_punch = 0.0;
         self.swap_kick = 0.0;
+        self.break_kick = 0.0;
         self.clear_boat_feel();
         self.sync_pointer();
     }
@@ -9475,6 +9619,7 @@ impl State {
         self.mace_wait = (self.mace_wait - dt).max(0.0);
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.swap_kick = (self.swap_kick - dt * 10.0).max(0.0);
+        self.break_kick = (self.break_kick - dt * 7.0).max(0.0);
         self.hurt_flash = (self.hurt_flash - dt * 2.2).max(0.0);
         self.sleep_fade = (self.sleep_fade - dt * 1.4).max(0.0);
         let sip_before = self.sip;
@@ -9539,6 +9684,7 @@ impl State {
         self.pin_jump_shot_camera();
         self.pin_place_shot_camera();
         self.pin_swap_shot_camera();
+        self.pin_break_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -10103,6 +10249,7 @@ impl State {
         let jump = self.jump_kick * crate::camera::JUMP_FOV * bob_scale;
         let place = self.slot_punch * crate::camera::PLACE_FOV * bob_scale;
         let swap = self.swap_kick * crate::camera::SWAP_FOV * bob_scale;
+        let broken = self.break_kick * crate::camera::BREAK_FOV * bob_scale;
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
@@ -10112,7 +10259,8 @@ impl State {
         ) + chew
             + jump
             + swap
-            - place;
+            - place
+            - broken;
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
         let chew_bob = if self.sipping {
@@ -10819,6 +10967,7 @@ impl State {
         self.poll_jump_shot();
         self.poll_place_shot();
         self.poll_swap_shot();
+        self.poll_break_shot();
     }
 }
 
@@ -10890,6 +11039,13 @@ enum SwapShotPhase {
     Idle,
     WaitingIdle,
     WaitingSwap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BreakShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingBreak,
 }
 
 struct CapturedRgba {
