@@ -257,6 +257,8 @@ pub struct Audio {
     wind_left: f32,
     /// Seconds until the next water-edge lap.
     lap_left: f32,
+    /// Seconds until the next rain patter.
+    rain_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -283,6 +285,7 @@ impl Audio {
             crackle_left: 0.0,
             wind_left: 0.0,
             lap_left: 0.0,
+            rain_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -426,6 +429,24 @@ impl Audio {
         // Far ~2.2s apart; standing at the edge ~0.85s.
         self.lap_left = 2.2 - mix * 1.35;
         Some(0.14 + mix * 0.28)
+    }
+
+    /// Loudness for the next rain patter, or `None` this frame.
+    ///
+    /// `mix` is wet-weather amount (`0` clear → `1` peak afternoon rain).
+    pub fn rain_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.rain_left = 0.0;
+            return None;
+        }
+        self.rain_left -= dt;
+        if self.rain_left > 0.0 {
+            return None;
+        }
+        // Light drizzle ~1.8s; peak rain ~0.55s.
+        self.rain_left = 1.8 - mix * 1.25;
+        Some(0.12 + mix * 0.32)
     }
 
     pub fn play(&mut self, sound: Sound) {
@@ -907,9 +928,9 @@ fn burp() -> Vec<i16> {
     samples
 }
 
-/// A quiet hiss. Shorter and softer than a footstep, so a step still cuts through.
+/// A quiet rain hiss. Softer than a footstep, with a soft wash under the noise.
 fn rain_hiss() -> Vec<i16> {
-    let seconds = 0.28;
+    let seconds = 0.36;
     let count = (22_050.0 * seconds) as usize;
     let mut noise = 11u32;
     let mut samples = Vec::with_capacity(count);
@@ -917,8 +938,9 @@ fn rain_hiss() -> Vec<i16> {
         let t = index as f32 / 22_050.0;
         noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
-        let env = (1.0 - t / seconds).max(0.0);
-        samples.push((n * 0.1 * env * 32_767.0) as i16);
+        let wash = (t * 90.0 * std::f32::consts::TAU).sin() * 0.12;
+        let env = (t / 0.05).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.72 + wash) * 0.11 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1141,6 +1163,24 @@ mod tests {
         audio.play_heard(Sound::Lap, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Lap]);
         let edge = audio.lap_ready(10.0, 0.2).expect("edge of range still laps");
+        assert!(edge < level);
+    }
+
+    #[test]
+    fn rain_patters_with_wet_mood_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.rain_ready(0.1, 0.0).is_none());
+        let level = audio
+            .rain_ready(0.1, 1.0)
+            .expect("peak rain on the first beat");
+        assert!(level > 0.35 && level <= 0.5);
+        assert!(audio.rain_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Rain, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Rain]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Rain, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Rain]);
+        let edge = audio.rain_ready(10.0, 0.2).expect("drizzle still patters");
         assert!(edge < level);
     }
 

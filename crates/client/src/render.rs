@@ -1004,8 +1004,10 @@ pub struct State {
     splash_kick: f32,
     /// Brief FOV widen on jump takeoff.
     jump_kick: f32,
-    /// Seconds until the next rain patter while fog is up.
-    rain_wait: f32,
+    /// Eased afternoon rain mix, `0` clear through `1` at peak wet spell.
+    rain_mix: f32,
+    /// True after a rain-onset chat tip this wet spell.
+    rain_told: bool,
     /// Eased night cricket mix, `0` day through `1` deep night.
     cricket_mix: f32,
     /// Eased dawn bird mix, `0` elsewhere through `1` at sunrise peak.
@@ -1913,7 +1915,8 @@ impl State {
             water_sub: 0.0,
             splash_kick: 0.0,
             jump_kick: 0.0,
-            rain_wait: 0.0,
+            rain_mix: 0.0,
+            rain_told: false,
             cricket_mix: 0.0,
             bird_mix: 0.0,
             crackle_mix: 0.0,
@@ -2315,8 +2318,8 @@ impl State {
 
     fn note_sky(&mut self) {
         let light = self.sun_light();
-        let fog = if crate::daylight::fog_mood(self.clock.time_of_day()) > 0.5 {
-            ", fog"
+        let fog = if crate::daylight::rain_mood(self.clock.time_of_day()) > 0.5 {
+            ", rain"
         } else {
             ""
         };
@@ -9638,29 +9641,30 @@ impl State {
             }
         }
         self.horn_wait = crate::audio::horn_cool(self.horn_wait, dt);
-        self.rain_wait = (self.rain_wait - dt).max(0.0);
-        if self.playing
-            && !self.menu.is_open()
-            && !self.dead
-            && crate::daylight::fog_mood(self.clock.time_of_day()) > 0.45
-            && self.rain_wait <= 0.0
-        {
-            self.rain_wait = 1.6;
-            self.audio.play(crate::audio::Sound::Rain);
-        }
-        // Night insects, dawn birds, daytime wind, shore lapping, and campfire crackle.
+        // Night insects, dawn birds, rain, daytime wind, shore lapping, and campfire crackle.
         let time = self.clock.time_of_day();
         let night = crate::daylight::night_fog(time);
         let dawn = crate::daylight::dawn_chorus(time);
         let eye = self.camera.eye.to_array();
-        let open = if open_sky(&self.world, eye) {
-            crate::daylight::day_breeze(time)
+        let sky_open = open_sky(&self.world, eye);
+        let wet = if sky_open {
+            crate::daylight::rain_mood(time)
         } else {
             0.0
         };
+        let open = if sky_open {
+            crate::daylight::day_breeze(time) * (1.0 - wet * 0.65)
+        } else {
+            0.0
+        };
+        let was_dry = self.rain_mix < 0.35;
         self.cricket_mix += (night - self.cricket_mix) * (dt * 0.7).min(1.0);
         self.bird_mix += (dawn - self.bird_mix) * (dt * 0.8).min(1.0);
+        self.rain_mix += (wet - self.rain_mix) * (dt * 1.1).min(1.0);
         self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
+        if self.rain_mix < 0.15 {
+            self.rain_told = false;
+        }
         let (fire_mix, fire_at) = nearest_campfire(&self.world, eye);
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
@@ -9668,6 +9672,10 @@ impl State {
         self.lap_mix += (shore_mix - self.lap_mix) * (dt * 2.2).min(1.0);
         self.lap_at = shore_at;
         if self.playing && !self.menu.is_open() && !self.dead {
+            if was_dry && self.rain_mix >= 0.35 && !self.rain_told {
+                self.rain_told = true;
+                self.gui.push_chat("rain");
+            }
             if let Some(level) = self.audio.cricket_ready(dt, self.cricket_mix) {
                 self.audio.play_heard(
                     crate::audio::Sound::Cricket,
@@ -9677,6 +9685,12 @@ impl State {
             if let Some(level) = self.audio.bird_ready(dt, self.bird_mix) {
                 self.audio.play_heard(
                     crate::audio::Sound::Bird,
+                    crate::audio::Hearing::even(level),
+                );
+            }
+            if let Some(level) = self.audio.rain_ready(dt, self.rain_mix) {
+                self.audio.play_heard(
+                    crate::audio::Sound::Rain,
                     crate::audio::Hearing::even(level),
                 );
             }
@@ -9699,6 +9713,7 @@ impl State {
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
+            let _ = self.audio.rain_ready(dt, 0.0);
             let _ = self.audio.wind_ready(dt, 0.0);
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);

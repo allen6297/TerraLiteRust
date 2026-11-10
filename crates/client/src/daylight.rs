@@ -358,6 +358,11 @@ pub fn fog_mood(time_of_day: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Afternoon rain intensity. Same wet spell as [`fog_mood`].
+pub fn rain_mood(time_of_day: f32) -> f32 {
+    fog_mood(time_of_day)
+}
+
 /// How thick the night fog is. `0` is day, `1` is full night.
 ///
 /// It rises after the afternoon gray spell and is gone again by dawn.
@@ -467,6 +472,8 @@ mod tests {
         assert!(fog_mood(0.70) > 0.95);
         let rising = fog_mood(0.64);
         assert!(rising > 0.2 && rising < 0.95, "fog eases in, got {rising}");
+        assert_eq!(rain_mood(0.70), fog_mood(0.70));
+        assert_eq!(rain_mood(0.5), 0.0);
         let blue = [0.53, 0.75, 0.90];
         let gray = foggy(blue, [0.55, 0.58, 0.62], 1.0);
         assert!(gray[2] < blue[2]);
