@@ -598,6 +598,7 @@ mod tests {
                 "polished_basalt".to_string(),
                 "polished_blackstone".to_string(),
                 "polished_deepslate".to_string(),
+                "powered_rail".to_string(),
                 "prismarine".to_string(),
                 "prismarine_bricks".to_string(),
                 "pump".to_string(),

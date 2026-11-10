@@ -220,6 +220,8 @@ struct Args {
     shot_scarecrow: Option<std::path::PathBuf>,
     /// Minecart idle vs ride FOV stitch, then quit.
     shot_cart: Option<std::path::PathBuf>,
+    /// Powered-rail boost ride, then quit.
+    shot_boost: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -343,6 +345,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_plot: args.shot_plot,
         shot_scarecrow: args.shot_scarecrow,
         shot_cart: args.shot_cart,
+        shot_boost: args.shot_boost,
         state: None,
         last_frame: Instant::now(),
     };
@@ -415,6 +418,7 @@ struct App {
     shot_plot: Option<std::path::PathBuf>,
     shot_scarecrow: Option<std::path::PathBuf>,
     shot_cart: Option<std::path::PathBuf>,
+    shot_boost: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -623,6 +627,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_cart.take() {
                     state.arm_minecart_shot(path);
                 }
+                if let Some(path) = self.shot_boost.take() {
+                    state.arm_boost_shot(path);
+                }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
                 self.state = Some(state);
@@ -812,6 +819,7 @@ where
         shot_plot: None,
         shot_scarecrow: None,
         shot_cart: None,
+        shot_boost: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -1165,6 +1173,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-cart".to_string())?;
                 parsed.shot_cart = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-boost" | "--shot-powered-rail" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-boost".to_string())?;
+                parsed.shot_boost = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

@@ -6447,6 +6447,7 @@ fn tab_of(id: &str) -> &'static str {
             | "glass"
             | "ladder"
             | "rail"
+            | "powered_rail"
             | "minecart"
             | "lever"
             | "note_block"

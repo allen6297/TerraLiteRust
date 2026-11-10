@@ -204,6 +204,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "wheat_seeds" => [0.42, 0.58, 0.22],
         "bread" => [0.82, 0.58, 0.28],
         "rail" => [0.55, 0.55, 0.58],
+        "powered_rail" => [0.82, 0.42, 0.28],
         "minecart" => [0.48, 0.5, 0.54],
         "farmland" => [0.48, 0.32, 0.18],
         "wooden_hoe" => [0.62, 0.48, 0.28],

@@ -6149,7 +6149,7 @@ impl State {
         let block = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        if block.id != "rail" {
+        if block.id != "rail" && block.id != "powered_rail" {
             self.gui.push_chat("need rail");
             return true;
         }
@@ -6195,18 +6195,27 @@ impl State {
         if moved {
             self.rebuild_minecart();
         }
-        let goal = if moved || riding { 1.0 } else { 0.0 };
+        let boosted = self.cart.boosted(&self.world);
+        let goal = if moved || riding {
+            if boosted {
+                1.0
+            } else {
+                0.85
+            }
+        } else {
+            0.0
+        };
         self.cart_kick += (goal - self.cart_kick) * (dt * 8.0).min(1.0);
         self.cart_show += (goal - self.cart_show) * (dt * 10.0).min(1.0);
         if moved {
             self.cart_stroke -= dt;
             if self.cart_stroke <= 0.0 {
-                self.cart_stroke = 0.36;
+                self.cart_stroke = if boosted { 0.22 } else { 0.36 };
                 if let Some(origin) = self.cart.origin() {
                     self.play_world(crate::audio::Sound::Step, origin);
                 }
             }
-            self.bob_amount = (self.bob_amount + dt * 4.0).min(0.55);
+            self.bob_amount = (self.bob_amount + dt * if boosted { 5.5 } else { 4.0 }).min(0.55);
         } else {
             self.cart_stroke = 0.0;
         }
@@ -7639,6 +7648,76 @@ impl State {
         self.posed_yaw = self.swim_shot_yaw;
         self.posed_pitch = self.swim_shot_pitch;
         self.pose_dirty = true;
+    }
+
+    /// Cart mid-boost on the powered rail, then quit with a PNG.
+    pub fn arm_boost_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = (
+            rebuild_world::SHAFT_MOUTH.0 + 5,
+            rebuild_world::SHAFT_MOUTH.1,
+        );
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "powered_rail" {
+                cy = y;
+                break;
+            }
+        }
+        let _ = self.cart.take();
+        assert!(self.cart.place(cx, cy, cz));
+        assert!(self.cart.mount());
+        self.rebuild_minecart();
+        let seat = self
+            .cart
+            .seat()
+            .map(glam::Vec3::from)
+            .expect("cart seat");
+        let target = glam::Vec3::new(cx as f32 + 3.5, cy as f32 + 1.1, cz as f32 + 0.5);
+        self.camera = Camera::looking_at(seat, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = seat;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = seat;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.cart_kick = 1.0;
+        self.cart_show = 1.0;
+        self.bob_amount = 0.5;
+        self.found_mine = true;
+        self.found_rails = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("minecart");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("boost");
+        let mote = [cx as f32 + 0.5, cy as f32 + 0.9, cz as f32 + 0.5];
+        self.drops.puff(mote, [0.92, 0.45, 0.22]);
+        self.rebuild_drops();
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Idle aboard then riding FOV on the shaft rail spur, stitched side by side.

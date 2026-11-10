@@ -607,7 +607,9 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
             blocks.push((lx, y, rail_z, Block::new("dirt", 0)));
         }
         blocks.push((lx, floor - 1, rail_z, Block::new("gravel", 0)));
-        blocks.push((lx, floor, rail_z, Block::new("rail", 0)));
+        // Mid spur is powered so a ride gets a kick.
+        let id = if dx == 5 { "powered_rail" } else { "rail" };
+        blocks.push((lx, floor, rail_z, Block::new(id, 0)));
     }
 }
 
@@ -1151,6 +1153,7 @@ mod tests {
         );
         assert_eq!(shaft.block(local_x + 7, post, local_z).id, "rail");
         assert_eq!(shaft.block(local_x + 4, post, local_z).id, "rail");
+        assert_eq!(shaft.block(local_x + 5, post, local_z).id, "powered_rail");
         assert_eq!(
             (-2 * 16 + i32::from(local_x + 7), 2 * 16 + i32::from(local_z)),
             SHAFT_RAIL

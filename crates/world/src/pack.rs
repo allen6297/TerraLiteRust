@@ -7236,6 +7236,7 @@ mod tests {
         assert_eq!(pack.tool_icon("minecart"), Some("iron_ore"));
         assert!(pack.minecart_ids().contains(&"minecart".to_string()));
         assert_eq!(pack.hardness_of(Block::new("rail", 0)), Some(0.7));
+        assert_eq!(pack.hardness_of(Block::new("powered_rail", 0)), Some(0.7));
         assert!(pack.is_compass("compass"));
         assert!(!pack.is_compass("boat"));
         assert_eq!(pack.tool_icon("compass"), Some("iron_ore"));

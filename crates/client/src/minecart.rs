@@ -11,6 +11,8 @@ use crate::mesh::Vertex;
 
 /// Horizontal speed while aboard, in blocks per second.
 pub const SPEED: f32 = 8.0;
+/// Multiplier while the cart sits on a powered rail.
+pub const BOOST: f32 = 1.75;
 /// How close the eye must be to board.
 const BOARD: f32 = 2.5;
 
@@ -114,6 +116,14 @@ impl Minecart {
         Some([x, y + 0.95 + EYE_HEIGHT, z])
     }
 
+    /// True when the hull sits on a powered rail.
+    pub fn boosted(&self, world: &Cluster) -> bool {
+        let Some([x, y, z]) = self.pos else {
+            return false;
+        };
+        world.block_at(x.floor() as i32, y as i32, z.floor() as i32).id == "powered_rail"
+    }
+
     /// Slide by `vx` and `vz` (blocks per second). Steps that leave rails are dropped.
     ///
     /// Returns true when the hull moved.
@@ -125,12 +135,13 @@ impl Minecart {
             return false;
         }
         let layer = pos[1] as i32;
+        let scale = if self.boosted(world) { BOOST } else { 1.0 };
         let mut next = pos;
-        let nx = pos[0] + vx * dt;
+        let nx = pos[0] + vx * scale * dt;
         if rail_at(world, nx, pos[2], layer) {
             next[0] = nx;
         }
-        let nz = pos[2] + vz * dt;
+        let nz = pos[2] + vz * scale * dt;
         if rail_at(world, next[0], nz, layer) {
             next[2] = nz;
         }
@@ -203,7 +214,8 @@ fn rail_layer(world: &Cluster, x: f32, z: f32, layer: i32) -> Option<i32> {
     let ix = x.floor() as i32;
     let iz = z.floor() as i32;
     for y in (layer - 1)..=(layer + 1) {
-        if world.block_at(ix, y, iz).id == "rail" {
+        let id = world.block_at(ix, y, iz).id;
+        if id == "rail" || id == "powered_rail" {
             return Some(y);
         }
     }
@@ -273,7 +285,8 @@ mod tests {
         let mut blocks = Vec::new();
         for x in 0..6u8 {
             blocks.push((x, 0, 1, Block::new("stone", 0)));
-            blocks.push((x, 1, 1, Block::new("rail", 0)));
+            let id = if x == 2 { "powered_rail" } else { "rail" };
+            blocks.push((x, 1, 1, Block::new(id, 0)));
         }
         Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap()
     }
@@ -306,5 +319,20 @@ mod tests {
         assert!(cart.take());
         assert!(!cart.is_out());
         assert!(cart.vertices().is_empty());
+    }
+
+    #[test]
+    fn powered_rail_boosts_the_ride() {
+        let world = track();
+        let mut cart = Minecart::new();
+        assert!(cart.place(2, 1, 1));
+        assert!(cart.mount());
+        assert!(cart.boosted(&world));
+        assert!(cart.steer(0.1, SPEED, 0.0, &world));
+        let [x, _, _] = cart.origin().unwrap();
+        assert!(
+            x > 2.5 + SPEED * 0.1,
+            "boost should outrun plain rail speed, got {x}"
+        );
     }
 }
