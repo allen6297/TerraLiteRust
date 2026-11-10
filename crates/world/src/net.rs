@@ -56,8 +56,10 @@ pub const TAG_PEERS: u8 = 12;
 /// One chest's nine slots. Version stays 1.
 pub const TAG_CHEST: u8 = 13;
 
-/// How many hotbar slots a [`ClientRequest::Hotbar`] carries.
-pub const HOTBAR_SLOTS: usize = 10;
+/// How many hotbar slots a [`ClientRequest::Hotbar`] carries (10 bar + offhand).
+pub const HOTBAR_SLOTS: usize = 11;
+/// Legacy wire length before the offhand slot shipped.
+pub const HOTBAR_SLOTS_LEGACY: usize = 10;
 
 /// How many inventory slots a [`ClientRequest::Bag`] carries.
 pub const BAG_SLOTS: usize = 9;
@@ -597,10 +599,10 @@ pub fn decode_client(body: &[u8]) -> Result<ClientRequest, String> {
         TAG_HOTBAR => {
             let selected = i32::from(reader.u8()?);
             let count = reader.u8()? as usize;
-            if count != HOTBAR_SLOTS {
+            if count != HOTBAR_SLOTS && count != HOTBAR_SLOTS_LEGACY {
                 return Err(format!("hotbar has {count} slots"));
             }
-            let mut slots = Vec::with_capacity(count);
+            let mut slots = Vec::with_capacity(HOTBAR_SLOTS);
             for _ in 0..count {
                 let len = reader.u8()? as usize;
                 if len > 64 {
@@ -611,6 +613,9 @@ pub fn decode_client(body: &[u8]) -> Result<ClientRequest, String> {
                     .map_err(|_| "hotbar id is not utf-8".to_string())?
                     .to_string();
                 slots.push((id, reader.i32()?.max(0)));
+            }
+            while slots.len() < HOTBAR_SLOTS {
+                slots.push((String::new(), 0));
             }
             ClientRequest::Hotbar { selected, slots }
         }
@@ -1004,7 +1009,7 @@ mod tests {
         assert!(!rejected.changed);
         assert!(rejected.block.is_air());
 
-        let slots = vec![
+        let mut slots = vec![
             (String::new(), 0),
             ("cobblestone".into(), 64),
             ("rosegold:rose".into(), 1),
@@ -1016,6 +1021,7 @@ mod tests {
             (String::new(), 0),
             (String::new(), 0),
         ];
+        slots.push(("shield".into(), 4));
         match decode_client(&encode_hotbar(2, &slots)).unwrap() {
             ClientRequest::Hotbar {
                 selected,
@@ -1023,6 +1029,8 @@ mod tests {
             } => {
                 assert_eq!(selected, 2);
                 assert_eq!(got, slots);
+                assert_eq!(got.len(), HOTBAR_SLOTS);
+                assert_eq!(got[10], ("shield".into(), 4));
             }
             other => panic!("hotbar, got {other:?}"),
         }

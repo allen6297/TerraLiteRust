@@ -44,7 +44,8 @@ mod size;
 mod terrain;
 
 pub use changes::{
-    CarriedSlot, CellChange, HOTBAR_SAVE_SLOTS, HotbarSave, INVENTORY_SLOTS, PlayerPlace,
+    CarriedSlot, CellChange, HOTBAR_OFFHAND_SLOT, HOTBAR_SAVE_SLOT_LIMIT, HOTBAR_SAVE_SLOTS,
+    HotbarSave, INVENTORY_SLOTS, PlayerPlace,
     StoredChest, apply_changes, bar_from_wire, carried_from_wire, ensure_chest, parse_inventory,
     read_changes, read_chests, read_ender_chest, read_hotbar, read_inventory, read_player,
     remove_chest, store_chest_slots, write_changes, write_chests, write_hotbar, write_inventory,

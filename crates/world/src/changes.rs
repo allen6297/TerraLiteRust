@@ -34,8 +34,12 @@ pub struct CarriedSlot {
     pub count: u16,
 }
 
-/// How many hotbar slots a save holds.
+/// How many main hotbar slots a save holds (`0..10`). Slot `10` is offhand.
 pub const HOTBAR_SAVE_SLOTS: usize = 10;
+/// Inclusive slot index for the offhand equipment stack in a hotbar save.
+pub const HOTBAR_OFFHAND_SLOT: u8 = 10;
+/// Parse limit so slot `10` (offhand) is accepted alongside the ten bar cells.
+pub const HOTBAR_SAVE_SLOT_LIMIT: usize = 11;
 
 /// The ten-slot hotbar. `selected` is `0..10`. Empty slots are left out.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -560,7 +564,7 @@ pub fn parse_hotbar(text: &str) -> Result<Option<HotbarSave>, String> {
         .get("slots")
         .and_then(Value::as_array)
         .ok_or_else(|| "hotbar slots must be an array".to_string())?;
-    let slots = parse_slot_entries(entries, HOTBAR_SAVE_SLOTS, "hotbar")?;
+    let slots = parse_slot_entries(entries, HOTBAR_SAVE_SLOT_LIMIT, "hotbar")?;
     Ok(Some(HotbarSave {
         selected: selected as u8,
         slots,
@@ -706,9 +710,10 @@ fn parse_slot_entries(
     Ok(slots)
 }
 
-/// Ten wire pairs become a hotbar. `selected` is 1-based, matching the hotbar packet.
+/// Ten or eleven wire pairs become a hotbar. `selected` is 1-based (bar only).
+/// Index `10` is the offhand equipment slot when present.
 pub fn bar_from_wire(selected: i32, slots: &[(String, i32)]) -> Result<HotbarSave, String> {
-    if slots.len() != HOTBAR_SAVE_SLOTS {
+    if slots.len() != HOTBAR_SAVE_SLOTS && slots.len() != HOTBAR_SAVE_SLOT_LIMIT {
         return Err(format!("hotbar has {} slots", slots.len()));
     }
     if !(1..=HOTBAR_SAVE_SLOTS as i32).contains(&selected) {

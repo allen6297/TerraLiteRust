@@ -3451,6 +3451,95 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Offhand HUD slot + PLAYER equip: sword selected, shield in offhand, raised block.
+    pub fn arm_offhand_slot_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([9.2, 1.0, 10.4]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        let _ = self.hotbar.set_offhand("shield");
+        self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("offhand");
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        // Third-person so the HUD offhand well + raised block read together.
+        self.third_person = true;
+        let eye = glam::Vec3::new(7.2, 2.1 + crate::body::EYE_HEIGHT, 13.4);
+        let focus = glam::Vec3::new(8.6, 1.55, 10.8);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.splash = crate::splash::Splash::new();
+        self.pearls = crate::pearls::Pearls::new();
+        self.shield_raised = true;
+        self.shield_show = 1.0;
+        self.slot_punch = 0.7;
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        self.player.tick(0.0, 0.0, -1.0, false, false, true);
+        self.rebuild_player();
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
     /// Totem of undying mid-save: gold pop, one heart left, no death overlay.
     pub fn arm_totem_undying_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -7304,15 +7393,25 @@ impl State {
         }
     }
 
-    /// Selected-hotbar totem (offhand is still a stub). True when the lethal hit was blocked.
+    /// Selected or offhand totem. True when the lethal hit was blocked.
     fn try_totem_save(&mut self) -> bool {
-        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
-            return false;
-        };
-        if !Pack::builtin().is_totem(id) {
+        let selected = self.hotbar.selected();
+        let from_selected = self
+            .hotbar
+            .slot(selected)
+            .is_some_and(|id| Pack::builtin().is_totem(id));
+        let from_offhand = self
+            .hotbar
+            .offhand()
+            .is_some_and(|id| Pack::builtin().is_totem(id));
+        if !from_selected && !from_offhand {
             return false;
         }
-        self.hotbar.consume_selected();
+        if from_selected {
+            self.hotbar.consume_selected();
+        } else {
+            self.hotbar.consume_offhand();
+        }
         self.hotbar_dirty = true;
         self.hearts = 1;
         self.dead = false;
@@ -19927,7 +20026,15 @@ impl State {
                     && !self.try_key()
                     && !self.try_wind()
                 {
-                    self.open_looked_block();
+                    // F is Use: open a looked block when aimed, else swap main↔offhand.
+                    if self.looking_at_use() {
+                        self.open_looked_block();
+                    } else {
+                        self.hotbar.swap_offhand();
+                        self.hotbar_dirty = true;
+                        self.swap_kick = 1.0;
+                        self.slot_punch = self.slot_punch.max(0.55);
+                    }
                 }
             }
             KeyCode::F5 if pressed && self.playing => {
@@ -24582,14 +24689,20 @@ fn client_view<'a>(
 }
 
 fn hotbar_slots(hotbar: &hotbar::Hotbar) -> Vec<(String, i32)> {
-    (0..hotbar::SLOTS)
+    let mut slots: Vec<(String, i32)> = (0..hotbar::SLOTS)
         .map(|index| {
             (
                 hotbar.slot(index).unwrap_or("").to_string(),
                 i32::from(hotbar.count(index)),
             )
         })
-        .collect()
+        .collect();
+    // Wire index 10 is the offhand equipment slot.
+    slots.push((
+        hotbar.offhand().unwrap_or("").to_string(),
+        i32::from(hotbar.offhand_count()),
+    ));
+    slots
 }
 
 fn ui_mesh(quads: &[hotbar::Quad]) -> (Vec<UiVertex>, Vec<u32>) {

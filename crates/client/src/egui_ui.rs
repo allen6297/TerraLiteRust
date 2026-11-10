@@ -73,9 +73,11 @@ const EMI_SIDE_W: f32 = SLOT * EMI_COLS as f32 + SLOT_GAP * (EMI_COLS as f32 - 1
 /// EMI title / search / craft-uses chrome below the item list.
 const EMI_PANEL_OVERHEAD: f32 = 220.0;
 
-/// Left-column UI row → engine armor slot (`None` = stub).
-/// Order is top→bottom: head, chest, legs(stub), feet, offhand(stub).
+/// Left-column UI row → engine armor slot (`None` = stub or offhand).
+/// Order is top→bottom: head, chest, legs(stub), feet, offhand (row 4, wired separately).
 const LEFT_ARMOR_MAP: [Option<usize>; EQUIP_ROWS] = [Some(0), Some(1), None, Some(2), None];
+/// PLAYER-tab row index for the offhand equipment well.
+const OFFHAND_EQUIP_ROW: usize = 4;
 
 // Terralite dark-well palette (matches gui.rs WELL / LIP / PANEL).
 const WELL: Color32 = Color32::from_rgb(5, 6, 10);
@@ -1624,11 +1626,16 @@ fn draw_player_detail(
     let preview_w = preview_h * (PREVIEW_W as f32 / PREVIEW_H as f32);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(SLOT_GAP + 4.0, SLOT_GAP);
-        // Left: armor column (wired head/chest/feet; stubs for legs + offhand).
+        // Left: armor column (wired head/chest/feet/offhand; stub for legs).
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
             for row in 0..EQUIP_ROWS {
-                if equip_slot(ui, hotbar, bag, armor, icons, LEFT_ARMOR_MAP[row], true) {
+                if row == OFFHAND_EQUIP_ROW {
+                    if offhand_equip_slot(ui, hotbar, icons) {
+                        touched = true;
+                    }
+                } else if equip_slot(ui, hotbar, bag, armor, icons, LEFT_ARMOR_MAP[row], true)
+                {
                     touched = true;
                 }
             }
@@ -1695,6 +1702,38 @@ fn player_preview_texture(
     let tex = handle.id();
     icons.insert(PREVIEW_KEY.to_string(), handle);
     tex
+}
+
+/// Offhand well under the armor column — swaps with the selected hotbar stack.
+fn offhand_equip_slot(
+    ui: &mut Ui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let worn_id = hotbar.offhand();
+    let count = hotbar.offhand_count();
+    let tex = worn_id.and_then(|id| icon_texture(ui.ctx(), icons, id));
+    let resp = slot_button(
+        ui,
+        tex,
+        false,
+        if count > 1 { Some(count) } else { None },
+    );
+    if let Some(id) = worn_id {
+        let tip = gui::tip_for(id, Some(count.max(1)));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+    } else {
+        resp.clone().on_hover_ui(|ui| {
+            show_tip(
+                ui,
+                &gui::ItemTip::plain("Offhand", "empty — F swaps with selected"),
+            );
+        });
+    }
+    if !resp.clicked() {
+        return false;
+    }
+    hotbar.click_offhand()
 }
 
 /// One equipment well. `engine_slot` wires into [`Armor`]; `None` is a stub.
@@ -2496,12 +2535,27 @@ mod tests {
     fn player_tab_has_two_equipment_columns_of_five() {
         assert_eq!(EQUIP_ROWS, 5);
         assert_eq!(LEFT_ARMOR_MAP.len(), 5);
-        // Engine armor: head / chest / feet — legs + offhand stay stubs.
+        // Engine armor: head / chest / feet — legs stub; offhand is row 4.
         assert_eq!(LEFT_ARMOR_MAP[0], Some(0));
         assert_eq!(LEFT_ARMOR_MAP[1], Some(1));
         assert_eq!(LEFT_ARMOR_MAP[2], None);
         assert_eq!(LEFT_ARMOR_MAP[3], Some(2));
         assert_eq!(LEFT_ARMOR_MAP[4], None);
+        assert_eq!(OFFHAND_EQUIP_ROW, 4);
+    }
+
+    #[test]
+    fn click_offhand_swaps_with_selected() {
+        let mut hotbar = Hotbar::new();
+        assert!(hotbar.select_digit(2));
+        assert!(hotbar.collect("shield"));
+        assert!(hotbar.click_offhand());
+        assert_eq!(hotbar.offhand(), Some("shield"));
+        assert!(hotbar.slot(hotbar.selected()).is_none());
+        assert!(hotbar.holding_shield());
+        assert!(hotbar.click_offhand());
+        assert!(hotbar.offhand().is_none());
+        assert_eq!(hotbar.slot(hotbar.selected()), Some("shield"));
     }
 
     #[test]

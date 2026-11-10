@@ -220,6 +220,8 @@ struct Args {
     shot_ender_pearl: Option<std::path::PathBuf>,
     /// Totem of undying mid-save, then quit.
     shot_totem_undying: Option<std::path::PathBuf>,
+    /// Offhand equipment HUD slot, then quit.
+    shot_offhand_slot: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -475,6 +477,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_splash_potion: args.shot_splash_potion,
         shot_ender_pearl: args.shot_ender_pearl,
         shot_totem_undying: args.shot_totem_undying,
+        shot_offhand_slot: args.shot_offhand_slot,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -608,6 +611,7 @@ struct App {
     shot_splash_potion: Option<std::path::PathBuf>,
     shot_ender_pearl: Option<std::path::PathBuf>,
     shot_totem_undying: Option<std::path::PathBuf>,
+    shot_offhand_slot: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -872,6 +876,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_totem_undying.take() {
                     state.arm_totem_undying_shot(path);
+                }
+                if let Some(path) = self.shot_offhand_slot.take() {
+                    state.arm_offhand_slot_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1235,6 +1242,7 @@ where
         shot_splash_potion: None,
         shot_ender_pearl: None,
         shot_totem_undying: None,
+        shot_offhand_slot: None,
         name: None,
         host: false,
         join: false,
@@ -1635,6 +1643,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-totem-undying".to_string())?;
                 parsed.shot_totem_undying = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-offhand-slot" | "--shot-offhand" | "--shot-off-hand" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-offhand-slot".to_string())?;
+                parsed.shot_offhand_slot = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2196,6 +2210,17 @@ mod tests {
         assert_eq!(
             args.shot_totem_undying.as_deref(),
             Some(std::path::Path::new("totem-undying.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-offhand-slot".into(),
+            "offhand-slot.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_offhand_slot.as_deref(),
+            Some(std::path::Path::new("offhand-slot.png"))
         );
     }
 }

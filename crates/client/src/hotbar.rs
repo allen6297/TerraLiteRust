@@ -292,9 +292,14 @@ fn is_tool(id: &str) -> bool {
     Pack::builtin().tool_uses(id) > 0
 }
 
+/// Save / wire index for the offhand stack (`0..10` are the hotbar).
+pub const OFFHAND_SAVE_SLOT: u8 = 10;
+
 pub struct Hotbar {
     slots: [Option<Item>; SLOTS],
     selected: usize,
+    /// Separate equipment hand — shield, totem, or any stack.
+    offhand: Option<Item>,
     /// How far the held map reaches. `0` is one block per cell.
     map_zoom: u8,
     /// `1` after the first campfire Enter. The next Enter finishes the cook.
@@ -318,6 +323,7 @@ impl Hotbar {
                 None,
             ],
             selected: 0,
+            offhand: None,
             map_zoom: 0,
             camp_heat: 0,
         }
@@ -342,18 +348,113 @@ impl Hotbar {
         self.selected
     }
 
-    /// Replace the bar from a save. `selected` is `0..10`.
+    /// Replace the bar from a save. `selected` is `0..10`. Slot `10` is offhand.
     pub fn install_saved(&mut self, selected: u8, slots: &[rebuild_world::CarriedSlot]) {
         self.slots = [None; SLOTS];
+        self.offhand = None;
         self.selected = (selected as usize).min(SLOTS - 1);
         for carried in slots {
-            let index = carried.slot as usize;
-            if index >= SLOTS || carried.id.is_empty() || carried.count == 0 {
+            if carried.id.is_empty() || carried.count == 0 {
                 continue;
             }
             let id = Block::new(&carried.id, 0).id;
+            if carried.slot == OFFHAND_SAVE_SLOT {
+                self.offhand = Some(restored(id, carried.count));
+                continue;
+            }
+            let index = carried.slot as usize;
+            if index >= SLOTS {
+                continue;
+            }
             self.slots[index] = Some(restored(id, carried.count));
         }
+    }
+
+    /// Id in the offhand slot, if any.
+    pub fn offhand(&self) -> Option<&str> {
+        self.offhand.map(|item| item.id)
+    }
+
+    /// Count or remaining uses shown for the offhand slot.
+    pub fn offhand_count(&self) -> u16 {
+        match self.offhand {
+            Some(item) if item.uses > 0 => item.uses,
+            Some(item) => item.count,
+            None => 0,
+        }
+    }
+
+    /// Put `id` in the offhand (full stack / full uses). Creative equip uses this.
+    pub fn set_offhand(&mut self, id: &str) -> bool {
+        if id.is_empty() || id == "air" {
+            return false;
+        }
+        let id = Block::new(id, 0).id;
+        self.offhand = Some(fresh(id, STACK));
+        true
+    }
+
+    /// Clear the offhand and return what was there.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn take_offhand(&mut self) -> Option<&'static str> {
+        self.offhand.take().map(|item| item.id)
+    }
+
+    /// Swap the selected hotbar stack with the offhand.
+    pub fn swap_offhand(&mut self) {
+        let selected = self.selected;
+        let main = self.slots.get_mut(selected).map(Option::take).flatten();
+        let off = self.offhand.take();
+        self.offhand = main;
+        if let Some(slot) = self.slots.get_mut(selected) {
+            *slot = off;
+        }
+    }
+
+    /// True when the offhand holds a usable shield.
+    fn offhand_shield(&self) -> bool {
+        self.offhand
+            .is_some_and(|item| Pack::builtin().is_shield(item.id) && item.uses > 0)
+    }
+
+    /// Spend one use from the offhand shield. True when that bite is blocked.
+    fn block_offhand_bite(&mut self) -> bool {
+        let Some(item) = self.offhand.as_mut() else {
+            return false;
+        };
+        if !Pack::builtin().is_shield(item.id) || item.uses == 0 {
+            return false;
+        }
+        if item.uses <= 1 {
+            self.offhand = None;
+        } else {
+            item.uses -= 1;
+        }
+        true
+    }
+
+    /// Consume one from the offhand stack (totem, etc.).
+    pub fn consume_offhand(&mut self) {
+        let Some(item) = self.offhand else {
+            return;
+        };
+        if item.count <= 1 {
+            self.offhand = None;
+        } else {
+            self.offhand = Some(Item {
+                count: item.count - 1,
+                ..item
+            });
+        }
+    }
+
+    /// Equip click: swap selected ↔ offhand (any item). True when either side held something.
+    pub fn click_offhand(&mut self) -> bool {
+        if self.item(self.selected).is_none() && self.offhand.is_none() {
+            return false;
+        }
+        self.swap_offhand();
+        true
     }
 
     pub fn slot(&self, index: usize) -> Option<&str> {
@@ -880,33 +981,32 @@ impl Hotbar {
         }
     }
 
-    /// True when the selected slot is a usable shield.
+    /// True when the selected slot or offhand holds a usable shield.
     pub fn holding_shield(&self) -> bool {
         self.item(self.selected)
             .is_some_and(|item| Pack::builtin().is_shield(item.id) && item.uses > 0)
+            || self.offhand_shield()
     }
 
-    /// Spend one use of the selected shield. True when that bite is blocked.
+    /// Spend one use of a raised shield (selected first, else offhand). True when blocked.
     ///
     /// Call only while the shield is raised. At zero uses the slot clears.
     /// Mining does not spend these uses.
     pub fn block_bite(&mut self) -> bool {
         let index = self.selected;
-        let Some(slot) = self.slots.get_mut(index) else {
-            return false;
-        };
-        let Some(item) = slot.as_mut() else {
-            return false;
-        };
-        if !Pack::builtin().is_shield(item.id) || item.uses == 0 {
-            return false;
+        if let Some(slot) = self.slots.get_mut(index) {
+            if let Some(item) = slot.as_mut() {
+                if Pack::builtin().is_shield(item.id) && item.uses > 0 {
+                    if item.uses <= 1 {
+                        *slot = None;
+                    } else {
+                        item.uses -= 1;
+                    }
+                    return true;
+                }
+            }
         }
-        if item.uses <= 1 {
-            *slot = None;
-        } else {
-            item.uses -= 1;
-        }
-        true
+        self.block_offhand_bite()
     }
 
     /// Turn the last `from` in `index` into one `to`. A bigger stack is left alone.
@@ -1657,9 +1757,85 @@ pub fn bar_lifted(width: f32, height: f32, hotbar: &Hotbar, lift: f32) -> Vec<Qu
     let span = SLOTS as f32 * SLOT_PX + (SLOTS as f32 - 1.0) * GAP_PX;
     let left = (width - span) * 0.5;
     let bottom = MARGIN_PX;
-    let mut quads = Vec::with_capacity(1 + SLOTS * 2);
+    let mut quads = Vec::with_capacity(4 + SLOTS * 2);
     let bar_w = span + PAD_PX * 2.0;
     let bar_h = SLOT_PX + PAD_PX * 2.0;
+    // Offhand sits left of the bar with a clear gap so it reads as equipment.
+    let off_gap = GAP_PX * 2.0;
+    let off_x = left - PAD_PX - off_gap - SLOT_PX;
+    quads.push(
+        pixel_quad(
+            width,
+            height,
+            off_x - PAD_PX,
+            bottom - PAD_PX,
+            off_x + SLOT_PX + PAD_PX,
+            bottom + SLOT_PX + PAD_PX,
+            BAR,
+        )
+        .face("deepslate", (SLOT_PX + PAD_PX * 2.0) / 16.0, bar_h / 16.0),
+    );
+    quads.push(pixel_quad(
+        width,
+        height,
+        off_x - PAD_PX,
+        bottom + SLOT_PX + PAD_PX - 3.0,
+        off_x + SLOT_PX + PAD_PX,
+        bottom + SLOT_PX + PAD_PX,
+        LIP,
+    ));
+    quads.push(
+        pixel_quad(
+            width,
+            height,
+            off_x - BORDER_PX,
+            bottom - BORDER_PX,
+            off_x + SLOT_PX + BORDER_PX,
+            bottom + SLOT_PX + BORDER_PX,
+            BORDER,
+        )
+        .tag(599),
+    );
+    let off_icon_x = off_x + ICON_INSET_PX;
+    let off_icon_y = bottom + ICON_INSET_PX;
+    let off_icon_size = SLOT_PX - ICON_INSET_PX * 2.0;
+    match hotbar.offhand() {
+        Some(id) => push_slot_icon(
+            &mut quads,
+            width,
+            height,
+            off_icon_x,
+            off_icon_y,
+            off_icon_size,
+            id,
+        ),
+        None => quads.push(pixel_quad(
+            width,
+            height,
+            off_icon_x,
+            off_icon_y,
+            off_icon_x + off_icon_size,
+            off_icon_y + off_icon_size,
+            EMPTY,
+        )),
+    }
+    draw_count(
+        &mut quads,
+        width,
+        height,
+        off_x,
+        bottom,
+        hotbar.offhand_count(),
+    );
+    draw_wear(
+        &mut quads,
+        width,
+        height,
+        off_x,
+        bottom,
+        hotbar.offhand(),
+        hotbar.offhand_count(),
+    );
     quads.push(
         pixel_quad(
             width,
@@ -2147,6 +2323,47 @@ mod tests {
         pack.set_item_places("hotbar:not_a_block", "hotbar:place_me", "hotbar-place-test")
             .unwrap();
         assert_eq!(bar.selected_block(), Some(Block::new("hotbar:place_me", 0)));
+    }
+
+    #[test]
+    fn offhand_shield_blocks_and_swaps_with_selected() {
+        let mut bar = Hotbar::new();
+        assert!(bar.set_offhand("shield"));
+        assert_eq!(bar.offhand(), Some("shield"));
+        assert_eq!(bar.offhand_count(), 4);
+        assert!(bar.holding_shield());
+        assert!(bar.block_bite());
+        assert_eq!(bar.offhand_count(), 3);
+        bar.select_digit(1);
+        assert!(bar.give_stack("iron_pickaxe"));
+        bar.swap_offhand();
+        assert_eq!(bar.offhand(), Some("iron_pickaxe"));
+        assert_eq!(bar.slot(0), Some("shield"));
+        assert!(bar.holding_shield());
+        assert!(bar.block_bite());
+        assert_eq!(bar.count(0), 2);
+        let quads = bar_quads(800.0, 600.0, &bar);
+        assert!(
+            quads.iter().any(|quad| quad.hit == 599),
+            "offhand HUD well is tagged"
+        );
+        // Persist through save slot 10.
+        assert!(bar.set_offhand("totem_of_undying"));
+        let slots = [
+            rebuild_world::CarriedSlot {
+                slot: 0,
+                id: "shield".into(),
+                count: 2,
+            },
+            rebuild_world::CarriedSlot {
+                slot: OFFHAND_SAVE_SLOT,
+                id: "totem_of_undying".into(),
+                count: 1,
+            },
+        ];
+        bar.install_saved(0, &slots);
+        assert_eq!(bar.slot(0), Some("shield"));
+        assert_eq!(bar.offhand(), Some("totem_of_undying"));
     }
 
     #[test]
