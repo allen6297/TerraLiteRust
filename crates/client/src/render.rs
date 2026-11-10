@@ -1239,6 +1239,13 @@ pub struct State {
     pollen_drip: f32,
     /// Seconds left on a strength potion melee buff.
     strength_left: f32,
+    /// Seconds of beacon speed left.
+    speed_left: f32,
+    speed_show: f32,
+    /// Active beacon cell that powers the beam + buff.
+    beacon_at: Option<[i32; 3]>,
+    beacon_buf: Option<wgpu::Buffer>,
+    beacon_count: u32,
     /// HUD plate while strength is up, `0`..`1`.
     strength_show: f32,
     /// HUD plate while an axolotl companion is leashed, `0`..`1`.
@@ -2568,6 +2575,11 @@ impl State {
             pollen_show: 0.0,
             pollen_drip: 0.0,
             strength_left: 0.0,
+            speed_left: 0.0,
+            speed_show: 0.0,
+            beacon_at: None,
+            beacon_buf: None,
+            beacon_count: 0,
             strength_show: 0.0,
             leash_show: 0.0,
             axolotl_held_lead: false,
@@ -5087,6 +5099,45 @@ impl State {
             },
         ));
         self.wither_boss_count = vertices.len() as u32;
+    }
+
+    fn rebuild_beacon_beam(&mut self) {
+        let Some(at) = self.beacon_at else {
+            self.beacon_buf = None;
+            self.beacon_count = 0;
+            return;
+        };
+        if !crate::beacon::pyramid_ready(&self.world, at) {
+            self.beacon_at = None;
+            self.beacon_buf = None;
+            self.beacon_count = 0;
+            return;
+        }
+        let vertices = crate::beacon::beam_vertices(at);
+        self.beacon_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("beacon_beam"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.beacon_count = vertices.len() as u32;
+    }
+
+    /// Light a placed beacon when a 3×3 mineral pad sits under it.
+    fn try_activate_beacon(&mut self, at: [i32; 3]) {
+        if !crate::beacon::pyramid_ready(&self.world, at) {
+            self.gui.push_chat("need a mineral pad");
+            return;
+        }
+        self.beacon_at = Some(at);
+        self.rebuild_beacon_beam();
+        self.play_world(
+            crate::audio::Sound::Gust,
+            [at[0] as f32 + 0.5, at[1] as f32 + 1.0, at[2] as f32 + 0.5],
+        );
+        self.gui.push_chat("beacon");
+        let _ = self.advancements.unlock("beacon");
     }
 
     /// After a wither skull lands, check for three-in-a-row on soul sand.
@@ -9050,6 +9101,77 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Crafted beacon on an iron pad with a rising beam, then quit with a PNG.
+    pub fn arm_beacon_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.22);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, by, bz) = (8, 2, 8);
+        let mut changes = Vec::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                changes.push(CellChange {
+                    x: bx + dx,
+                    y: by - 1,
+                    z: bz + dz,
+                    block: Block::new("iron_block", 0),
+                });
+            }
+        }
+        changes.push(CellChange {
+            x: bx,
+            y: by,
+            z: bz,
+            block: Block::new("beacon", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.try_activate_beacon([bx, by, bz]);
+        self.speed_left = crate::beacon::BUFF_SECS;
+        self.speed_show = 1.0;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("beacon");
+        self.gui.push_chat("speed");
+
+        let focus = glam::Vec3::new(bx as f32 + 0.5, by as f32 + 2.5, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(bx as f32 + 4.5, by as f32 + 2.2, bz as f32 + 4.0);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("beacon");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Tall wither skeleton mid-corridor swing in the nether fortress, then quit with a PNG.
     pub fn arm_wither_skeleton_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -11413,6 +11535,9 @@ impl State {
             }
             if cell.block.id == "wither_skull" && before.id != "wither_skull" {
                 self.try_summon_wither([cell.x, cell.y, cell.z]);
+            }
+            if cell.block.id == "beacon" && before.id != "beacon" {
+                self.try_activate_beacon([cell.x, cell.y, cell.z]);
             }
             if let Some(slot) = pending.and_then(|edit| edit.slot) {
                 let buffer_level_changed = is_buffer(cell.block.id)
@@ -25997,6 +26122,8 @@ impl State {
         self.sprint_show = 0.0;
         self.strength_left = 0.0;
         self.strength_show = 0.0;
+        self.speed_left = 0.0;
+        self.speed_show = 0.0;
         self.air_peak = self.camera.eye.y;
         self.boat.dismount();
         self.pig.dismount();
@@ -26716,6 +26843,35 @@ impl State {
         } else {
             self.strength_show = (self.strength_show - dt * 4.0).max(0.0);
         }
+        if let Some(at) = self.beacon_at {
+            if crate::beacon::pyramid_ready(&self.world, at) {
+                let feet = [
+                    self.camera.eye.x,
+                    self.camera.eye.y - body::EYE_HEIGHT,
+                    self.camera.eye.z,
+                ];
+                if crate::beacon::in_range(at, feet) {
+                    if self.speed_left <= 0.05 {
+                        self.gui.push_chat("speed");
+                    }
+                    self.speed_left = crate::beacon::BUFF_SECS;
+                    self.speed_show = 1.0;
+                }
+            } else {
+                self.beacon_at = None;
+                self.rebuild_beacon_beam();
+            }
+        }
+        if self.speed_left > 0.0 {
+            self.speed_left = (self.speed_left - dt).max(0.0);
+            self.speed_show = if self.speed_left > 0.8 {
+                1.0
+            } else {
+                (self.speed_left / 0.8).clamp(0.0, 1.0)
+            };
+        } else {
+            self.speed_show = (self.speed_show - dt * 4.0).max(0.0);
+        }
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.swap_kick = (self.swap_kick - dt * 10.0).max(0.0);
         self.break_kick = (self.break_kick - dt * 7.0).max(0.0);
@@ -27022,7 +27178,17 @@ impl State {
                 self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
             }
             self.camera
-                .step_paced(dt, &motion, &self.world, &obstacles, self.hunger.pace());
+                .step_paced(
+                    dt,
+                    &motion,
+                    &self.world,
+                    &obstacles,
+                    if self.speed_left > 0.0 {
+                        self.hunger.pace() * crate::beacon::SPEED_PACE
+                    } else {
+                        self.hunger.pace()
+                    },
+                );
             let stepping = motion.forward || motion.back || motion.left || motion.right;
             if stepping && self.camera.on_ground {
                 let pace = if motion.fast { 11.0 } else { 8.0 };
@@ -28244,6 +28410,14 @@ impl State {
                     pass.draw(0..self.wither_boss_count, 0..1);
                 }
             }
+            if let Some(beacon) = &self.beacon_buf {
+                if self.beacon_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, beacon.slice(..));
+                    pass.draw(0..self.beacon_count, 0..1);
+                }
+            }
             if let Some(bee) = &self.bee_buf {
                 if self.bee_count >= 3 {
                     pass.set_pipeline(&self.pipeline);
@@ -28425,6 +28599,9 @@ impl State {
         }
         if self.strength_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::strength_quads(gui_w, gui_h, self.strength_show));
+        }
+        if self.speed_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::speed_quads(gui_w, gui_h, self.speed_show));
         }
         if self.leash_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::leash_quads(gui_w, gui_h, self.leash_show));

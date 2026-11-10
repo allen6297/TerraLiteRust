@@ -169,7 +169,7 @@ pub fn step_paced(
         } else {
             speed
         };
-        let speed = speed * pace.clamp(0.25, 1.0);
+        let speed = speed * pace.clamp(0.25, 1.4);
         wish = wish.normalize() * speed;
     }
 

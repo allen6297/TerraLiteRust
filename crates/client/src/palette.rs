@@ -208,6 +208,12 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "strength_potion" => [0.72, 0.28, 0.18],
         "wither_skull" => [0.18, 0.16, 0.14],
         "nether_star" => [0.95, 0.92, 0.78],
+        "beacon" => [0.55, 0.85, 1.0],
+        "iron_block" => [0.72, 0.72, 0.75],
+        "gold_block" => [0.92, 0.78, 0.22],
+        "emerald_block" => [0.18, 0.78, 0.42],
+        "diamond_block" => [0.55, 0.85, 0.92],
+
 
 
 

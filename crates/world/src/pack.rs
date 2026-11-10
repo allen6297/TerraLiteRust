@@ -7844,6 +7844,11 @@ mod tests {
         assert!(pack.contains_block("wither_skull"));
         assert!(pack.is_core("nether_star"));
         assert_eq!(pack.tool_icon("nether_star"), Some("glowstone"));
+        assert!(pack.contains_block("beacon"));
+        assert!(pack.contains_block("iron_block"));
+        assert!(pack.contains_block("gold_block"));
+        assert!(pack.contains_block("emerald_block"));
+        assert!(pack.contains_block("diamond_block"));
         assert!(pack.is_key("trial_key"));
         assert!(!pack.is_key("heavy_core"));
         assert_eq!(pack.tool_icon("trial_key"), Some("copper_chest"));
