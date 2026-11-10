@@ -396,6 +396,14 @@ pub fn dawn_chorus(time_of_day: f32) -> f32 {
 /// Soft daytime breeze amount. `0` at night, full under open day sky.
 ///
 /// Ducks a little under the dawn chorus so birds stay in front.
+/// Soft lantern / torch flicker multiplier for warm block light (params.w).
+pub fn lantern_flicker(t: f32) -> f32 {
+    let a = (t * 6.8).sin();
+    let b = (t * 15.2 + 0.9).sin();
+    let c = (t * 29.0 + 2.1).sin();
+    (0.78 + 0.14 * a + 0.06 * b + 0.04 * c).clamp(0.68, 1.06)
+}
+
 pub fn day_breeze(time_of_day: f32) -> f32 {
     let time = time_of_day.rem_euclid(1.0);
     let night = night_fog(time);
@@ -497,6 +505,19 @@ mod tests {
         assert!(day_breeze(0.5) > 0.95);
         assert!(day_breeze(0.26) < day_breeze(0.5));
         assert!(day_breeze(0.86) < 0.9);
+    }
+
+    #[test]
+    fn lantern_flicker_stays_near_one_and_moves() {
+        let a = lantern_flicker(0.0);
+        let b = lantern_flicker(0.37);
+        assert!((0.68..=1.06).contains(&a));
+        assert!((0.68..=1.06).contains(&b));
+        assert!((a - b).abs() > 0.01);
+        for step in 0..40 {
+            let v = lantern_flicker(step as f32 * 0.21);
+            assert!((0.68..=1.06).contains(&v), "flicker out of range: {v}");
+        }
     }
 
     #[test]

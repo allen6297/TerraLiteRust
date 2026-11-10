@@ -40,7 +40,7 @@ use crate::shade;
 const SHADER: &str = r#"
 struct Uniforms {
     view_proj: mat4x4<f32>,
-    // x tiles, y sun brightness, z cast-shadow strength, w unused
+    // x tiles, y sun brightness, z cast-shadow strength, w lantern flicker
     params: vec4<f32>,
     sun_dir: vec4<f32>,
     // x map resolution, y cascade count, z blend start, w ray-grid blend
@@ -209,7 +209,11 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
     let sky_fill = mix(0.84, 1.0, sqrt(clamp(sky_open, 0.0, 1.0)));
     let crease = mix(0.90, 1.0, sqrt(clamp(contact, 0.0, 1.0)));
     let soften = mix(1.0, sky_fill * crease, use_trace);
-    let lit = ambient * sun_shade * cave_mul * soften + indirect + input.block;
+    // Warm lights (lantern / torch / campfire) pulse with params.w.
+    let warm = max(input.block.r - input.block.b * 0.55 - input.block.g * 0.12, 0.0);
+    let warm_w = smoothstep(0.02, 0.12, warm);
+    let block = input.block * mix(1.0, u.params.w, warm_w);
+    let lit = ambient * sun_shade * cave_mul * soften + indirect + block;
     let lit_rgb = lit * albedo;
     let dist = distance(input.world_pos, u.fog_eye.xyz);
     let fog_end = max(u.fog_color.w, u.fog_eye.w + 1.0);
@@ -1140,6 +1144,10 @@ pub struct State {
     ember_wait: f32,
     /// Once: saw campfire embers pop.
     found_embers: bool,
+    /// Once: stood by a lantern and felt the warm flicker.
+    found_flicker: bool,
+    /// Seconds of lantern flicker phase (drives params.w).
+    lantern_phase: f32,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
     /// One-shot campfire smoke proof PNG, then quit.
@@ -2157,6 +2165,8 @@ impl State {
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
+            found_flicker: false,
+            lantern_phase: 0.0,
             firefly_wait: 0.0,
             campfire_smoke_shot_path: None,
             campfire_smoke_shot_frames: 0,
@@ -3967,6 +3977,11 @@ impl State {
             self.ensure_frog_pads();
             self.found_lily = true;
             self.gui.push_chat("lily pads");
+        }
+        // Pad orange lantern sits at fixture (6, 1, 14).
+        if !self.found_flicker && near(6, 14) {
+            self.found_flicker = true;
+            self.gui.push_chat("flicker");
         }
     }
 
@@ -12260,6 +12275,103 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Night pad lantern with warm light flicker, then quit with a PNG.
+    pub fn arm_lantern_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        // Deep night so warm block light owns the frame.
+        self.clock.set_time_of_day(0.0);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let lx = 6;
+        let ly = 1;
+        let lz = 14;
+        let mut changes = Vec::new();
+        // Clear the overlook campfire so smoke/embers stay out of this plate.
+        for z in 8..=16 {
+            for x in 4..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 1..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Pedestal + lantern so the glow reads against night grass.
+        changes.push(CellChange {
+            x: lx,
+            y: 1,
+            z: lz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: lx,
+            y: 2,
+            z: lz,
+            block: Block::new("lantern", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.crackle_at = None;
+        self.crackle_mix = 0.0;
+        self.found_embers = false;
+
+        let lamp = glam::Vec3::new(lx as f32 + 0.5, ly as f32 + 1.55, lz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            lx as f32 - 1.1,
+            ly as f32 + 0.55 + body::EYE_HEIGHT,
+            lz as f32 - 2.8,
+        );
+        let look = glam::Vec3::new(lamp.x, lamp.y - 0.15, lamp.z);
+        self.camera = Camera::looking_at(eye, look);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        // Mid-pulse so a still frame still reads as warm glow breathing.
+        self.lantern_phase = 0.55;
+        self.found_flicker = true;
+        self.gui.push_chat("flicker");
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.drops = crate::drops::Drops::new();
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
     fn pin_campfire_smoke_shot_camera(&mut self) {
         if self.campfire_smoke_shot_path.is_none() {
             return;
@@ -16808,6 +16920,7 @@ impl State {
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
         }
+        self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.swap_kick = (self.swap_kick - dt * 10.0).max(0.0);
@@ -17554,7 +17667,8 @@ impl State {
         let matrix = self.camera.view_from(aspect, fov, view_eye).to_cols_array();
         let light = self.sun_light();
         let tiles = crate::texture::atlas_tile_count();
-        let params = [tiles, light.brightness, light.shadow, 0.0];
+        let flicker = crate::daylight::lantern_flicker(self.lantern_phase);
+        let params = [tiles, light.brightness, light.shadow, flicker];
         let sun = [
             light.direction[0],
             light.direction[1],
