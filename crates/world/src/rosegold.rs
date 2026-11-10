@@ -2143,32 +2143,33 @@ mod tests {
     use crate::chunk::Chunk;
     use crate::edit::{Edit, PlayerBox};
 
-    const SHIPPED: &str = include_str!("../../../mods/keep-stone.rg");
-    const LOG_PLACE: &str = include_str!("../../../mods/log-place.rg");
-    const LOG_BREAK: &str = include_str!("../../../mods/log-break.rg");
-    const LOG_PLAYER: &str = include_str!("../../../mods/log-player.rg");
-    const WOOL_MOD: &str = include_str!("../../../mods/red-wool.rg");
+    // Hook probes live under testdata so the live mods folder stays demos-only.
+    const SHIPPED: &str = include_str!("../testdata/hook_mods/keep-stone.rg");
+    const LOG_PLACE: &str = include_str!("../testdata/hook_mods/log-place.rg");
+    const LOG_BREAK: &str = include_str!("../testdata/hook_mods/log-break.rg");
+    const LOG_PLAYER: &str = include_str!("../testdata/hook_mods/log-player.rg");
+    const WOOL_MOD: &str = include_str!("../testdata/hook_mods/red-wool.rg");
     const ROSE_KIT: &str = include_str!("../../../mods/rose-kit.rg");
-    const USE_WAND: &str = include_str!("../../../mods/use-wand.rg");
-    const SPARK: &str = include_str!("../../../mods/spark.rg");
-    const USE_MOB: &str = include_str!("../../../mods/use-mob.rg");
-    const ATTACK: &str = include_str!("../../../mods/attack.rg");
-    const HUSH: &str = include_str!("../../../mods/hush.rg");
-    const RESPAWN: &str = include_str!("../../../mods/respawn.rg");
-    const CRAFT: &str = include_str!("../../../mods/craft.rg");
-    const SMELT: &str = include_str!("../../../mods/smelt.rg");
-    const REPAIR: &str = include_str!("../../../mods/repair.rg");
-    const ENCHANT: &str = include_str!("../../../mods/enchant.rg");
-    const BREW: &str = include_str!("../../../mods/brew.rg");
-    const SMITH: &str = include_str!("../../../mods/smith.rg");
-    const WEAVE: &str = include_str!("../../../mods/weave.rg");
-    const TICK: &str = include_str!("../../../mods/tick.rg");
-    const DAWN: &str = include_str!("../../../mods/dawn.rg");
-    const DUSK: &str = include_str!("../../../mods/dusk.rg");
-    const JUMP: &str = include_str!("../../../mods/jump.rg");
-    const SPRINT: &str = include_str!("../../../mods/sprint.rg");
-    const LAND: &str = include_str!("../../../mods/land.rg");
-    const SEAL: &str = include_str!("../../../mods/seal.rg");
+    const USE_WAND: &str = include_str!("../testdata/hook_mods/use-wand.rg");
+    const SPARK: &str = include_str!("../testdata/hook_mods/spark.rg");
+    const USE_MOB: &str = include_str!("../testdata/hook_mods/use-mob.rg");
+    const ATTACK: &str = include_str!("../testdata/hook_mods/attack.rg");
+    const HUSH: &str = include_str!("../testdata/hook_mods/hush.rg");
+    const RESPAWN: &str = include_str!("../testdata/hook_mods/respawn.rg");
+    const CRAFT: &str = include_str!("../testdata/hook_mods/craft.rg");
+    const SMELT: &str = include_str!("../testdata/hook_mods/smelt.rg");
+    const REPAIR: &str = include_str!("../testdata/hook_mods/repair.rg");
+    const ENCHANT: &str = include_str!("../testdata/hook_mods/enchant.rg");
+    const BREW: &str = include_str!("../testdata/hook_mods/brew.rg");
+    const SMITH: &str = include_str!("../testdata/hook_mods/smith.rg");
+    const WEAVE: &str = include_str!("../testdata/hook_mods/weave.rg");
+    const TICK: &str = include_str!("../testdata/hook_mods/tick.rg");
+    const DAWN: &str = include_str!("../testdata/hook_mods/dawn.rg");
+    const DUSK: &str = include_str!("../testdata/hook_mods/dusk.rg");
+    const JUMP: &str = include_str!("../testdata/hook_mods/jump.rg");
+    const SPRINT: &str = include_str!("../testdata/hook_mods/sprint.rg");
+    const LAND: &str = include_str!("../testdata/hook_mods/land.rg");
+    const SEAL: &str = include_str!("../testdata/hook_mods/seal.rg");
 
     fn hand(slots: &[(String, i32)]) -> ScriptView<'_> {
         ScriptView {

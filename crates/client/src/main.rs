@@ -71,7 +71,7 @@ reaches and is not covered by that shadow. The season changes every day
 and repeats every four days.
 The window needs a display. A menu opens first. Up and down move the row.
 Enter or Space picks it. Play starts the solo world. Join connects to 127.0.0.1 and stays on the menu when nothing is listening. Settings chooses
-the world size, a southern or northern sun, sound, view bob (full, low, or off), trace (on or off), and glow (on or off). Enter on glow says the new value in chat and, while playing, hangs a lantern one block above you. Off takes that lantern down if you are still under it. Pace cycles low, mid, and high. Glow and pace sit under Game, and that row says how it feels. Worlds loads a named
+the world size, a southern or northern sun, sound, view bob (full, low, or off), and trace (on or off). Worlds loads a named
 save. Quit closes the window. Click to capture the mouse.
 WASD walks, mouse looks, Space jumps, Ctrl is faster, Shift crouches. F5 toggles a third-person look so you can see your Blockbench body walk and dig. A small cross marks the center, and the block under it is named just below. Stepping into water splashes, and swimming is a stroke. An axolotl pauses, then swims the marsh just south of the stairs, at (8, 32). Right-click it and it follows through the water. A chicken pecks the grass west of the oak, at (3, 8). It stands and pecks, walks one side of the yard, and steps back when you stand close. Right-click the egg and it hands you raw food. A Blockbench zombie idles by the ore line at (11, 13), walks in to bite, and flashes red when the mace hits. Esc releases the mouse,
 and Esc again opens pause: resume, settings, or quit to the title. E opens the Items screen. Up and down arrows
@@ -79,8 +79,7 @@ select a recipe. Enter crafts it when the hotbar holds the ingredients. Esc or E
 I opens the inventory, nine slots past the hotbar. Letters search that grid by name, and a space splits words. A search that fits nothing says nothing matches. Enter moves one into the hotbar.
 Keys 1 through 9 and 0 while it is open stash one from that hotbar slot. Those nine
 slots, the hotbar, and where you stand are written into the same save. G opens the guide.
-N opens notes: a green oak row, a blue marsh row, and a light chicken row in black. Up and down move the row. Enter says that note in chat. Enter on the oak also adds a capital line, and Enter on that line takes it away.
-C lists registered commands. Enter runs the selected one. A spark rises.
+C lists registered commands. Enter runs the selected one.
 T opens chat. Enter sends a line of letters. On a joined server the line comes back.
 Joined players show as another body. A long fall spends hearts, and at none you
 respawn by the stairs. F opens a chest, a crafting table, or a furnace. Settings world size also changes a
@@ -157,7 +156,7 @@ fn main() -> ExitCode {
     }
     println!(
         "the menu is up. Up and down move the row. Enter or Space picks it. Play starts the solo world. Join connects to 127.0.0.1 and stays on the menu when nothing is listening. Settings chooses
-the world size, a southern or northern sun, sound, view bob (full, low, or off), trace (on or off), and glow (on or off). Enter on glow says the new value in chat and, while playing, hangs a lantern one block above you. Off takes that lantern down if you are still under it. Pace cycles low, mid, and high. Glow and pace sit under Game, and that row says how it feels. Worlds loads a named save. Quit closes the window. Then click the window to look around. WASD walks, Space jumps, Ctrl is faster, Shift crouches. Esc releases the mouse, and Esc again opens pause: resume, settings, or quit to the title. E opens the Items screen. Up and down arrows select a recipe. Esc or E closes it. The hotbar stays. The world is small, a 31x31, and walking into its edge stops you. Keys 1 through 9 and 0 select a hotbar slot. Slot 1 starts as cobblestone; the other nine slots start empty. Left click breaks and keeps a new block id in the first empty slot. Right click places the selected slot. A one-block rise steps you up when there is room above. Gravity pulls you down. Steps, breaks, and places make a sound unless volume is muted. Breaks and places go to the server when it is running, and to the local world otherwise. Either way they are written to the chosen save. The default world is C:\\CODE\\TerraLite\\saves\\blocks.json."
+the world size, a southern or northern sun, sound, view bob (full, low, or off), and trace (on or off). Worlds loads a named save. Quit closes the window. Then click the window to look around. WASD walks, Space jumps, Ctrl is faster, Shift crouches. Esc releases the mouse, and Esc again opens pause: resume, settings, or quit to the title. E opens the Items screen. Up and down arrows select a recipe. Esc or E closes it. The hotbar stays. The world is small, a 31x31, and walking into its edge stops you. Keys 1 through 9 and 0 select a hotbar slot. Slot 1 starts as cobblestone; the other nine slots start empty. Left click breaks and keeps a new block id in the first empty slot. Right click places the selected slot. A one-block rise steps you up when there is room above. Gravity pulls you down. Steps, breaks, and places make a sound unless volume is muted. Breaks and places go to the server when it is running, and to the local world otherwise. Either way they are written to the chosen save. The default world is C:\\CODE\\TerraLite\\saves\\blocks.json."
     );
 
     let event_loop = match EventLoop::new() {
