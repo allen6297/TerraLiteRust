@@ -128,6 +128,11 @@ impl Clock {
         (self.seconds / DAY_SECONDS).fract()
     }
 
+    /// Seconds since spring start (wraps every four days). Drives cloud wind.
+    pub fn seconds(self) -> f32 {
+        self.seconds
+    }
+
     /// Skip to the next dawn. Evening reaches tomorrow morning, so the season
     /// advances with the day. After midnight, dawn is still this morning.
     /// Daytime stays put. Returns whether the clock moved.

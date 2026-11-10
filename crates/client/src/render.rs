@@ -56,6 +56,8 @@ struct Uniforms {
     trace_box: vec4<f32>,
     // rgb sky zenith, w = water atlas textured id (slot+1), or 0 when missing
     sky_tint: vec4<f32>,
+    // x wind offset, y day strength (0 night), z open-sun dim (≈0.76), w unused
+    cloud: vec4<f32>,
 };
 
 @group(0) @binding(5)
@@ -125,6 +127,29 @@ fn vs_main(input: VsIn) -> VsOut {
     out.ao = input.ao;
     out.world_pos = input.position;
     return out;
+}
+
+// Cheap value noise for drifting cloud patches over XZ.
+fn cloud_hash(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+}
+
+fn cloud_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = cloud_hash(i);
+    let b = cloud_hash(i + vec2<f32>(1.0, 0.0));
+    let c = cloud_hash(i + vec2<f32>(0.0, 1.0));
+    let d = cloud_hash(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Soft blobs: 0 clear sky, 1 under cloud. Wind slides the field over the yard.
+fn cloud_cover(xz: vec2<f32>, wind: f32) -> f32 {
+    let p = xz * 0.022 + vec2<f32>(wind, wind * 0.55);
+    let n = cloud_noise(p) * 0.72 + cloud_noise(p * 1.85 + vec2<f32>(3.1, 1.7)) * 0.28;
+    return smoothstep(0.42, 0.74, n);
 }
 
 @fragment
@@ -203,7 +228,11 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
     // stays a hair higher so a night probe is shade, not a black square.
     let floor_shadow = mix(0.16, 0.24, use_trace);
     let shadow_mul = mix(1.0, floor_shadow, occluded * u.params.z);
-    let sun_shade = facing * u.params.y * shadow_mul;
+    // Drifting cloud mask dims open sun only — umbra floors stay untouched.
+    let cover = cloud_cover(input.world_pos.xz, u.cloud.x) * u.cloud.y;
+    let open_sun = 1.0 - occluded;
+    let cloud_mul = mix(1.0, u.cloud.z, cover * open_sun);
+    let sun_shade = facing * u.params.y * shadow_mul * cloud_mul;
     let ambient = input.color - input.block;
     let sky = clamp(input.ao, 0.0, 1.0);
     // Vertex sky darkens only where the ray grid does not cover the texel.
@@ -946,6 +975,13 @@ pub struct State {
     water_shot_eye: glam::Vec3,
     water_shot_yaw: f32,
     water_shot_pitch: f32,
+    /// One-shot drifting cloud ground darken, then quit.
+    cloud_shot_path: Option<std::path::PathBuf>,
+    cloud_shot_frames: u32,
+    cloud_shot_wind: f32,
+    cloud_shot_eye: glam::Vec3,
+    cloud_shot_yaw: f32,
+    cloud_shot_pitch: f32,
     /// One-shot walk FOV vs sprint FOV stitch, then quit.
     sprint_shot_path: Option<std::path::PathBuf>,
     sprint_shot_frames: u32,
@@ -2138,6 +2174,12 @@ impl State {
             water_shot_eye: glam::Vec3::ZERO,
             water_shot_yaw: 0.0,
             water_shot_pitch: 0.0,
+            cloud_shot_path: None,
+            cloud_shot_frames: 0,
+            cloud_shot_wind: 0.0,
+            cloud_shot_eye: glam::Vec3::ZERO,
+            cloud_shot_yaw: 0.0,
+            cloud_shot_pitch: 0.0,
             sprint_shot_path: None,
             sprint_shot_frames: 0,
             sprint_shot_phase: SprintShotPhase::Idle,
@@ -8122,6 +8164,153 @@ impl State {
         self.wanted_focus = chunk_of(self.camera.eye);
         self.gui.push_chat("water: sky reflection");
         let _ = self.window.focus_window();
+    }
+
+    /// Open lawn with a tall wall: cloud bands darken sunlit grass; cast umbra stays.
+    pub fn arm_cloud_shadow_shot(&mut self, path: std::path::PathBuf) {
+        self.cloud_shot_path = Some(path);
+        self.cloud_shot_frames = 0;
+        // Fixed wind so a soft cloud edge crosses the lawn in-frame.
+        self.cloud_shot_wind = 1.15;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.40);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.bee = crate::mobs::Bee::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        let mut changes = Vec::new();
+        for z in 4..=16 {
+            for x in 3..=14 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=7 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Tall stone wall so cast umbra sits beside cloud-dimmed open sun.
+        for z in 8..=12 {
+            for y in 1..=5 {
+                changes.push(CellChange {
+                    x: 11,
+                    y,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye_warm = [8.0_f32, 3.2, 10.0];
+        for _ in 0..80 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        // Look across the lawn: sunlit patches vs cloud dim + wall umbra.
+        let eye = glam::Vec3::new(4.8, 2.6 + body::EYE_HEIGHT, 15.0);
+        let target = glam::Vec3::new(9.8, 1.2, 8.8);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cloud_shot_eye = eye;
+        self.cloud_shot_yaw = yaw;
+        self.cloud_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.gui.push_chat("clouds: ground shadow");
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_cloud_shot_camera(&mut self) {
+        if self.cloud_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(0.40);
+        self.dusk_show = 0.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.cloud_shot_eye,
+            self.cloud_shot_yaw,
+            self.cloud_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.cloud_shot_eye;
+        self.posed_yaw = self.cloud_shot_yaw;
+        self.posed_pitch = self.cloud_shot_pitch;
+        self.pose_dirty = true;
+        self.sheep = crate::sheep::Sheep::new();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken = crate::mobs::Chicken::new();
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.bee = crate::mobs::Bee::new();
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.guests.clear();
     }
 
     fn pin_water_shot_camera(&mut self) {
@@ -16385,6 +16574,37 @@ impl State {
         }
     }
 
+    fn poll_cloud_shot(&mut self) {
+        let Some(path) = self.cloud_shot_path.clone() else {
+            return;
+        };
+        self.pin_cloud_shot_camera();
+        self.cloud_shot_frames = self.cloud_shot_frames.saturating_add(1);
+        if self.cloud_shot_frames < 200 || !self.chunk_bake.is_idle() {
+            if self.cloud_shot_frames > 800 {
+                eprintln!("cloud shot timed out");
+                self.cloud_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("cloud shot wrote {}", path.display());
+                self.cloud_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("cloud shot failed: {err}");
+                if self.cloud_shot_frames > 280 {
+                    self.cloud_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_bed_sleep_shot(&mut self) {
         let Some(path) = self.bed_sleep_shot_path.clone() else {
             return;
@@ -19417,6 +19637,7 @@ impl State {
             && self.shadows_shot_path.is_none()
             && self.bounce_shot_path.is_none()
             && self.water_shot_path.is_none()
+            && self.cloud_shot_path.is_none()
         {
             if self.firefly_wait <= 0.0 {
                 self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
@@ -19451,6 +19672,7 @@ impl State {
         if self.shadows_shot_path.is_some()
             || self.bounce_shot_path.is_some()
             || self.water_shot_path.is_some()
+            || self.cloud_shot_path.is_some()
         {
             self.dusk_show = 0.0;
         } else if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0
@@ -19876,6 +20098,7 @@ impl State {
             if self.shadows_shot_path.is_none()
                 && self.bounce_shot_path.is_none()
                 && self.water_shot_path.is_none()
+                && self.cloud_shot_path.is_none()
             {
                 self.sheep.tick_near(steps, feet, &self.world);
                 self.rebuild_sheep();
@@ -20136,6 +20359,7 @@ impl State {
             if self.shadows_shot_path.is_some()
                 || self.bounce_shot_path.is_some()
                 || self.water_shot_path.is_some()
+                || self.cloud_shot_path.is_some()
             {
                 self.fox_buf = None;
                 self.fox_count = 0;
@@ -20159,6 +20383,7 @@ impl State {
             if self.shadows_shot_path.is_none()
                 && self.bounce_shot_path.is_none()
                 && self.water_shot_path.is_none()
+                && self.cloud_shot_path.is_none()
             {
                 if let Some(ram) = self.goat.tick(steps, feet_at, &self.world) {
                     self.goat_ram(ram);
@@ -20468,6 +20693,22 @@ impl State {
         let sky_tint = [sky_rgb[0], sky_rgb[1], sky_rgb[2], water_tex];
         self.queue
             .write_buffer(&self.uniform_buf, 400, bytes_of(&sky_tint));
+        // Daytime cloud shadows: gentle open-sun dim. Umbra floors stay put.
+        let day_w = ((light.brightness - 0.22) / 0.78).clamp(0.0, 1.0);
+        let weather = crate::daylight::fog_mood(time);
+        let (cloud_wind, cloud_dim, cloud_strength) = if self.cloud_shot_path.is_some() {
+            // Proof shot: full day strength + deeper dim so the band reads.
+            (self.cloud_shot_wind, 0.58, day_w.max(0.92))
+        } else {
+            (
+                self.clock.seconds() * 0.11,
+                0.76,
+                day_w * (0.78 + 0.22 * weather),
+            )
+        };
+        let cloud = [cloud_wind, cloud_strength, cloud_dim, 0.0];
+        self.queue
+            .write_buffer(&self.uniform_buf, 416, bytes_of(&cloud));
 
         let surface_texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -21105,6 +21346,7 @@ impl State {
         self.poll_shadows_shot();
         self.poll_bounce_shot();
         self.poll_water_shot();
+        self.poll_cloud_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
@@ -23147,6 +23389,12 @@ mod tests {
         assert!(src.contains("sun_disk"));
         assert!(src.contains("0.16, 0.30, 0.46"));
         assert!(!src.contains("ssr_"));
+        assert!(src.contains("cloud_cover"));
+        assert!(src.contains("cloud_mul"));
+        assert!(src.contains("u.cloud"));
+        assert!(src.contains("shadow_mul * cloud_mul"));
+        // Cloud dims open sun only — never multiplies into the umbra floor path.
+        assert!(src.contains("cover * open_sun"));
         // Bounce fill must not multiply corner AO into sun coverage.
         assert!(!src.contains("sun_shade * input.ao"));
         assert!(!src.contains("occluded * sky * sun_shade"));
