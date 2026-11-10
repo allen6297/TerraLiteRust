@@ -54,6 +54,8 @@ struct Uniforms {
     fog_color: vec4<f32>,
     // xyz world position of probe (0, 0, 0), w spacing in blocks
     trace_box: vec4<f32>,
+    // rgb sky zenith, w = water atlas textured id (slot+1), or 0 when missing
+    sky_tint: vec4<f32>,
 };
 
 @group(0) @binding(5)
@@ -238,7 +240,38 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
     // Mesh bounce stays under albedo (surface color). Soft sky fill is added
     // after so a dark stone interior still reads the bounce.
     let lit = ambient * sun_shade * cave_mul * soften + mesh_bounce + raster_hemi + block;
-    let lit_rgb = lit * albedo + soft_bounce;
+    var lit_rgb = lit * albedo + soft_bounce;
+    // Open water tops: cheap sky/sun reflection (env only, not screen-space).
+    // Match atlas column, or a blue-dominant albedo if the slot is missing.
+    let water_id = u.sky_tint.w;
+    let blue_water = albedo.b > albedo.r + 0.06 && albedo.b > albedo.g * 0.85 && albedo.b > 0.22;
+    let is_water_top = nrm.y > 0.55
+        && ((water_id > 0.5 && abs(input.textured - water_id) < 0.25) || blue_water);
+    if (is_water_top) {
+        let view = normalize(u.fog_eye.xyz - input.world_pos);
+        let ndotv = clamp(dot(nrm, view), 0.0, 1.0);
+        // Strong floor so lakes still read sky when the camera is not grazing.
+        let fresnel = 0.40 + 0.55 * pow(1.0 - ndotv, 2.0);
+        let refl = reflect(-view, nrm);
+        let ry = clamp(refl.y, -0.15, 1.0);
+        // Horizon vs zenith band — the mirror cue without SSR.
+        let sky_w = smoothstep(-0.02, 0.78, ry);
+        let horizon = mix(u.fog_color.xyz, vec3<f32>(0.62, 0.68, 0.74), 0.4);
+        let zenith = u.sky_tint.xyz * vec3<f32>(1.28, 1.36, 1.45);
+        var env = mix(horizon * 0.78, zenith, sky_w);
+        // Soft twin: open probes lift the env toward sky bounce.
+        env = mix(env, env + soft_bounce * 1.7, use_trace * soft_sky);
+        // Wide sun disk so a near-miss still sparkles on open water.
+        let sun_align = max(dot(normalize(refl), sun), 0.0);
+        let sun_disk = pow(sun_align, 14.0) * u.params.y;
+        env = env + vec3<f32>(1.0, 0.95, 0.82) * sun_disk * 4.2;
+        let halfv = normalize(sun + view);
+        let spec = pow(max(dot(nrm, halfv), 0.0), 16.0) * u.params.y;
+        let glint = vec3<f32>(1.0, 0.97, 0.88) * spec * (1.0 - occluded * 0.6) * 5.0;
+        // Deep body so sky/sun contrast reads as reflection, not flat tint.
+        let body = lit_rgb * vec3<f32>(0.16, 0.30, 0.46) + vec3<f32>(0.01, 0.035, 0.06);
+        lit_rgb = mix(body, env, clamp(fresnel, 0.0, 0.94)) + glint;
+    }
     let dist = distance(input.world_pos, u.fog_eye.xyz);
     let fog_end = max(u.fog_color.w, u.fog_eye.w + 1.0);
     let fog = smoothstep(u.fog_eye.w, fog_end, dist);
@@ -907,6 +940,12 @@ pub struct State {
     bounce_shot_eye: glam::Vec3,
     bounce_shot_yaw: f32,
     bounce_shot_pitch: f32,
+    /// One-shot open water sky reflection, then quit.
+    water_shot_path: Option<std::path::PathBuf>,
+    water_shot_frames: u32,
+    water_shot_eye: glam::Vec3,
+    water_shot_yaw: f32,
+    water_shot_pitch: f32,
     /// One-shot walk FOV vs sprint FOV stitch, then quit.
     sprint_shot_path: Option<std::path::PathBuf>,
     sprint_shot_frames: u32,
@@ -2094,6 +2133,11 @@ impl State {
             bounce_shot_eye: glam::Vec3::ZERO,
             bounce_shot_yaw: 0.0,
             bounce_shot_pitch: 0.0,
+            water_shot_path: None,
+            water_shot_frames: 0,
+            water_shot_eye: glam::Vec3::ZERO,
+            water_shot_yaw: 0.0,
+            water_shot_pitch: 0.0,
             sprint_shot_path: None,
             sprint_shot_frames: 0,
             sprint_shot_phase: SprintShotPhase::Idle,
@@ -7975,6 +8019,140 @@ impl State {
         self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
         self.gui.push_chat("PLAYER and CRAFT tabs");
         let _ = self.window.focus_window();
+    }
+
+    /// Open water pool reflecting sky/sun, then quit with a PNG.
+    pub fn arm_water_reflection_shot(&mut self, path: std::path::PathBuf) {
+        self.water_shot_path = Some(path);
+        self.water_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Near noon: sun sits ahead (-Z) so the disk + glint land on the pond.
+        self.clock.set_time_of_day(0.46);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        let mut changes = Vec::new();
+        // Clear a wide pad, dig a shallow pond, ring it with grass shore.
+        for z in 4..=16 {
+            for x in 3..=13 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        for z in 7..=13 {
+            for x in 5..=11 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("water", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye_warm = [8.0_f32, 3.2, 11.0];
+        for _ in 0..96 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        // Low graze across the pond into the noon sky / sun disk.
+        let eye = glam::Vec3::new(8.0, 2.08 + body::EYE_HEIGHT, 15.2);
+        let target = glam::Vec3::new(8.4, 2.55, 5.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.water_shot_eye = eye;
+        self.water_shot_yaw = yaw;
+        self.water_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.gui.push_chat("water: sky reflection");
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_water_shot_camera(&mut self) {
+        if self.water_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(0.46);
+        self.dusk_show = 0.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.water_shot_eye,
+            self.water_shot_yaw,
+            self.water_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.water_shot_eye;
+        self.posed_yaw = self.water_shot_yaw;
+        self.posed_pitch = self.water_shot_pitch;
+        self.pose_dirty = true;
+        self.sheep = crate::sheep::Sheep::new();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.guests.clear();
     }
 
     /// Soft bounce fill proof: open shaded lawn (`interior=false`) or under a roof.
@@ -16176,6 +16354,37 @@ impl State {
         }
     }
 
+    fn poll_water_shot(&mut self) {
+        let Some(path) = self.water_shot_path.clone() else {
+            return;
+        };
+        self.pin_water_shot_camera();
+        self.water_shot_frames = self.water_shot_frames.saturating_add(1);
+        if self.water_shot_frames < 200 || !self.chunk_bake.is_idle() {
+            if self.water_shot_frames > 800 {
+                eprintln!("water shot timed out");
+                self.water_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("water shot wrote {}", path.display());
+                self.water_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("water shot failed: {err}");
+                if self.water_shot_frames > 280 {
+                    self.water_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_bed_sleep_shot(&mut self) {
         let Some(path) = self.bed_sleep_shot_path.clone() else {
             return;
@@ -19207,6 +19416,7 @@ impl State {
             && firefly_mood > 0.25
             && self.shadows_shot_path.is_none()
             && self.bounce_shot_path.is_none()
+            && self.water_shot_path.is_none()
         {
             if self.firefly_wait <= 0.0 {
                 self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
@@ -19238,7 +19448,10 @@ impl State {
                 }
             }
         }
-        if self.shadows_shot_path.is_some() || self.bounce_shot_path.is_some() {
+        if self.shadows_shot_path.is_some()
+            || self.bounce_shot_path.is_some()
+            || self.water_shot_path.is_some()
+        {
             self.dusk_show = 0.0;
         } else if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0
         {
@@ -19660,7 +19873,10 @@ impl State {
             self.hooks.drive_entities(&mut self.world, steps);
             self.flush_script_writes();
             let feet = [self.camera.eye.x, self.camera.eye.z];
-            if self.shadows_shot_path.is_none() && self.bounce_shot_path.is_none() {
+            if self.shadows_shot_path.is_none()
+                && self.bounce_shot_path.is_none()
+                && self.water_shot_path.is_none()
+            {
                 self.sheep.tick_near(steps, feet, &self.world);
                 self.rebuild_sheep();
                 self.pig.tick_near(steps, feet, &self.world);
@@ -19917,7 +20133,10 @@ impl State {
             } else {
                 None
             };
-            if self.shadows_shot_path.is_some() || self.bounce_shot_path.is_some() {
+            if self.shadows_shot_path.is_some()
+                || self.bounce_shot_path.is_some()
+                || self.water_shot_path.is_some()
+            {
                 self.fox_buf = None;
                 self.fox_count = 0;
             } else {
@@ -19937,7 +20156,10 @@ impl State {
                 self.camera.eye.y - body::EYE_HEIGHT,
                 self.camera.eye.z,
             ];
-            if self.shadows_shot_path.is_none() && self.bounce_shot_path.is_none() {
+            if self.shadows_shot_path.is_none()
+                && self.bounce_shot_path.is_none()
+                && self.water_shot_path.is_none()
+            {
                 if let Some(ram) = self.goat.tick(steps, feet_at, &self.world) {
                     self.goat_ram(ram);
                 }
@@ -20240,6 +20462,12 @@ impl State {
             .write_buffer(&self.uniform_buf, 352, bytes_of(&fog_eye));
         self.queue
             .write_buffer(&self.uniform_buf, 368, bytes_of(&fog_color));
+        let water_tex = crate::texture::texture_slot("assets/terralite/textures/water.png")
+            .map(|slot| slot as f32 + 1.0)
+            .unwrap_or(0.0);
+        let sky_tint = [sky_rgb[0], sky_rgb[1], sky_rgb[2], water_tex];
+        self.queue
+            .write_buffer(&self.uniform_buf, 400, bytes_of(&sky_tint));
 
         let surface_texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -20876,6 +21104,7 @@ impl State {
         self.poll_crouch_shot();
         self.poll_shadows_shot();
         self.poll_bounce_shot();
+        self.poll_water_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
@@ -22910,11 +23139,20 @@ mod tests {
         assert!(src.contains("mesh_bounce"));
         assert!(src.contains("vec3<f32>(0.22, 0.26, 0.32)"));
         assert!(src.contains("lit * albedo + soft_bounce"));
+        assert!(src.contains("sky_tint"));
+        assert!(src.contains("is_water_top"));
+        assert!(src.contains("0.40 + 0.55"));
+        assert!(src.contains("reflect(-view, nrm)"));
+        assert!(src.contains("blue_water"));
+        assert!(src.contains("sun_disk"));
+        assert!(src.contains("0.16, 0.30, 0.46"));
+        assert!(!src.contains("ssr_"));
         // Bounce fill must not multiply corner AO into sun coverage.
         assert!(!src.contains("sun_shade * input.ao"));
         assert!(!src.contains("occluded * sky * sun_shade"));
         assert!(!src.to_lowercase().contains("pathtrace"));
         assert!(!src.to_lowercase().contains("path trace"));
+        assert!(!src.to_lowercase().contains("screen-space refl"));
         assert!(src.contains("discard"));
     }
 
