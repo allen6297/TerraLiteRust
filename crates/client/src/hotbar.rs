@@ -723,13 +723,16 @@ impl Hotbar {
 
     /// The ingredient Enter would brew, when the mix fits on the bar.
     ///
-    /// Prefer splash conversion (`healing_potion` + `gravel`). Then finish an
-    /// `awkward_potion` with wart/flower, fuel a water+wart brew with
-    /// `blaze_powder`, or start awkward from water + powder. Missing pieces
+    /// Prefer splash conversion (`healing_potion` + `gravel`). Then awkward +
+    /// blaze powder → strength, awkward + wart/flower → healing, water+wart
+    /// fueled by powder → healing, or water + powder → awkward. Missing pieces
     /// return `None`.
     pub fn brew_target(&self) -> Option<&'static str> {
         if self.can_brew_splash() {
             return Some("gravel");
+        }
+        if self.can_brew_strength() {
+            return Some("blaze_powder");
         }
         if self.can_finish_awkward() {
             return self.wart_or_flower();
@@ -802,6 +805,28 @@ impl Hotbar {
         self.room_for("splash_healing_potion") || frees
     }
 
+    fn can_brew_strength(&self) -> bool {
+        let has_awkward = self
+            .slots
+            .iter()
+            .any(|slot| slot.is_some_and(|item| item.id == "awkward_potion" && item.count > 0));
+        let has_powder = self
+            .slots
+            .iter()
+            .any(|slot| slot.is_some_and(|item| item.id == "blaze_powder" && item.count > 0));
+        if !has_awkward || !has_powder {
+            return false;
+        }
+        let frees = self.slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|item| item.id == "awkward_potion" && item.count == 1)
+        }) || self.slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|item| item.id == "blaze_powder" && item.count == 1)
+        });
+        self.room_for("strength_potion") || frees
+    }
+
     fn can_finish_awkward(&self) -> bool {
         let has_awkward = self
             .slots
@@ -821,13 +846,13 @@ impl Hotbar {
         self.room_for("healing_potion") || frees
     }
 
-    /// Brew healing, awkward, or splash from the stand mix.
+    /// Brew healing, strength, awkward, or splash from the stand mix.
     ///
-    /// Paths: healing + gravel → splash; awkward + wart/flower → healing;
-    /// water + wart/flower + blaze powder (fuel) → healing; water + powder →
-    /// awkward. `"brewed"` spends the mix. `"need water"` / `"need nether wart"`
-    /// / `"need blaze powder"` name the missing piece. `"no room"` means the
-    /// bar cannot hold the result.
+    /// Paths: healing + gravel → splash; awkward + powder → strength; awkward +
+    /// wart/flower → healing; water + wart/flower + blaze powder (fuel) →
+    /// healing; water + powder → awkward. `"brewed"` spends the mix.
+    /// `"need water"` / `"need nether wart"` / `"need blaze powder"` name the
+    /// missing piece. `"no room"` means the bar cannot hold the result.
     pub fn brew_potion(&mut self) -> &'static str {
         if self.can_brew_splash() {
             let Some(heal) = self.slots.iter().position(|slot| {
@@ -849,6 +874,29 @@ impl Hotbar {
             self.consume_at(heal);
             self.consume_at(gravel);
             if !self.collect("splash_healing_potion") {
+                return "no room";
+            }
+            return "brewed";
+        }
+        if self.can_brew_strength() {
+            let Some(awkward) = self.slots.iter().position(|slot| {
+                slot.is_some_and(|item| item.id == "awkward_potion" && item.count > 0)
+            }) else {
+                return "need water";
+            };
+            let Some(powder) = self.slots.iter().position(|slot| {
+                slot.is_some_and(|item| item.id == "blaze_powder" && item.count > 0)
+            }) else {
+                return "need blaze powder";
+            };
+            let frees = self.item(awkward).is_some_and(|item| item.count == 1)
+                || self.item(powder).is_some_and(|item| item.count == 1);
+            if !self.room_for("strength_potion") && !frees {
+                return "no room";
+            }
+            self.consume_at(awkward);
+            self.consume_at(powder);
+            if !self.collect("strength_potion") {
                 return "no room";
             }
             return "brewed";
@@ -2659,6 +2707,18 @@ mod tests {
         assert_eq!(bar.brew_potion(), "brewed");
         assert!(bar.index_of("healing_potion").is_some());
         assert!(bar.index_of("awkward_potion").is_none());
+    }
+
+    #[test]
+    fn a_brewing_stand_turns_awkward_and_powder_into_strength() {
+        let mut bar = Hotbar::new();
+        assert!(bar.collect("awkward_potion"));
+        assert!(bar.collect("blaze_powder"));
+        assert_eq!(bar.brew_target(), Some("blaze_powder"));
+        assert_eq!(bar.brew_potion(), "brewed");
+        assert_eq!(bar.slot(1), Some("strength_potion"));
+        assert!(bar.index_of("awkward_potion").is_none());
+        assert!(bar.index_of("blaze_powder").is_none());
     }
 
     #[test]

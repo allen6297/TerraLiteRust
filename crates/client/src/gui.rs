@@ -2090,8 +2090,9 @@ impl Gui {
         }
         self.brew_at = Some(at);
         self.brew_note =
-            "enter: water+powder / awkward+wart / water+wart+powder, or healing+gravel splash"
+            "enter: water+powder / awkward+powder strength / awkward+wart / water+wart+powder, or healing+gravel splash"
                 .to_string();
+
 
         self.brew_open = true;
         true
@@ -6227,6 +6228,10 @@ pub fn pollen_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "pollen")
 }
 
+pub fn strength_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "strength")
+}
+
 pub fn leash_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "leash")
 }
@@ -7267,8 +7272,11 @@ fn tab_of(id: &str) -> &'static str {
             | "chorus_flower"
             | "chorus_fruit"
             | "healing_potion"
+            | "awkward_potion"
+            | "strength_potion"
             | "splash_healing_potion"
             | "splash_harming_potion"
+
             | "totem_of_undying"
             | "ender_pearl"
             | "eye_of_ender"

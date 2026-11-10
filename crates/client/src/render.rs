@@ -1237,6 +1237,10 @@ pub struct State {
     pollen_show: f32,
     /// Seconds until the next pollen trail drip.
     pollen_drip: f32,
+    /// Seconds left on a strength potion melee buff.
+    strength_left: f32,
+    /// HUD plate while strength is up, `0`..`1`.
+    strength_show: f32,
     /// HUD plate while an axolotl companion is leashed, `0`..`1`.
     leash_show: f32,
     /// True when the current axolotl follow consumed a lead item.
@@ -2550,6 +2554,8 @@ impl State {
             horse_stroke: 0.0,
             pollen_show: 0.0,
             pollen_drip: 0.0,
+            strength_left: 0.0,
+            strength_show: 0.0,
             leash_show: 0.0,
             axolotl_held_lead: false,
             wolf_show: 0.0,
@@ -3278,6 +3284,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -3367,6 +3375,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -3457,6 +3467,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -3549,6 +3561,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -3801,6 +3815,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -3896,6 +3912,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -3985,6 +4003,8 @@ impl State {
         self.cart_show = 0.0;
         self.horse_show = 0.0;
         self.pollen_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.leash_show = 0.0;
         self.wolf_show = 0.0;
         self.dusk_show = 0.0;
@@ -5227,7 +5247,10 @@ impl State {
             } else {
                 self.aimed_guest(eye, forward)
             };
-        let amount = body::mace_hearts(falling, smash);
+        let amount = body::strength_hearts(
+            body::mace_hearts(falling, smash),
+            self.strength_left > 0.0,
+        );
         let mut xp_at: Option<[f32; 3]> = None;
         let dropped_zombie = zombie_aimed && {
             let (min, max) = self.zombie.bounds();
@@ -7375,16 +7398,24 @@ impl State {
             return false;
         };
         let potion = id == "healing_potion";
+        let strength = id == "strength_potion";
         let fed = self.hunger.eat(amount);
         let before = self.hearts;
         if potion {
             self.hearts = body::potion_hearts(self.hearts);
         }
-        if !fed && self.hearts == before {
+        if strength {
+            self.strength_left = body::STRENGTH_SECS;
+            self.strength_show = 1.0;
+        }
+        if !fed && self.hearts == before && !strength {
             return true;
         }
         if potion {
             self.gui.push_chat("healed");
+        }
+        if strength {
+            self.gui.push_chat("strength");
         }
         if id == "chorus_fruit" {
             if let Some(eye) = body::chorus_hop(self.camera.eye, &self.world) {
@@ -17824,6 +17855,71 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Strength potion in hand with the melee buff plate up, then quit with a PNG.
+    pub fn arm_strength_potion_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, bz) = rebuild_world::SHRINE_BREW;
+        let mut by = 4;
+        for y in 0..80 {
+            if self.world.block_at(bx, y, bz).id == "brewing_stand" {
+                by = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(bx, bz);
+        let focus = glam::Vec3::new(bx as f32 + 0.5, by as f32 + 0.95, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            bx as f32 - 2.4,
+            by as f32 + 1.35 + body::EYE_HEIGHT,
+            bz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.note_shot_at = None;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.strength_left = body::STRENGTH_SECS;
+        self.strength_show = 1.0;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("strength");
+        self.found_shrine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("mace");
+        let _ = self.hotbar.collect("strength_potion");
+        let _ = self.hotbar.collect("awkward_potion");
+        let _ = self.hotbar.collect("blaze_powder");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shaft grindstone panel mid-spark after clearing Efficiency, then quit with a PNG.
     pub fn arm_grind_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -25400,6 +25496,8 @@ impl State {
         self.sprint_kick = 0.0;
         self.sprint_run = 0.0;
         self.sprint_show = 0.0;
+        self.strength_left = 0.0;
+        self.strength_show = 0.0;
         self.air_peak = self.camera.eye.y;
         self.boat.dismount();
         self.pig.dismount();
@@ -26087,6 +26185,16 @@ impl State {
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
+        if self.strength_left > 0.0 {
+            self.strength_left = (self.strength_left - dt).max(0.0);
+            self.strength_show = if self.strength_left > 0.8 {
+                1.0
+            } else {
+                (self.strength_left / 0.8).clamp(0.0, 1.0)
+            };
+        } else {
+            self.strength_show = (self.strength_show - dt * 4.0).max(0.0);
+        }
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.swap_kick = (self.swap_kick - dt * 10.0).max(0.0);
         self.break_kick = (self.break_kick - dt * 7.0).max(0.0);
@@ -27740,6 +27848,9 @@ impl State {
         }
         if self.pollen_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::pollen_quads(gui_w, gui_h, self.pollen_show));
+        }
+        if self.strength_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::strength_quads(gui_w, gui_h, self.strength_show));
         }
         if self.leash_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::leash_quads(gui_w, gui_h, self.leash_show));

@@ -829,6 +829,22 @@ pub fn mace_hearts(falling: bool, smash: i32) -> i32 {
     if falling { smash.max(1) } else { 1 }
 }
 
+/// Seconds a strength potion keeps the melee buff up.
+pub const STRENGTH_SECS: f32 = 12.0;
+
+/// Extra hearts while strength is active.
+pub const STRENGTH_BONUS: i32 = 1;
+
+/// Mace hearts with an optional strength potion bonus.
+pub fn strength_hearts(base: i32, active: bool) -> i32 {
+    if active {
+        base + STRENGTH_BONUS
+    } else {
+        base
+    }
+}
+
+
 /// Seconds before the mace can swing again.
 pub const MACE_WAIT: f32 = 0.5;
 
@@ -1600,6 +1616,9 @@ mod tests {
         assert_eq!(mace_hearts(false, 3), 1);
         assert_eq!(mace_hearts(true, 3), 3);
         assert_eq!(mace_hearts(true, 5), 5);
+        assert_eq!(strength_hearts(1, false), 1);
+        assert_eq!(strength_hearts(1, true), 2);
+        assert_eq!(strength_hearts(3, true), 4);
         assert_eq!(mace_ready(0.0), Some(MACE_WAIT));
         assert_eq!(mace_ready(0.2), None);
         assert_eq!(bite_hearts(true, 1, 3), 0);
