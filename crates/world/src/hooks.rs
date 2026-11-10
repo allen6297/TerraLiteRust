@@ -348,8 +348,9 @@ impl Hooks {
         let _ = self.entity_spawn(world, "zombie", 11, 1, 13);
     }
 
-    /// False when a hurt hook cancels. A fall calls this for `"player"`.
-    pub fn entity_hurt(&self, world: &mut Cluster, kind: &str, amount: i32) -> bool {
+    /// Hurt hooks may cancel (`0`) or rewrite the amount. Falls, bites, mace
+    /// hits, and other damage paths ask this with the target kind.
+    pub fn entity_hurt(&self, world: &mut Cluster, kind: &str, amount: i32) -> i32 {
         self.scripts.entity_hurt(world, kind, amount)
     }
 

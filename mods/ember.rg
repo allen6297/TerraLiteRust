@@ -5,6 +5,7 @@
 // Playtest: Items list → ember:glow_brick / ember:ember → place near stairs → dig
 // (harder than dirt) → see the warm light. ember:shade stands at (14,1,12) with
 // zombie.bbmodel + chase/attack. Creative ember:shade_egg right-clicks to spawn more.
+// Mace hits on the shade are halved by events.entity_hurt (Int rewrite).
 
 import ModAPI;
 import Blocks;
@@ -18,11 +19,13 @@ fn on_shade_spawn(kind: String, x: Int, y: Int, z: Int): Bool {
     return true;
 }
 
-fn on_shade_hurt(kind: String, amount: Int): Bool {
-    if (kind == "ember:shade" && amount < 0) {
-        return false;
+/// Cancel with 0 / false, or rewrite the amount (Minecraft LivingHurt-style).
+fn on_shade_hurt(kind: String, amount: Int): Int {
+    if (kind == "ember:shade") {
+        print("ember shade hurt halved");
+        return amount / 2;
     }
-    return true;
+    return amount;
 }
 
 fn on_shade_death(kind: String, x: Int, y: Int, z: Int): Bool {

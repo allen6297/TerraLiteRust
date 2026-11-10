@@ -800,23 +800,42 @@ impl ScriptTable {
         allow
     }
 
-    /// False when a hurt hook cancels.
-    pub(crate) fn entity_hurt(&self, world: &mut Cluster, kind: &str, amount: i32) -> bool {
+    /// Run hurt hooks. Returns the amount to apply after cancel/rewrite.
+    ///
+    /// `events.entity_hurt` is `fn(kind: String, amount: Int): Bool|Int`.
+    /// `false` cancels (returns 0). An `Int` replaces the amount (`0` cancels).
+    /// `true` / void keeps the current amount. Hooks see the rewritten amount
+    /// from earlier hooks. A throw cancels.
+    pub(crate) fn entity_hurt(&self, world: &mut Cluster, kind: &str, amount: i32) -> i32 {
+        if amount <= 0 {
+            return 0;
+        }
         let bar = self.bar();
         let view = Self::view_of(&bar);
-        let mut allow = true;
-        let args = [Arg::Text(kind.to_string()), Arg::Int(amount)];
+        let mut next = amount;
         for hook in &self.entity_hurt {
-            match call(self, hook, world, &args, &view, ScriptWrites::Closed) {
-                Ok(false) => allow = false,
-                Ok(true) => {}
+            let args = [Arg::Text(kind.to_string()), Arg::Int(next)];
+            match invoke(self, hook, world, &args, &view, ScriptWrites::Closed) {
+                Ok(call) if call.returned_false => return 0,
+                Ok(call) => {
+                    if let Some(value) = call.number {
+                        if !value.is_finite() {
+                            continue;
+                        }
+                        let rewritten = value.round() as i32;
+                        if rewritten <= 0 {
+                            return 0;
+                        }
+                        next = rewritten;
+                    }
+                }
                 Err(err) => {
                     eprintln!("rosegold: hook failed: {err}");
-                    allow = false;
+                    return 0;
                 }
             }
         }
-        allow
+        next
     }
 
     /// False when a death hook cancels despawn/loot side effects.
@@ -3140,11 +3159,38 @@ fn main(): Int {
                 .any(|cell| cell.x == 9 && cell.y == 3 && cell.z == 14 && cell.block == rose_block)
         );
         assert_eq!(lines(), vec!["spawned player"]);
-        assert!(hooks.entity_hurt(&mut world, "player", 4));
-        assert!(!hooks.entity_hurt(&mut world, "player", -1));
-        assert!(hooks.entity_hurt(&mut world, "sheep", -1));
+        assert_eq!(hooks.entity_hurt(&mut world, "player", 4), 4);
+        assert_eq!(hooks.entity_hurt(&mut world, "player", -1), 0);
+        assert_eq!(hooks.entity_hurt(&mut world, "sheep", -1), 0);
         hooks.entity_tick(&mut world, "player");
         assert_eq!(lines(), vec!["spawned player"]);
+    }
+
+    #[test]
+    fn entity_hurt_can_cancel_or_rewrite_the_amount() {
+        let source = r#"
+fn half(kind: String, amount: Int): Int {
+    if (kind == "zombie") {
+        return amount / 2;
+    }
+    if (kind == "player") {
+        return 0;
+    }
+    return amount;
+}
+
+fn main(): Int {
+    events.entity_hurt("rewrite-hurt", half);
+    return 0;
+}
+"#;
+        let mut hooks = Hooks::new();
+        load_source(source, &mut hooks).unwrap();
+        let mut world = sample();
+        assert_eq!(hooks.entity_hurt(&mut world, "zombie", 4), 2);
+        assert_eq!(hooks.entity_hurt(&mut world, "player", 3), 0);
+        assert_eq!(hooks.entity_hurt(&mut world, "pig", 5), 5);
+        assert_eq!(hooks.entity_hurt(&mut world, "zombie", 0), 0);
     }
 
     #[test]

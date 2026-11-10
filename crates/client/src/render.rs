@@ -2540,11 +2540,39 @@ impl State {
         let forward = self.camera.forward().to_array();
         let zombie_aimed = self.zombie.aimed(eye, forward);
         let breeze_aimed = !zombie_aimed && self.breeze.aimed(eye, forward);
+        let guest_index = if zombie_aimed || breeze_aimed {
+            None
+        } else {
+            self.aimed_guest(eye, forward)
+        };
         let amount = body::mace_hearts(falling, smash);
-        let dropped_zombie = zombie_aimed && self.zombie.hurt(amount);
-        let dropped_breeze = breeze_aimed && self.breeze.hurt(amount);
-        let aimed = zombie_aimed || breeze_aimed;
-        let dropped = dropped_zombie || dropped_breeze;
+        let dropped_zombie = zombie_aimed && {
+            let (min, max) = self.zombie.bounds();
+            let origin = [
+                (min[0] + max[0]) * 0.5,
+                min[1],
+                (min[2] + max[2]) * 0.5,
+            ];
+            self.hurt_mob("zombie", amount, origin, |s, n| s.zombie.hurt(n))
+        };
+        let dropped_breeze = breeze_aimed && {
+            let origin = self.breeze.origin();
+            self.hurt_mob("breeze", amount, origin, |s, n| s.breeze.hurt(n))
+        };
+        let dropped_guest = if let Some(index) = guest_index {
+            let id = self.guests[index].id().to_string();
+            let origin = self.guests[index].origin();
+            let dropped = self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
+            if dropped {
+                self.guests.remove(index);
+            }
+            self.rebuild_guests();
+            dropped
+        } else {
+            false
+        };
+        let aimed = zombie_aimed || breeze_aimed || guest_index.is_some();
+        let dropped = dropped_zombie || dropped_breeze || dropped_guest;
         let word = if !aimed {
             "swing"
         } else if dropped {
@@ -3678,13 +3706,36 @@ impl State {
     }
 
     fn apply_damage(&mut self, amount: i32) {
+        let amount = self.hooks.entity_hurt(&mut self.world, "player", amount);
         if amount <= 0 {
             return;
         }
-        if !self.hooks.entity_hurt(&mut self.world, "player", amount) {
-            return;
-        }
         self.lose_hearts(amount);
+    }
+
+    /// Ask hurt hooks, then apply damage. `origin` is used for `entity_death` when it drops.
+    fn hurt_mob(
+        &mut self,
+        kind: &str,
+        amount: i32,
+        origin: [f32; 3],
+        apply: impl FnOnce(&mut Self, i32) -> bool,
+    ) -> bool {
+        let amount = self.hooks.entity_hurt(&mut self.world, kind, amount);
+        if amount <= 0 {
+            return false;
+        }
+        let dropped = apply(self, amount);
+        if dropped {
+            let _ = self.hooks.entity_death(
+                &mut self.world,
+                kind,
+                origin[0].floor() as i32,
+                origin[1].floor() as i32,
+                origin[2].floor() as i32,
+            );
+        }
+        dropped
     }
 
     /// Spend hearts. At zero the death screen waits instead of respawning now.
@@ -4209,6 +4260,9 @@ impl State {
             );
         }
         for guest in &self.guests {
+            if !guest.alive() {
+                continue;
+            }
             let [x, y, z] = guest.origin();
             note(
                 &mut best,
@@ -4217,7 +4271,7 @@ impl State {
                     eye,
                     forward,
                     [x - 0.28, y, z - 0.28],
-                    [x + 0.28, y + 1.0, z + 0.28],
+                    [x + 0.28, y + 1.95, z + 0.28],
                 ),
             );
         }
@@ -4228,6 +4282,25 @@ impl State {
     }
 
     /// The mob the look ray hits, in the order a right click would use one.
+    /// Closest living script Guest under the crosshair, if any.
+    fn aimed_guest(&self, eye: [f32; 3], forward: [f32; 3]) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, guest) in self.guests.iter().enumerate() {
+            if !guest.alive() || !guest.aimed(eye, forward) {
+                continue;
+            }
+            let [x, y, z] = guest.origin();
+            let dx = x - eye[0];
+            let dy = y + 1.0 - eye[1];
+            let dz = z - eye[2];
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            if best.map_or(true, |(_, d)| dist < d) {
+                best = Some((index, dist));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
     fn aimed_kind(&self) -> Option<&'static str> {
         let eye = self.camera.eye.to_array();
         let forward = self.camera.forward().to_array();
@@ -7309,10 +7382,8 @@ impl State {
                 self.dig.is_held(),
             );
         }
-        if self.hunger.tick(dt, moving, self.dig.is_held()) == crate::body::HungerTick::Hurt
-            && self.hooks.entity_hurt(&mut self.world, "player", 1)
-        {
-            self.lose_hearts(1);
+        if self.hunger.tick(dt, moving, self.dig.is_held()) == crate::body::HungerTick::Hurt {
+            self.apply_damage(1);
         }
         let wet = body::in_water(self.camera.eye, &self.world);
         let aboard = self.boat.aboard() || self.pig.ridden();
@@ -7439,7 +7510,14 @@ impl State {
             self.rebuild_golem();
             if self.wolf.tick(steps, feet, self.zombie.feet(), &self.world) {
                 self.play_world(crate::audio::Sound::Step, self.wolf.origin());
-                let dropped = self.zombie.hurt(1);
+                let (min, max) = self.zombie.bounds();
+                let origin = [
+                    (min[0] + max[0]) * 0.5,
+                    min[1],
+                    (min[2] + max[2]) * 0.5,
+                ];
+                let dropped =
+                    self.hurt_mob("zombie", 1, origin, |s, n| s.zombie.hurt(n));
                 self.gui.push_chat(if dropped { "down" } else { "bite" });
                 if dropped && !self.wave_breeze {
                     if let Some(at) = self.trial_at {

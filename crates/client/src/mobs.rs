@@ -3286,12 +3286,15 @@ fn pig_ground(world: &Cluster, x: f32, z: f32, feet_y: f32) -> bool {
     world.block_at(ix, iy + 1, iz).is_air()
 }
 
+const GUEST_HEARTS: i32 = 4;
+
 /// A mob a script registered. Default pink boxes; optional Blockbench model and hostile AI.
 pub struct Guest {
     id: String,
     origin: [f32; 3],
     model: Option<String>,
     hostile: bool,
+    hearts: i32,
     yaw: f32,
     pose: f32,
     swing: u32,
@@ -3306,6 +3309,7 @@ impl Guest {
             origin,
             model,
             hostile,
+            hearts: GUEST_HEARTS,
             yaw: 0.0,
             pose: 0.0,
             swing: 0,
@@ -3417,8 +3421,51 @@ impl Guest {
         self.hostile
     }
 
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    /// True when the look ray passes close to the body.
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 1.0, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=6.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 0.81
+    }
+
+    /// Spend hearts. True when this hit drops the guest.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        true
+    }
+
     /// Chase the player when hostile. True when a bite is due.
     pub fn tick_near(&mut self, count: u32, player: [f32; 2], clear: bool, world: &Cluster) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
         if !self.hostile {
             self.pose += 0.05 * count as f32;
             self.moving = false;
@@ -3470,6 +3517,9 @@ impl Guest {
     }
 
     pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
         if let Some(path) = &self.model {
             if let Some(figure) = guest_figure(path) {
                 return crate::blockbench::mesh(

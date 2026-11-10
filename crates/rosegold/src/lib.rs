@@ -33,7 +33,11 @@
 //! `events.entity_spawn` is `fn(kind: String, x: Int, y: Int, z: Int): Bool`
 //! and runs once for `"player"`, then for the demo `"pig"` and `"zombie"`.
 //! False cancels that spawn (demo/player join still continue other kinds).
-//! `events.entity_hurt` is `fn(kind: String, amount: Int): Bool`.
+//! `events.entity_hurt` is `fn(kind: String, amount: Int): Bool|Int`.
+//! `false` cancels the hit. An `Int` rewrites the damage (`0` cancels).
+//! `true` / void keeps the amount. The client asks this for player falls,
+//! cactus/magma, hunger, crystal blasts, mob bites, and mace/wolf hits on
+//! mobs (including script Guests).
 //! `events.entity_death` is `fn(kind: String, x: Int, y: Int, z: Int): Bool`.
 //! `events.entity_tick` is `fn(kind: String)`. The client and the authority tick
 //! `"player"`, `"sheep"`, `"pig"`, and `"zombie"` every 50 ms. `events.tick` is
