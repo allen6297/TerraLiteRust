@@ -47,6 +47,8 @@ struct Mote {
     hover: bool,
     /// Forest leaf: tumbles down with a soft sway.
     tumble: bool,
+    /// Cold breath frost puff: drifts forward from the mouth, then fades.
+    frost: bool,
     half: f32,
 }
 
@@ -85,8 +87,7 @@ impl Drops {
                 life: 0.35,
                 rise: false,
                 hover: false,
-                tumble: false,
-                half: 0.04,
+                tumble: false,                frost: false,                half: 0.04,
             });
         }
     }
@@ -110,8 +111,7 @@ impl Drops {
                 life: 0.7,
                 rise: false,
                 hover: false,
-                tumble: false,
-                half: 0.04,
+                tumble: false,                frost: false,                half: 0.04,
             });
         }
     }
@@ -120,8 +120,84 @@ impl Drops {
     pub fn firefly_count(&self) -> usize {
         self.motes
             .iter()
-            .filter(|mote| mote.hover && !mote.rise && !mote.tumble)
+            .filter(|mote| mote.hover && !mote.rise && !mote.tumble && !mote.frost)
             .count()
+    }
+
+    /// How many cold-breath frost puffs are still in the air.
+    pub fn frost_breath_count(&self) -> usize {
+        self.motes.iter().filter(|mote| mote.frost).count()
+    }
+
+    /// A short pale puff from the player's mouth in the cold. `forward` is the
+    /// look direction so the cloud drifts into view. Capped so the air stays quiet.
+    pub fn frost_breath(&mut self, origin: [f32; 3], forward: [f32; 3]) {
+        const MAX_FROST: usize = 24;
+        if self.frost_breath_count() >= MAX_FROST {
+            return;
+        }
+        let fx = forward[0];
+        let fy = forward[1];
+        let fz = forward[2];
+        // Pale cyan-white; block channel keeps them lit at night.
+        const PUFFS: [([f32; 3], [f32; 3], [f32; 3], f32); 3] = [
+            (
+                [0.18, 0.22, 0.06],
+                [0.95, 0.98, 1.0],
+                [0.78, 0.86, 0.95],
+                0.95,
+            ),
+            (
+                [0.12, 0.16, -0.05],
+                [0.90, 0.95, 1.0],
+                [0.72, 0.80, 0.92],
+                0.82,
+            ),
+            (
+                [0.22, 0.28, 0.04],
+                [1.0, 1.0, 1.0],
+                [0.82, 0.90, 1.0],
+                1.05,
+            ),
+        ];
+        let seed = ((origin[0] * 4.1 + origin[2] * 2.3).abs() as usize) % PUFFS.len();
+        let n = 3;
+        let mut count = self.frost_breath_count();
+        for i in 0..n {
+            if count >= MAX_FROST {
+                break;
+            }
+            let (jitter, color, block, life) = PUFFS[(seed + i) % PUFFS.len()];
+            let wobble = (i as f32) * 0.04;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.04,
+                    origin[1] + (i as f32) * 0.02,
+                    origin[2] - wobble * 0.4,
+                ],
+                velocity: [
+                    fx * 0.48 + jitter[0] * 0.35,
+                    fy * 0.28 + jitter[1],
+                    fz * 0.48 + jitter[2] * 0.35,
+                ],
+                color,
+                block,
+                life,
+                rise: false,
+                hover: false,
+                tumble: false,
+                frost: true,
+                half: 0.06,
+            });
+            count += 1;
+        }
+    }
+
+    /// A stronger exhale after a sprint stop — a few more motes, same cap.
+    pub fn frost_breath_burst(&mut self, origin: [f32; 3], forward: [f32; 3]) {
+        for _ in 0..2 {
+            self.frost_breath(origin, forward);
+        }
     }
 
     /// How many rain splash / ripple motes are still alive.
@@ -147,8 +223,7 @@ impl Drops {
             life: 0.55,
             rise: false,
             hover: false,
-            tumble: false,
-            half: 0.07,
+            tumble: false,            frost: false,            half: 0.07,
         });
         self.motes.push(Mote {
             center: [origin[0] + 0.06, origin[1] + 0.16, origin[2] - 0.05],
@@ -158,8 +233,7 @@ impl Drops {
             life: 0.45,
             rise: false,
             hover: false,
-            tumble: false,
-            half: 0.06,
+            tumble: false,            frost: false,            half: 0.06,
         });
         // Flat ripples: both rise+hover marks rain splash (not smoke, not firefly).
         // Keep centers above the top face so expanding cubes do not Z-fight grass.
@@ -188,8 +262,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: true,
-                tumble: false,
-                half: 0.08,
+                tumble: false,                frost: false,                half: 0.08,
             });
         }
     }
@@ -204,8 +277,7 @@ impl Drops {
             life: 10.0,
             rise: false,
             hover: true,
-            tumble: false,
-            half: 0.11,
+            tumble: false,            frost: false,            half: 0.11,
         });
     }
 
@@ -252,6 +324,7 @@ impl Drops {
             rise: false,
             hover: true,
             tumble: false,
+            frost: false,
             // Tiny warm points — blink grows half in tick_motes.
             half: 0.035,
         });
@@ -262,7 +335,7 @@ impl Drops {
         let mut any = false;
         let fade = (dt * 3.2).max(0.0);
         for mote in &mut self.motes {
-            if mote.hover && !mote.rise && !mote.tumble {
+            if mote.hover && !mote.rise && !mote.tumble && !mote.frost {
                 mote.life -= fade;
                 any = true;
             }
@@ -306,8 +379,7 @@ impl Drops {
             life,
             rise: false,
             hover: false,
-            tumble: true,
-            half: 0.055,
+            tumble: true,            frost: false,            half: 0.055,
         });
     }
 
@@ -321,8 +393,7 @@ impl Drops {
             life: 0.7,
             rise: false,
             hover: true,
-            tumble: false,
-            half: 0.08,
+            tumble: false,            frost: false,            half: 0.08,
         });
         self.motes.push(Mote {
             center: [origin[0], origin[1] + 0.06, origin[2]],
@@ -332,8 +403,7 @@ impl Drops {
             life: 0.65,
             rise: false,
             hover: true,
-            tumble: false,
-            half: 0.05,
+            tumble: false,            frost: false,            half: 0.05,
         });
     }
 
@@ -369,8 +439,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
-                tumble: false,
-                half: 0.035,
+                tumble: false,                frost: false,                half: 0.035,
             });
         }
     }
@@ -402,8 +471,7 @@ impl Drops {
                 life: 0.95,
                 rise: false,
                 hover: false,
-                tumble: true,
-                half: 0.06,
+                tumble: true,                frost: false,                half: 0.06,
             });
         }
     }
@@ -430,8 +498,7 @@ impl Drops {
                 life: 0.7,
                 rise: false,
                 hover: false,
-                tumble: true,
-                half: 0.05,
+                tumble: true,                frost: false,                half: 0.05,
             });
         }
     }
@@ -463,8 +530,7 @@ impl Drops {
                 life: 0.85,
                 rise: false,
                 hover: false,
-                tumble: true,
-                half: 0.055,
+                tumble: true,                frost: false,                half: 0.055,
             });
         }
     }
@@ -493,8 +559,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
-                tumble: false,
-                half: 0.06,
+                tumble: false,                frost: false,                half: 0.06,
             });
         }
     }
@@ -524,8 +589,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
-                tumble: false,
-                half: 0.07,
+                tumble: false,                frost: false,                half: 0.07,
             });
         }
     }
@@ -552,8 +616,7 @@ impl Drops {
                 life: 1.1,
                 rise: true,
                 hover: false,
-                tumble: false,
-                half: 0.08,
+                tumble: false,                frost: false,                half: 0.08,
             });
         }
     }
@@ -617,8 +680,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
-                tumble: false,
-                half: 0.05,
+                tumble: false,                frost: false,                half: 0.05,
             });
         }
     }
@@ -655,8 +717,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
-                tumble: false,
-                half: 0.055,
+                tumble: false,                frost: false,                half: 0.055,
             });
         }
     }
@@ -696,8 +757,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: false,
-                tumble: false,
-                half: 0.04,
+                tumble: false,                frost: false,                half: 0.04,
             });
             n += 1;
         }
@@ -759,8 +819,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
-                tumble: false,
-                half: 0.12,
+                tumble: false,                frost: false,                half: 0.12,
             });
             smoke_n += 1;
         }
@@ -777,7 +836,20 @@ impl Drops {
             mote.center[0] += mote.velocity[0] * step;
             mote.center[1] += mote.velocity[1] * step;
             mote.center[2] += mote.velocity[2] * step;
-            if mote.hover && mote.rise {
+            if mote.frost {
+                // Soft forward drift + slight lift; puff expands and fades pale.
+                mote.velocity[1] += 0.12 * step;
+                let damp = (1.0 - 1.35 * step).max(0.0);
+                mote.velocity[0] *= damp;
+                mote.velocity[2] *= damp;
+                mote.half = (mote.half + 0.07 * step).min(0.14);
+                let fade = (mote.life * 1.35).clamp(0.25, 1.0);
+                mote.color = [
+                    (mote.block[0] * fade).min(1.0),
+                    (mote.block[1] * fade).min(1.0),
+                    (mote.block[2] * fade.min(1.05)).min(1.0),
+                ];
+            } else if mote.hover && mote.rise {
                 // Rain ripple: expand on the surface, stay flat, fade cool.
                 mote.velocity[1] = 0.0;
                 let damp = (1.0 - 1.6 * step).max(0.0);
@@ -1623,6 +1695,28 @@ mod tests {
         assert!(drops.rain_splash_count() > 0);
         assert!(drops.tick_motes(1.5));
         assert_eq!(drops.rain_splash_count(), 0);
+    }
+
+    #[test]
+    fn frost_breath_drifts_forward_and_stays_capped() {
+        let mut drops = Drops::new();
+        drops.frost_breath([8.0, 2.5, 8.0], [0.0, 0.0, -1.0]);
+        assert!(drops.frost_breath_count() >= 2);
+        assert!(drops.motes.iter().all(|mote| mote.frost));
+        let before_z = drops.motes[0].center[2];
+        let before_half = drops.motes[0].half;
+        assert!(drops.tick_motes(0.15));
+        assert!(
+            drops.motes[0].center[2] < before_z,
+            "puff drifts along look forward"
+        );
+        assert!(drops.motes[0].half > before_half);
+        for _ in 0..40 {
+            drops.frost_breath_burst([8.0, 2.5, 8.0], [0.0, 0.0, -1.0]);
+        }
+        assert!(drops.frost_breath_count() <= 24);
+        assert!(drops.tick_motes(2.0));
+        assert_eq!(drops.frost_breath_count(), 0);
     }
 
     #[test]

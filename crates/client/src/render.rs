@@ -1475,6 +1475,10 @@ pub struct State {
     rustle_wait: f32,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
+    /// Seconds until the next cold-breath frost puff.
+    breath_wait: f32,
+    /// Once: exhaled frost motes in the cold.
+    found_frost_breath: bool,
     /// Seconds until the next canopy leaf can tumble.
     leaf_wait: f32,
     /// Seconds until the next rain splash mote near the player.
@@ -2616,6 +2620,8 @@ impl State {
             found_rustle: false,
             rustle_wait: 0.0,
             firefly_wait: 0.0,
+            breath_wait: 0.0,
+            found_frost_breath: false,
             leaf_wait: 0.0,
             splash_wait: 0.0,
             found_splashes: false,
@@ -13883,6 +13889,173 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Winter snow pad with cold-breath frost motes from the mouth, then quit.
+    pub fn arm_cold_breath_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.pig = crate::mobs::Pig::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.cat = crate::mobs::Cat::new();
+        self.wolf = crate::mobs::Wolf::new();
+        self.bee = crate::mobs::Bee::new();
+        self.axolotl = crate::mobs::Axolotl::new();
+        self.parrot = crate::mobs::Parrot::new();
+        self.frog = crate::mobs::Frog::new();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Winter night so cold_mood is high and pale puffs read against dark.
+        self.clock = crate::daylight::Clock::at(
+            crate::daylight::DAY_SECONDS * 3.0 + crate::daylight::DAY_SECONDS * 0.92,
+        );
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.wind_mix = 0.2;
+        self.dusk_show = 0.0;
+        self.breath_wait = 0.0;
+        self.found_frost_breath = true;
+        self.found_fireflies = false;
+        self.found_embers = false;
+        self.found_sway = false;
+        self.found_rustle = false;
+        self.found_falling_leaves = false;
+        self.found_flight = false;
+
+        let mut changes = Vec::new();
+        // Open snow field with ice rim — cold + open sky for the shot.
+        for z in 5..=16 {
+            for x in 3..=13 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("snow", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        for z in 7..=13 {
+            for x in 5..=11 {
+                if x == 5 || x == 11 || z == 7 || z == 13 {
+                    changes.push(CellChange {
+                        x,
+                        y: 1,
+                        z,
+                        block: Block::new("ice", 0),
+                    });
+                }
+            }
+        }
+        // A couple posts so drifting pale motes have edges behind them.
+        for &(x, z) in &[(6, 9), (10, 10), (8, 12)] {
+            for y in 2..=4 {
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::new("cobblestone", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye = glam::Vec3::new(8.0, 2.05 + body::EYE_HEIGHT, 14.6);
+        let focus = glam::Vec3::new(8.0, 2.35, 9.5);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        let forward = self.camera.forward();
+        let mouth = breath_mouth(eye, forward);
+
+        self.drops = crate::drops::Drops::new();
+        // Seed a readable cluster of frost puffs mid-exhale for the PNG.
+        for step in 0..10 {
+            let along = forward * (0.08 + step as f32 * 0.09);
+            let origin = [
+                mouth[0] + along.x + ((step % 3) as f32) * 0.04 - 0.04,
+                mouth[1] + along.y + step as f32 * 0.025,
+                mouth[2] + along.z + ((step % 2) as f32) * 0.03 - 0.015,
+            ];
+            self.drops.frost_breath(origin, forward.to_array());
+        }
+        self.drops.frost_breath_burst(mouth, forward.to_array());
+        self.drops.frost_breath_burst(
+            [
+                mouth[0] + forward.x * 0.35,
+                mouth[1] + 0.05,
+                mouth[2] + forward.z * 0.35,
+            ],
+            forward.to_array(),
+        );
+        let _ = self.drops.tick_motes(0.18);
+        self.rebuild_drops();
+
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.cat_buf = None;
+        self.cat_count = 0;
+        self.wolf_buf = None;
+        self.wolf_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.axolotl_buf = None;
+        self.axolotl_count = 0;
+        self.parrot_buf = None;
+        self.parrot_count = 0;
+        self.frog_buf = None;
+        self.frog_count = 0;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("frost");
+        self.note_shot_at = None;
+
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Autumn canopy with tumbling leaf motes, then quit with a PNG.
     pub fn arm_falling_leaves_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17796,6 +17969,15 @@ impl State {
                     );
                 }
                 let _ = self.drops.tick_motes(0.04);
+            } else if self.found_frost_breath {
+                // Keep pale breath puffs drifting from the mouth for the PNG.
+                let forward = self.camera.forward();
+                let mouth = breath_mouth(self.cook_shot_eye, forward);
+                self.drops.frost_breath(mouth, forward.to_array());
+                if self.cook_shot_frames % 15 == 0 {
+                    self.drops.frost_breath_burst(mouth, forward.to_array());
+                }
+                let _ = self.drops.tick_motes(0.05);
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
                 if self.found_embers {
@@ -23737,6 +23919,7 @@ impl State {
         self.sway_wait = (self.sway_wait - dt).max(0.0);
         self.rustle_wait = (self.rustle_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
+        self.breath_wait = (self.breath_wait - dt).max(0.0);
         self.leaf_wait = (self.leaf_wait - dt).max(0.0);
         self.splash_wait = (self.splash_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
@@ -23943,6 +24126,39 @@ impl State {
                 if !self.found_fireflies && self.drops.firefly_count() > 0 {
                     self.found_fireflies = true;
                     self.gui.push_chat("fireflies");
+                }
+            }
+        }
+        // Cold breath frost motes — idle exhales in winter / hills / snow.
+        let cold = cold_mood(
+            &self.world,
+            eye,
+            self.clock.season(),
+            night,
+            sky_open,
+            wet,
+        );
+        if self.playing
+            && !self.menu.is_open()
+            && !self.dead
+            && cold > 0.28
+            && self.shadows_shot_path.is_none()
+            && self.bounce_shot_path.is_none()
+            && self.water_shot_path.is_none()
+            && self.cloud_shot_path.is_none()
+            && self.splash_shot_path.is_none()
+            && self.grass_shot_path.is_none()
+        {
+            if self.breath_wait <= 0.0 {
+                // Idle cadence slows when less cold; sprint burst is separate.
+                self.breath_wait = 1.35 + (1.0 - cold) * 1.8;
+                let forward = self.camera.forward();
+                let mouth = breath_mouth(self.camera.eye, forward);
+                self.drops.frost_breath(mouth, forward.to_array());
+                self.rebuild_drops();
+                if !self.found_frost_breath && self.drops.frost_breath_count() > 0 {
+                    self.found_frost_breath = true;
+                    self.gui.push_chat("frost");
                 }
             }
         }
@@ -24394,6 +24610,33 @@ impl State {
                     self.audio.play(crate::audio::Sound::Breath);
                     if self.sprint_run > 2.5 {
                         self.gui.push_chat("winded");
+                    }
+                    // Cold air: a thicker frost puff when the sprint stops.
+                    let night = crate::daylight::night_fog(self.clock.time_of_day());
+                    let sky_open = open_sky(&self.world, self.camera.eye.to_array());
+                    let wet = if sky_open {
+                        crate::daylight::rain_mood(self.clock.time_of_day())
+                    } else {
+                        0.0
+                    };
+                    if cold_mood(
+                        &self.world,
+                        self.camera.eye.to_array(),
+                        self.clock.season(),
+                        night,
+                        sky_open,
+                        wet,
+                    ) > 0.22
+                    {
+                        let forward = self.camera.forward();
+                        let mouth = breath_mouth(self.camera.eye, forward);
+                        self.drops
+                            .frost_breath_burst(mouth, forward.to_array());
+                        self.rebuild_drops();
+                        if !self.found_frost_breath {
+                            self.found_frost_breath = true;
+                            self.gui.push_chat("frost");
+                        }
                     }
                 }
                 self.sprint_asked = false;
@@ -26838,6 +27081,70 @@ fn nearest_wheat(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
 
 /// Soft proximity to the nearest campfire. Mix is `0` outside ~12 blocks,
 /// rising to `1` when standing over the flame. Returns the fire's center too.
+/// Mouth offset just below the eye along look — first-person breath origin.
+fn breath_mouth(eye: glam::Vec3, forward: glam::Vec3) -> [f32; 3] {
+    (eye + forward * 0.22 + glam::Vec3::new(0.0, -0.12, 0.0)).to_array()
+}
+
+/// Soft cold air mood: winter, hills, or nearby snow/ice, stronger at night
+/// under open sky. Rain dampens it. No temperature API — synthetic presence.
+fn cold_mood(
+    world: &Cluster,
+    eye: [f32; 3],
+    season: crate::daylight::Season,
+    night: f32,
+    sky_open: bool,
+    wet: f32,
+) -> f32 {
+    let biome = rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32);
+    let snow = near_snow_or_ice(world, eye);
+    let mut base = 0.0_f32;
+    if matches!(season, crate::daylight::Season::Winter) {
+        base = base.max(0.85);
+    }
+    if biome == rebuild_world::Biome::Hills {
+        base = base.max(0.55);
+    }
+    if snow > 0.0 {
+        base = base.max(0.55 + 0.45 * snow);
+    }
+    if base <= 0.0 {
+        return 0.0;
+    }
+    let night_w = night.max(0.35);
+    let cover = if sky_open { 1.0 } else { 0.22 };
+    (base * night_w * cover * (1.0 - wet * 0.45)).clamp(0.0, 1.0)
+}
+
+/// Proximity to snow or ice near the feet/eye. `0` outside ~8 blocks, `1` close.
+fn near_snow_or_ice(world: &Cluster, eye: [f32; 3]) -> f32 {
+    const REACH: i32 = 8;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best = f32::INFINITY;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 3)..=(cy + 2) {
+                let id = world.block_at(x, y, z).id;
+                if id != "snow" && id != "ice" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.25, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                best = best.min((dx * dx + dy * dy + dz * dz).sqrt());
+            }
+        }
+    }
+    if !best.is_finite() || best >= 9.0 {
+        return 0.0;
+    }
+    let t = ((9.0 - best) / 9.0).clamp(0.0, 1.0);
+    t * t
+}
+
 fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
     const REACH: i32 = 10;
     let cx = eye[0].floor() as i32;
