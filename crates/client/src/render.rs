@@ -3148,7 +3148,7 @@ impl State {
         let block = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        if !Pack::builtin().is_block_entity(block.id) {
+        if !Pack::builtin().is_container(block.id) {
             return;
         }
         let path = crate::net::world_file(&self.loaded_world);
@@ -4170,6 +4170,7 @@ impl State {
         }
         if cancel {
             self.flush_script_writes();
+            self.flush_script_screens();
             return true;
         }
         if let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) {
@@ -4201,7 +4202,24 @@ impl State {
         } else {
             let _ = self.hooks.drain_writes();
         }
+        self.flush_script_screens();
         cancel
+    }
+
+    /// Open any GUIAPI screen a use hook asked for with `gui.open`.
+    fn flush_script_screens(&mut self) {
+        let names = self.hooks.drain_screen_opens();
+        if names.is_empty() {
+            return;
+        }
+        self.gui
+            .sync_built(&rebuild_world::Pack::builtin().gui_screens());
+        for name in names {
+            if self.gui.open_built(&name) {
+                self.clear_motion();
+                self.set_capture(false);
+            }
+        }
     }
 
     /// The name under the cross: the closest entity, fluid, or block.

@@ -347,7 +347,7 @@ fn local_pump(
             ClientRequest::Chat { .. } => continue,
             ClientRequest::Chest { x, y, z, slots } => {
                 let block = world.block_at(x, y, z);
-                if rebuild_world::Pack::builtin().is_block_entity(block.id) {
+                if rebuild_world::Pack::builtin().is_container(block.id) {
                     if let Ok(carried) = carried_from_wire(&slots) {
                         if let Err(err) = store_chest_slots(&save, x, y, z, block.id, &carried) {
                             eprintln!("could not save chest: {err}");
@@ -471,12 +471,18 @@ fn store_pose(path: &Path, x: f32, y: f32, z: f32, yaw: f32, pitch: f32) {
 }
 
 fn sync_container(path: &Path, x: i32, y: i32, z: i32, block: rebuild_world::Block) {
-    if rebuild_world::Pack::builtin().is_block_entity(block.id) {
+    let pack = rebuild_world::Pack::builtin();
+    if pack.is_container(block.id) {
         if let Err(err) = ensure_chest(path, x, y, z, block.id) {
             eprintln!("could not save chest: {err}");
         }
-    } else if let Err(err) = remove_chest(path, x, y, z) {
-        eprintln!("could not save chest: {err}");
+    } else {
+        if !pack.is_script_block_entity(block.id) {
+            pack.clear_tile_at(x, y, z);
+        }
+        if let Err(err) = remove_chest(path, x, y, z) {
+            eprintln!("could not save chest: {err}");
+        }
     }
 }
 

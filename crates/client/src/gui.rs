@@ -2728,6 +2728,17 @@ impl Gui {
         self.built_at.is_some()
     }
 
+    /// Open a GUIAPI screen by name. False when that screen was never registered.
+    pub fn open_built(&mut self, name: &str) -> bool {
+        let Some(index) = self.built.iter().position(|screen| screen.name == name) else {
+            return false;
+        };
+        self.built_at = Some(index);
+        self.selected = self.built.get(index).map(first_built_row).unwrap_or(0);
+        self.pressed = None;
+        true
+    }
+
     /// The row Enter or a click just chose.
     pub fn take_press(&mut self) -> Option<String> {
         self.pressed.take()

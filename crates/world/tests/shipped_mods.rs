@@ -130,6 +130,10 @@ fn shipped_mods_still_load_with_the_guide() {
     assert!(pack.contains_block("guide:marker"));
     assert!(pack.contains_block("ember:glow_brick"));
     assert!(pack.contains_item("ember:ember"));
+    assert!(pack.is_script_block_entity("ember:glow_brick"));
+    assert!(pack.is_block_entity("ember:glow_brick"));
+    assert!(!pack.is_container("ember:glow_brick"));
+    assert!(pack.has_gui_screen("ember_glow"));
     assert_eq!(
         pack.hardness_of(rebuild_world::Block::new("ember:glow_brick", 0)),
         Some(2.0)

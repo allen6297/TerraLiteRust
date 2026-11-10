@@ -202,6 +202,8 @@ pub struct ScriptLoad {
     pub api: Vec<(String, String)>,
     /// `(registry kind, id)` from `TLRegistry.register` when it is not a block or item.
     pub entries: Vec<(String, String)>,
+    /// Block ids from `block_entity.bind` during `main`.
+    pub block_entity_binds: Vec<String>,
     /// `(id, x, y, z)` still standing after `entity.spawn` and `entity.despawn`.
     pub spawns: Vec<(String, i32, i32, i32)>,
     /// Screens from `GUIAPI.createScreen`.
@@ -321,6 +323,52 @@ pub enum Query {
         y: i32,
         z: i32,
     },
+    /// `block_entity.get(x, y, z, key)` — tile string field.
+    TileGet {
+        x: i32,
+        y: i32,
+        z: i32,
+        key: String,
+    },
+    /// `block_entity.set(x, y, z, key, value)`.
+    TileSet {
+        x: i32,
+        y: i32,
+        z: i32,
+        key: String,
+        value: String,
+    },
+    /// `block_entity.get_int(x, y, z, key)`.
+    TileGetInt {
+        x: i32,
+        y: i32,
+        z: i32,
+        key: String,
+    },
+    /// `block_entity.set_int(x, y, z, key, n)`.
+    TileSetInt {
+        x: i32,
+        y: i32,
+        z: i32,
+        key: String,
+        value: i32,
+    },
+    /// `block_entity.clear(x, y, z)`.
+    TileClear {
+        x: i32,
+        y: i32,
+        z: i32,
+    },
+    /// `block_entity.has(x, y, z)`.
+    TileHas {
+        x: i32,
+        y: i32,
+        z: i32,
+    },
+    /// `gui.open(name)` — open a GUIAPI screen from a hook.
+    OpenGui {
+        name: String,
+    },
 }
 
 /// The game's answer to a [`Query`].
@@ -425,6 +473,7 @@ impl Host {
                                 let mut shaped = Vec::new();
                                 let mut api = Vec::new();
                                 let mut entries = Vec::new();
+                                let mut block_entity_binds = Vec::new();
                                 let spawns = session.spawns();
                                 let screens = session.screens();
                                 let options = session.options();
@@ -445,6 +494,12 @@ impl Host {
                                         "shaped" => shaped.push(pair),
                                         "note" | "registry" => api.push((kind, pair.0)),
                                         "entry" => entries.push(pair),
+                                        "block_entity" => {
+                                            if !block_entity_binds.iter().any(|have| have == &pair.0)
+                                            {
+                                                block_entity_binds.push(pair.0);
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -468,6 +523,7 @@ impl Host {
                                     shaped,
                                     api,
                                     entries,
+                                    block_entity_binds,
                                     spawns,
                                     screens,
                                     options,
@@ -750,6 +806,45 @@ fn query_of(name: &str, args: &[Value]) -> Result<Query, String> {
             x: int_at(args, 1)?,
             y: int_at(args, 2)?,
             z: int_at(args, 3)?,
+        }),
+        "block_entity.get" => Ok(Query::TileGet {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+            key: text_at(args, 3)?,
+        }),
+        "block_entity.set" => Ok(Query::TileSet {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+            key: text_at(args, 3)?,
+            value: text_at(args, 4)?,
+        }),
+        "block_entity.get_int" => Ok(Query::TileGetInt {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+            key: text_at(args, 3)?,
+        }),
+        "block_entity.set_int" => Ok(Query::TileSetInt {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+            key: text_at(args, 3)?,
+            value: int_at(args, 4)?,
+        }),
+        "block_entity.clear" => Ok(Query::TileClear {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+        }),
+        "block_entity.has" => Ok(Query::TileHas {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+        }),
+        "gui.open" => Ok(Query::OpenGui {
+            name: text_at(args, 0)?,
         }),
         other => Err(format!("unknown function {other}")),
     }

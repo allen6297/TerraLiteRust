@@ -1,18 +1,31 @@
-// Ember kit: glow brick, placeable embers, hostile shade, and ModAPI traits.
-// Tickable: once a second, tick 2 plants a dirt marker at (2, 2, 1).
-// Interactable: right-click a block while holding ember:ember plants glow_brick on top.
-// Playtest: load world → wait ~2s for dirt → hold ember → right-click stone/dirt near stairs.
+// Ember kit: glow brick tile, placeable embers, shade mob, GUIAPI panel.
+// Block entity: glow_brick stores charge; right-click opens the ember panel.
+// Block item: ember:ember places glow_brick (creative uses the block model).
+// Playtest: load world → wait ~2s for glow at (2,3,1) → right-click it → charge / panel.
 
 import ModAPI;
 import Blocks;
 import Items;
 import Entities;
+import BlockEntities;
+import GUIAPI;
 
 class EmberPulse impl Tickable {
     fn onTick(n: Int) {
         if (n == 2) {
-            world.set_block(2, 2, 1, "dirt");
-            print("ember pulse");
+            world.set_block(2, 3, 1, "ember:glow_brick");
+            BlockEntities.setInt(2, 3, 1, "charge", 3);
+            print("ember glow tile planted");
+        }
+        if (n > 2 && n % 5 == 0) {
+            if (world.get_block(2, 3, 1) == "ember:glow_brick") {
+                var c = BlockEntities.getInt(2, 3, 1, "charge");
+                if (c > 0) {
+                    BlockEntities.setInt(2, 3, 1, "charge", c - 1);
+                    world.set_meta(2, 3, 1, c - 1);
+                    print("glow charge " + (c - 1));
+                }
+            }
         }
     }
 }
@@ -23,10 +36,22 @@ class EmberWand impl Interactable {
     }
 
     fn onUseBlock(item: String, block: String, x: Int, y: Int, z: Int): Bool {
+        if (block == "ember:glow_brick") {
+            var c = BlockEntities.getInt(x, y, z, "charge") + 1;
+            if (c > 15) {
+                c = 0;
+            }
+            BlockEntities.setInt(x, y, z, "charge", c);
+            world.set_meta(x, y, z, c);
+            chat.say("glow " + c);
+            GUIAPI.openNamed("ember_glow");
+            return false;
+        }
         if (item != "ember:ember" || block == "") {
             return true;
         }
         world.set_block(x, y + 1, z, "ember:glow_brick");
+        BlockEntities.setInt(x, y + 1, z, "charge", 0);
         print("ember wand placed glow_brick");
         return false;
     }
@@ -72,6 +97,15 @@ fn on_shade_death(kind: String, x: Int, y: Int, z: Int): Bool {
     return true;
 }
 
+fn on_glow_press(row: String) {
+    if (row == "charge") {
+        chat.say("right click brick");
+    }
+    if (row == "hint") {
+        chat.say("ember places brick");
+    }
+}
+
 fn on_init() {
     var Mod: TLMod = ModAPI.createMod("ember", "1.0.0");
     var Register: TLRegister = ModAPI.createRegister(Mod);
@@ -80,17 +114,29 @@ fn on_init() {
     Register.BLOCK.open();
     Register.ITEM.open();
     Register.ENTITY.open();
+    Register.BLOCK_ENTITY.open();
+    Register.SCREEN.open();
 
-    var brick = Blocks.defineBlock(
+    var brick = Blocks.defineBlockItem(
         "ember",
         "glow_brick",
+        "ember",
         "assets/ember/models/block/glow_brick.json",
         "assets/ember/textures/glow_brick.png",
         2.0,
-        12
+        12,
+        16
     );
-    var ember = Items.defineItem("ember", "ember", brick.id, 16);
-    Register.recipe(brick.id, ember.id);
+    BlockEntities.bind(brick.id);
+    Register.BLOCK_ENTITY.register("ember", "glow_brick");
+    Register.recipe(brick.id, "ember:ember");
+
+    var panel = GUIAPI.createScreen("ember_glow", GUIAPI.vec(280.0, 140.0), GUIAPI.vec(48.0, 64.0));
+    GUIAPI.addElement(panel, GUIAPI.heading("title", "ember glow"));
+    GUIAPI.addElement(panel, GUIAPI.button("charge", "charge tip"));
+    GUIAPI.addElement(panel, GUIAPI.text("hint", "hold ember, place brick"));
+    GUIAPI.on_press(panel, "g", on_glow_press);
+    Register.SCREEN.register("ember", "glow");
 
     var shade = Entities.defineEntity(
         "ember",
@@ -106,7 +152,7 @@ fn on_init() {
 
     Mod.listenTick("ember-pulse", ember_tick);
     Mod.listenUseBlock("ember-wand", ember_use_block);
-    Mod.log("registered " + brick.id + ", " + ember.id + ", and " + shade.id);
+    Mod.log("registered " + brick.id + ", ember:ember, " + shade.id + ", ember_glow");
 }
 
 fn main(): Int {

@@ -392,6 +392,8 @@ pub(crate) struct ScriptTable {
     live_spawns: std::cell::RefCell<Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>>>,
     /// Lines from `chat.say` during the hook that is running.
     lines: std::cell::RefCell<Vec<String>>,
+    /// GUIAPI screen names `gui.open` asked for during the hook.
+    pending_screens: std::cell::RefCell<Vec<String>>,
     /// Hotbar the server last heard. Empty until a hotbar packet arrives.
     inventory: std::cell::RefCell<SyncedBar>,
 }
@@ -454,6 +456,7 @@ impl ScriptTable {
             writes: std::cell::RefCell::new(Vec::new()),
             live_spawns: std::cell::RefCell::new(Vec::new()),
             lines: std::cell::RefCell::new(Vec::new()),
+            pending_screens: std::cell::RefCell::new(Vec::new()),
             inventory: std::cell::RefCell::new(SyncedBar {
                 selected: 0,
                 slots: Vec::new(),
@@ -483,6 +486,10 @@ impl ScriptTable {
         &self,
     ) -> Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>> {
         self.live_spawns.borrow_mut().drain(..).collect()
+    }
+
+    pub(crate) fn drain_screen_opens(&self) -> Vec<String> {
+        self.pending_screens.borrow_mut().drain(..).collect()
     }
 
     pub(crate) fn has(&self, kind: &str, id: &str) -> bool {
@@ -1748,6 +1755,11 @@ fn register(
                 .map_err(|err| format!("screen.register: {err}"))?;
         }
     }
+    for id in &found.block_entity_binds {
+        Pack::builtin()
+            .note_block_entity(id)
+            .map_err(|err| format!("block_entity.bind: {err}"))?;
+    }
     for screen in found.screens {
         Pack::builtin()
             .add_gui_screen(screen, source)
@@ -1810,6 +1822,7 @@ fn invoke(
             &table.writes,
             &table.live_spawns,
             &table.lines,
+            &table.pending_screens,
             view,
             &writes,
             query,
@@ -1829,6 +1842,7 @@ fn answer(
         Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>>,
     >,
     lines: &std::cell::RefCell<Vec<String>>,
+    pending_screens: &std::cell::RefCell<Vec<String>>,
     view: &ScriptView<'_>,
     gate: &ScriptWrites,
     query: Query,
@@ -1856,6 +1870,11 @@ fn answer(
             pack.break_result(Block::new(&id, 0)).id.to_string(),
         )),
         Query::Write { x, y, z, id } => {
+            let prev = if world.in_bounds(x, y, z) {
+                world.block_at(x, y, z).id.to_string()
+            } else {
+                String::new()
+            };
             let block = if id == "air" {
                 Block::AIR
             } else if pack.contains_block(&id) {
@@ -1875,6 +1894,9 @@ fn answer(
                 }
             };
             if wrote {
+                if prev != block.id {
+                    pack.clear_tile_at(x, y, z);
+                }
                 writes.borrow_mut().push(crate::changes::CellChange {
                     x,
                     y,
@@ -1967,6 +1989,56 @@ fn answer(
                 return Ok(Answer::Bool(false));
             }
             live_spawns.borrow_mut().push(Err((id, x, y, z)));
+            Ok(Answer::Bool(true))
+        }
+        Query::TileGet { x, y, z, key } => Ok(Answer::Text(pack.tile_get(x, y, z, &key))),
+        Query::TileSet {
+            x,
+            y,
+            z,
+            key,
+            value,
+        } => {
+            if !world.in_bounds(x, y, z) {
+                return Ok(Answer::Bool(false));
+            }
+            let id = world.block_at(x, y, z).id.to_string();
+            Ok(Answer::Bool(pack.tile_set(x, y, z, &id, &key, &value)))
+        }
+        Query::TileGetInt { x, y, z, key } => {
+            Ok(Answer::Int(pack.tile_get_int(x, y, z, &key)))
+        }
+        Query::TileSetInt {
+            x,
+            y,
+            z,
+            key,
+            value,
+        } => {
+            if !world.in_bounds(x, y, z) {
+                return Ok(Answer::Bool(false));
+            }
+            let id = world.block_at(x, y, z).id.to_string();
+            Ok(Answer::Bool(pack.tile_set_int(
+                x,
+                y,
+                z,
+                &id,
+                &key,
+                i64::from(value),
+            )))
+        }
+        Query::TileClear { x, y, z } => {
+            let had = pack.tile_has(x, y, z);
+            pack.clear_tile_at(x, y, z);
+            Ok(Answer::Bool(had))
+        }
+        Query::TileHas { x, y, z } => Ok(Answer::Bool(pack.tile_has(x, y, z))),
+        Query::OpenGui { name } => {
+            if !pack.has_gui_screen(&name) {
+                return Ok(Answer::Bool(false));
+            }
+            pending_screens.borrow_mut().push(name);
             Ok(Answer::Bool(true))
         }
     }

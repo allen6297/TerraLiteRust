@@ -12,6 +12,7 @@
 //! file is skipped. Dropping a model file under `models/block/` is enough for
 //! that id to mesh.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -326,8 +327,11 @@ struct ScriptRegistry {
     screens: Vec<ScriptScreen>,
     gui: Vec<StoredGui>,
     settings: Vec<StoredSetting>,
-    /// `namespace:path` from `BLOCK_ENTITY.register`. A chest uses the same id.
+    /// `namespace:path` from `BLOCK_ENTITY.register` / `block_entity.bind`.
+    /// Marks a block id as a script tile (key/value data). Not a chest UI.
     block_entities: Vec<String>,
+    /// Per-cell string fields for script block entities: `(x,y,z) → key → value`.
+    tiles: HashMap<(i32, i32, i32), HashMap<String, String>>,
     /// Mobs from `entity.register` and `ENTITY` registry entries.
     entities: Vec<ScriptEntity>,
     /// Bodies from `entity.spawn` that `entity.despawn` did not take back.
@@ -587,6 +591,7 @@ impl Pack {
                 gui: Vec::new(),
                 settings: Vec::new(),
                 block_entities: Vec::new(),
+                tiles: HashMap::new(),
                 entities: Vec::new(),
                 spawns: Vec::new(),
                 models: Vec::new(),
@@ -815,6 +820,9 @@ impl Pack {
     }
 
     /// Remember a block entity id. Registering the same id again is fine.
+    ///
+    /// Script ids get per-cell key/value tile data. Builtin containers keep the
+    /// chest UI; script tiles do not open an empty chest.
     pub fn note_block_entity(&self, id: &str) -> Result<(), String> {
         if !stack_id(id) {
             return Err(format!("bad block entity {id}"));
@@ -827,15 +835,24 @@ impl Pack {
         Ok(())
     }
 
+    /// Builtin inventory containers (chest UI). Script tiles are not included.
+    pub fn is_container(&self, id: &str) -> bool {
+        matches!(
+            id,
+            "chest"
+                | "copper_chest"
+                | "ender_chest"
+                | "shulker_box"
+                | "barrel"
+                | "decorated_pot"
+                | "shelf"
+                | "item_frame"
+        )
+    }
+
+    /// A builtin container or a script-registered tile block.
     pub fn is_block_entity(&self, id: &str) -> bool {
-        id == "chest"
-            || id == "copper_chest"
-            || id == "ender_chest"
-            || id == "shulker_box"
-            || id == "barrel"
-            || id == "decorated_pot"
-            || id == "shelf"
-            || id == "item_frame"
+        self.is_container(id)
             || self
                 .script
                 .lock()
@@ -843,6 +860,94 @@ impl Pack {
                 .block_entities
                 .iter()
                 .any(|existing| existing == id)
+    }
+
+    /// True when `id` was registered with `BLOCK_ENTITY` / `block_entity.bind`.
+    pub fn is_script_block_entity(&self, id: &str) -> bool {
+        self.script
+            .lock()
+            .expect("script registry")
+            .block_entities
+            .iter()
+            .any(|existing| existing == id)
+    }
+
+    /// Read a tile field. Empty when missing.
+    pub fn tile_get(&self, x: i32, y: i32, z: i32, key: &str) -> String {
+        self.script
+            .lock()
+            .expect("script registry")
+            .tiles
+            .get(&(x, y, z))
+            .and_then(|fields| fields.get(key).cloned())
+            .unwrap_or_default()
+    }
+
+    /// Write a tile field on a script block entity cell. False when the key or
+    /// value is bad, or the cell is not a script tile id.
+    pub fn tile_set(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        block_id: &str,
+        key: &str,
+        value: &str,
+    ) -> bool {
+        if !self.is_script_block_entity(block_id) || !tile_key(key) || !tile_value(value) {
+            return false;
+        }
+        let mut script = self.script.lock().expect("script registry");
+        script
+            .tiles
+            .entry((x, y, z))
+            .or_default()
+            .insert(key.to_string(), value.to_string());
+        true
+    }
+
+    pub fn tile_get_int(&self, x: i32, y: i32, z: i32, key: &str) -> i64 {
+        self.tile_get(x, y, z, key).parse().unwrap_or(0)
+    }
+
+    pub fn tile_set_int(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        block_id: &str,
+        key: &str,
+        value: i64,
+    ) -> bool {
+        self.tile_set(x, y, z, block_id, key, &value.to_string())
+    }
+
+    pub fn tile_has(&self, x: i32, y: i32, z: i32) -> bool {
+        self.script
+            .lock()
+            .expect("script registry")
+            .tiles
+            .get(&(x, y, z))
+            .is_some_and(|fields| !fields.is_empty())
+    }
+
+    /// Drop all tile fields at a cell (break / replace).
+    pub fn clear_tile_at(&self, x: i32, y: i32, z: i32) {
+        self.script
+            .lock()
+            .expect("script registry")
+            .tiles
+            .remove(&(x, y, z));
+    }
+
+    /// True when a `GUIAPI.createScreen` registered this name.
+    pub fn has_gui_screen(&self, name: &str) -> bool {
+        self.script
+            .lock()
+            .expect("script registry")
+            .gui
+            .iter()
+            .any(|row| row.screen.name == name)
     }
 
     /// A cube block id `namespace:path`, hardness 1.5, breaks to air.
@@ -3236,6 +3341,7 @@ impl Pack {
                 gui: Vec::new(),
                 settings: Vec::new(),
                 block_entities: Vec::new(),
+                tiles: HashMap::new(),
                 entities: Vec::new(),
                 spawns: Vec::new(),
                 models: Vec::new(),
@@ -5489,6 +5595,18 @@ fn stack_id(id: &str) -> bool {
     }
 }
 
+fn tile_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 32
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn tile_value(value: &str) -> bool {
+    value.len() <= 256 && value.chars().all(|ch| ch != '\0' && ch != '\n' && ch != '\r')
+}
+
 fn json_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
     if !dir.is_dir() {
         return Ok(Vec::new());
@@ -6611,6 +6729,7 @@ mod tests {
         assert_eq!(pack.hardness_of(Block::new("composter", 0)), Some(0.6));
         assert_eq!(pack.tool_icon("healing_potion"), Some("nether_wart_block"));
         assert_eq!(pack.food_of("healing_potion"), Some(4));
+        assert!(pack.is_container("chest"));
         assert!(pack.is_block_entity("chest"));
         assert!(pack.is_block_entity("copper_chest"));
         assert!(pack.is_block_entity("ender_chest"));
@@ -6619,6 +6738,17 @@ mod tests {
         assert!(pack.is_block_entity("decorated_pot"));
         assert!(pack.is_block_entity("shelf"));
         assert!(!pack.is_block_entity("stone"));
+        assert!(!pack.is_script_block_entity("chest"));
+        pack.note_block_entity("demo:tile").unwrap();
+        assert!(pack.is_script_block_entity("demo:tile"));
+        assert!(pack.is_block_entity("demo:tile"));
+        assert!(!pack.is_container("demo:tile"));
+        assert!(pack.tile_set(1, 2, 3, "demo:tile", "charge", "4"));
+        assert_eq!(pack.tile_get(1, 2, 3, "charge"), "4");
+        assert_eq!(pack.tile_get_int(1, 2, 3, "charge"), 4);
+        assert!(pack.tile_has(1, 2, 3));
+        pack.clear_tile_at(1, 2, 3);
+        assert!(!pack.tile_has(1, 2, 3));
         assert_eq!(pack.hardness_of(Block::new("purpur", 0)), Some(1.5));
         assert_eq!(pack.hardness_of(Block::new("purpur_pillar", 0)), Some(1.5));
         assert_eq!(

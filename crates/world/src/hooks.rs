@@ -372,6 +372,11 @@ impl Hooks {
         self.scripts.drain_live_spawns()
     }
 
+    /// Screen names `gui.open` queued during the last hook.
+    pub fn drain_screen_opens(&self) -> Vec<String> {
+        self.scripts.drain_screen_opens()
+    }
+
     /// One mob tick. The game drives `"player"`, `"sheep"`, `"pig"`, and `"zombie"`.
     pub fn entity_tick(&self, world: &mut Cluster, kind: &str) {
         self.scripts.entity_tick(world, kind);
