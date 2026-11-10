@@ -297,6 +297,9 @@ pub const SHRINE_LECTERN: (i32, i32) = (SHRINE.0, SHRINE.1 + 2);
 /// Enchanting table northwest of the altar (west of the lectern).
 pub const SHRINE_ENCHANT: (i32, i32) = (SHRINE.0 - 2, SHRINE.1 + 2);
 
+/// Brewing stand northeast of the altar (east of the lectern).
+pub const SHRINE_BREW: (i32, i32) = (SHRINE.0 + 2, SHRINE.1 + 2);
+
 const SHRINE_CHUNK: (i32, i32) = (2, 2);
 
 /// Marsh clay bank south of the demo pad, under the shallow water.
@@ -408,6 +411,12 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((enchant_x, floor, enchant_z, Block::new("enchanting_table", 0)));
     // A bookshelf beside it so the spend loop is findable without creative give.
     blocks.push((enchant_x, floor, enchant_z - 1, Block::new("bookshelf", 0)));
+    // Northeast of the altar: brew a healing potion from water + wart.
+    let brew_x = (SHRINE_BREW.0 - chunk_x * 16) as u8;
+    let brew_z = (SHRINE_BREW.1 - chunk_z * 16) as u8;
+    blocks.push((brew_x, floor, brew_z, Block::new("brewing_stand", 0)));
+    // Nether wart beside it so the brew loop is findable without creative give.
+    blocks.push((brew_x - 1, floor, brew_z, Block::new("nether_wart_block", 0)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -932,6 +941,12 @@ mod tests {
             SHRINE_ENCHANT
         );
         assert_eq!(shrine.block(local_x - 2, floor, local_z + 1).id, "bookshelf");
+        assert_eq!(shrine.block(local_x + 2, floor, local_z + 2).id, "brewing_stand");
+        assert_eq!(
+            (2 * 16 + i32::from(local_x + 2), 2 * 16 + i32::from(local_z + 2)),
+            SHRINE_BREW
+        );
+        assert_eq!(shrine.block(local_x + 1, floor, local_z + 2).id, "nether_wart_block");
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);
         assert_eq!(

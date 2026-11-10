@@ -152,6 +152,35 @@ impl Drops {
         });
     }
 
+    /// Soft cyan bubbles rising from a brewing stand.
+    pub fn brew_bubbles(&mut self, origin: [f32; 3]) {
+        const BUBBLES: [([f32; 3], [f32; 3], f32); 6] = [
+            ([0.08, 1.05, 0.04], [0.45, 0.82, 0.95], 1.3),
+            ([-0.12, 0.9, -0.06], [0.55, 0.90, 1.0], 1.15),
+            ([0.14, 1.2, -0.1], [0.35, 0.72, 0.88], 1.4),
+            ([-0.06, 1.1, 0.12], [0.62, 0.95, 1.0], 1.2),
+            ([0.02, 0.85, -0.14], [0.40, 0.78, 0.92], 1.05),
+            ([-0.1, 1.25, 0.05], [0.70, 0.98, 1.0], 1.35),
+        ];
+        for (i, (vel, color, life)) in BUBBLES.into_iter().enumerate() {
+            let wobble = (i as f32) * 0.035;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + wobble - 0.06,
+                    origin[1] + 0.25,
+                    origin[2] - wobble * 0.3,
+                ],
+                velocity: vel,
+                color,
+                block: color,
+                life,
+                rise: true,
+                hover: false,
+                half: 0.06,
+            });
+        }
+    }
+
     /// Purple book pages swirling up from an enchanting table.
     pub fn book_swirl(&mut self, origin: [f32; 3]) {
         // Tangential + rise so a still PNG still reads as a swirl.
@@ -853,6 +882,18 @@ mod tests {
         assert_eq!(drops.motes.len(), 6);
         assert!(drops.motes.iter().all(|mote| mote.rise));
         assert!(drops.motes.iter().all(|mote| mote.color[2] > mote.color[1]));
+        let before = drops.motes[0].center[1];
+        assert!(drops.tick_motes(0.15));
+        assert!(drops.motes[0].center[1] > before);
+    }
+
+    #[test]
+    fn brew_bubbles_rise_in_cyan() {
+        let mut drops = Drops::new();
+        drops.brew_bubbles([2.5, 1.0, 2.5]);
+        assert_eq!(drops.motes.len(), 6);
+        assert!(drops.motes.iter().all(|mote| mote.rise));
+        assert!(drops.motes.iter().all(|mote| mote.color[2] >= mote.color[0]));
         let before = drops.motes[0].center[1];
         assert!(drops.tick_motes(0.15));
         assert!(drops.motes[0].center[1] > before);

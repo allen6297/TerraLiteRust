@@ -195,6 +195,8 @@ struct Args {
     shot_enchant: Option<std::path::PathBuf>,
     /// Shaft grindstone clear Efficiency, then quit.
     shot_grind: Option<std::path::PathBuf>,
+    /// Shrine brewing stand bubble potion, then quit.
+    shot_brew: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -306,6 +308,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_cauldron: args.shot_cauldron,
         shot_enchant: args.shot_enchant,
         shot_grind: args.shot_grind,
+        shot_brew: args.shot_brew,
         state: None,
         last_frame: Instant::now(),
     };
@@ -366,6 +369,7 @@ struct App {
     shot_cauldron: Option<std::path::PathBuf>,
     shot_enchant: Option<std::path::PathBuf>,
     shot_grind: Option<std::path::PathBuf>,
+    shot_brew: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -537,6 +541,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_grind.take() {
                     state.arm_grind_shot(path);
+                }
+                if let Some(path) = self.shot_brew.take() {
+                    state.arm_brew_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -715,6 +722,7 @@ where
         shot_cauldron: None,
         shot_enchant: None,
         shot_grind: None,
+        shot_brew: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -996,6 +1004,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-grind".to_string())?;
                 parsed.shot_grind = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-brew" | "--shot-brewing" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-brew".to_string())?;
+                parsed.shot_brew = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

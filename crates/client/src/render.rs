@@ -1105,6 +1105,8 @@ pub struct State {
     note_shot_pitch: u8,
     /// Cook-shot refresh uses book swirl pages instead of a note mote.
     note_shot_book: bool,
+    /// Cook-shot refresh uses brew bubbles instead of a note mote.
+    note_shot_brew: bool,
     /// One-shot shrine ruin proof PNG, then quit.
     shrine_shot_path: Option<std::path::PathBuf>,
     shrine_shot_frames: u32,
@@ -2070,6 +2072,7 @@ impl State {
             note_shot_at: None,
             note_shot_pitch: 0,
             note_shot_book: false,
+            note_shot_brew: false,
             shrine_shot_path: None,
             shrine_shot_frames: 0,
             shrine_shot_eye: glam::Vec3::ZERO,
@@ -3415,7 +3418,7 @@ impl State {
             }
             "anvil" => self.gui.open_anvil(),
             "enchanting_table" => self.gui.open_enchanting(hit.block),
-            "brewing_stand" => self.gui.open_brewing(),
+            "brewing_stand" => self.gui.open_brewing(hit.block),
             "grindstone" => self.gui.open_grind(hit.block),
             "smithing_table" => self.gui.open_smith(),
             "loom" => self.gui.open_loom(),
@@ -8673,6 +8676,74 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shrine brew panel mid-bubble with a healing potion, then quit with a PNG.
+    pub fn arm_brew_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, bz) = rebuild_world::SHRINE_BREW;
+        let mut by = 4;
+        for y in 0..80 {
+            if self.world.block_at(bx, y, bz).id == "brewing_stand" {
+                by = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(bx, bz);
+        let focus = glam::Vec3::new(bx as f32 + 0.5, by as f32 + 0.95, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            bx as f32 - 2.6,
+            by as f32 + 1.4 + body::EYE_HEIGHT,
+            bz as f32 + 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let bubble_at = [bx as f32 + 0.5, by as f32 + 0.95, bz as f32 + 0.5];
+        self.note_shot_at = Some(bubble_at);
+        self.note_shot_pitch = 8;
+        self.note_shot_book = false;
+        self.note_shot_brew = true;
+        self.drops.brew_bubbles(bubble_at);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(8), bubble_at);
+        let _ = self.gui.open_brewing([bx, by, bz]);
+        self.gui.note_brew("brewed");
+        self.gui.push_chat("brewed");
+        self.found_shrine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("water_bucket");
+        let _ = self.hotbar.collect("nether_wart_block");
+        let _ = self.hotbar.brew_potion();
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shaft grindstone panel mid-spark after clearing Efficiency, then quit with a PNG.
     pub fn arm_grind_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -8719,6 +8790,7 @@ impl State {
         self.note_shot_at = Some(spark_at);
         self.note_shot_pitch = 3;
         self.note_shot_book = false;
+        self.note_shot_brew = false;
         self.drops.puff(spark_at, [0.78, 0.76, 0.70]);
         self.rebuild_drops();
         self.play_world(crate::audio::Sound::Note(3), spark_at);
@@ -8788,6 +8860,7 @@ impl State {
         self.note_shot_at = Some(swirl_at);
         self.note_shot_pitch = 10;
         self.note_shot_book = true;
+        self.note_shot_brew = false;
         self.drops.book_swirl(swirl_at);
         self.rebuild_drops();
         self.play_world(crate::audio::Sound::Note(10), swirl_at);
@@ -9728,6 +9801,8 @@ impl State {
             if let Some(at) = self.note_shot_at {
                 if self.note_shot_book {
                     self.drops.book_swirl(at);
+                } else if self.note_shot_brew {
+                    self.drops.brew_bubbles(at);
                 } else {
                     self.drops.note(at, self.note_shot_pitch);
                 }
@@ -9742,6 +9817,7 @@ impl State {
                 self.cook_shot_path = None;
                 self.note_shot_at = None;
                 self.note_shot_book = false;
+                self.note_shot_brew = false;
                 self.quit = true;
             }
             return;
@@ -9753,6 +9829,7 @@ impl State {
                 self.cook_shot_path = None;
                 self.note_shot_at = None;
                 self.note_shot_book = false;
+                self.note_shot_brew = false;
                 self.quit = true;
             }
             Err(err) => {
@@ -9761,6 +9838,7 @@ impl State {
                     self.cook_shot_path = None;
                     self.note_shot_at = None;
                     self.note_shot_book = false;
+                    self.note_shot_brew = false;
                     self.quit = true;
                 }
             }
@@ -12258,6 +12336,14 @@ impl State {
         self.gui.note_brew(word);
         self.gui.push_chat(word);
         self.hotbar_dirty = true;
+        if word == "brewed" {
+            if let Some(at) = self.gui.brew_at() {
+                let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                self.play_world(crate::audio::Sound::Note(8), source);
+                self.drops.brew_bubbles(source);
+                self.rebuild_drops();
+            }
+        }
     }
 
     /// False from `events.brew` keeps the water and the ingredient. A refused

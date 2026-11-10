@@ -695,6 +695,8 @@ pub struct Gui {
     brew_open: bool,
     /// The line under the brew title. Enter replaces it with the brew word.
     brew_note: String,
+    /// The brewing stand the panel is mixing at.
+    brew_at: Option<[i32; 3]>,
     grind_open: bool,
     /// The line under the grind title. Enter replaces it with the grind word.
     grind_note: String,
@@ -854,6 +856,7 @@ impl Gui {
                 enchant_at: None,
                 brew_open: false,
                 brew_note: String::new(),
+                brew_at: None,
                 grind_open: false,
                 grind_note: String::new(),
                 grind_at: None,
@@ -969,6 +972,7 @@ impl Gui {
                     enchant_at: None,
                     brew_open: false,
                     brew_note: String::new(),
+                    brew_at: None,
                     grind_open: false,
                     grind_note: String::new(),
                     grind_at: None,
@@ -1094,6 +1098,7 @@ impl Gui {
             enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
+            brew_at: None,
             grind_open: false,
             grind_note: String::new(),
             grind_at: None,
@@ -1568,6 +1573,7 @@ impl Gui {
         self.enchant_open = false;
         self.enchant_at = None;
         self.brew_open = false;
+        self.brew_at = None;
         self.grind_open = false;
         self.grind_at = None;
         self.smith_open = false;
@@ -1891,10 +1897,11 @@ impl Gui {
     }
 
     /// A brew panel. Other screens keep it closed.
-    pub fn open_brewing(&mut self) -> bool {
+    pub fn open_brewing(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
+        self.brew_at = Some(at);
         self.brew_note = "enter spends water and nether wart".to_string();
         self.brew_open = true;
         true
@@ -1902,6 +1909,10 @@ impl Gui {
 
     pub fn brew_open(&self) -> bool {
         self.brew_open
+    }
+
+    pub fn brew_at(&self) -> Option<[i32; 3]> {
+        self.brew_at
     }
 
     /// The word the last brew left on the panel.
@@ -3121,6 +3132,7 @@ impl Gui {
     fn on_brew(&mut self, code: KeyCode) -> bool {
         if code == KeyCode::KeyF || code == KeyCode::Escape {
             self.brew_open = false;
+            self.brew_at = None;
             return true;
         }
         code == KeyCode::Enter
@@ -8168,6 +8180,7 @@ mod tests {
             enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
+            brew_at: None,
             grind_open: false,
             grind_note: String::new(),
             grind_at: None,
@@ -8712,13 +8725,15 @@ mod tests {
         assert!(!gui.enchant_open());
         assert_eq!(gui.enchant_at(), None);
 
-        assert!(gui.open_brewing());
+        assert!(gui.open_brewing([8, 1, 8]));
         assert_eq!(gui.screen_id(), "brewing");
+        assert_eq!(gui.brew_at(), Some([8, 1, 8]));
         assert!(!gui.quads(1280.0, 720.0).is_empty());
         assert!(gui.on_press(KeyCode::Enter));
         assert!(gui.brew_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.brew_open());
+        assert_eq!(gui.brew_at(), None);
 
         assert!(gui.open_grind([7, 1, 7]));
         assert_eq!(gui.screen_id(), "grindstone");
