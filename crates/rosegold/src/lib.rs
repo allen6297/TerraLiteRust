@@ -109,7 +109,8 @@
 //! item place the block from the hotbar. `recipe.register(result, ingredient)`
 //! records one crafting line. `recipe.shapeless(result, "a+b")` records a pile.
 //! `recipe.shaped(result, "a,,,a,,,a,,")` records a 3 by 3, nine cells separated
-//! by commas, blanks empty. Both ids must already exist. The crafting table
+//! by commas, blanks empty. ModAPI `TLRegister` mirrors these as `recipe` /
+//! `shapeless` / `shaped`. Both ids must already exist. The crafting table
 //! shows the result. `entity.register(namespace, path)` adds a mob. It stands
 //! just east of the oak stairs. `entity.model(id, path)` attaches a Blockbench
 //! `.bbmodel`. `entity.hostile(id, flag)` marks chase/attack AI.
