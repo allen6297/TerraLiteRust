@@ -338,14 +338,31 @@ fn soft_project(quads: &[Quad], gui: ItemDisplay, size: usize) -> ColorImage {
     let mut rgba = vec![0u8; size * size * 4];
     let mut depth = vec![f32::INFINITY; size * size];
     let cx = (size as f32 - 1.0) * 0.5;
-    let cy = (size as f32 - 1.0) * 0.52;
-    // MC gui scale 0.625. Fill ~98% of the raster so the block reads ~1.5×
-    // larger than the old padded cube while still fitting the slot.
-    let s = gui.scale[0].max(gui.scale[1]).max(gui.scale[2]).max(0.1);
-    let fit = size as f32 * 0.98 / s;
+    let cy = (size as f32 - 1.0) * 0.5;
+    // Fit the projected AABB into the raster with a small pad so isometric
+    // corners never spill past the slot (display.gui scale alone is not enough).
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+    for quad in quads {
+        for corner in &quad.corners {
+            let t = apply_gui(*corner, gui);
+            min_x = min_x.min(t[0]);
+            max_x = max_x.max(t[0]);
+            min_y = min_y.min(t[1]);
+            max_y = max_y.max(t[1]);
+        }
+    }
+    let span_x = (max_x - min_x).max(1.0e-4);
+    let span_y = (max_y - min_y).max(1.0e-4);
+    let pad = 0.92; // keep ~8% margin inside the cell
+    let fit = (size as f32 * pad / span_x).min(size as f32 * pad / span_y);
+    let mid_x = (min_x + max_x) * 0.5;
+    let mid_y = (min_y + max_y) * 0.5;
     let project = |p: [f32; 3]| -> (f32, f32, f32) {
         let t = apply_gui(p, gui);
-        (cx + t[0] * fit, cy - t[1] * fit, -t[2])
+        (cx + (t[0] - mid_x) * fit, cy - (t[1] - mid_y) * fit, -t[2])
     };
     // Opaque cube faces first, then translucent overlays (grass fringe) on top.
     let mut order: Vec<usize> = (0..quads.len()).collect();

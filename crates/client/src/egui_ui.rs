@@ -1468,8 +1468,8 @@ fn slot_button_sized(
         ui.painter()
             .rect_filled(lip, CornerRadius::same(2), LIP.gamma_multiply(0.85));
         if let Some(tex) = tex {
-            // Tight inset so the ~1.5× larger model raster still sits in the well.
-            let pad = (size * 0.04).max(1.0);
+            // Modest inset — the raster itself is already AABB-fitted.
+            let pad = (size * 0.06).max(1.5);
             let icon_rect = rect.shrink(pad);
             ui.painter().image(
                 tex,

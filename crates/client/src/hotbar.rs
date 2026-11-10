@@ -177,8 +177,8 @@ const BORDER_PX: f32 = 2.0;
 const SELECT_BORDER_PX: f32 = 6.0;
 const PAD_PX: f32 = 6.0;
 const FILL_INSET_PX: f32 = 4.0;
-/// Icon sits tighter than the empty fill so model rasters read ~1.5× larger.
-const ICON_INSET_PX: f32 = 1.5;
+/// Icon inset inside the slot well (raster is already AABB-fitted).
+const ICON_INSET_PX: f32 = 3.0;
 
 /// GUI-space Y of the top lip of the hotbar chrome. HUD plates clear above this.
 pub fn bar_chrome_top() -> f32 {
