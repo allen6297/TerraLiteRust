@@ -653,5 +653,24 @@
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABQUlEQVR4AWzSP0pDQRDH8WUrBQsjEW0sLBQlYCMIKew8ghfwDB7CW1la2whiYycKIbEQtJH4PkMmrMkL+b7585vZWXa33l6dzW/Oj4K764t5C62l1fi0WrrfzmCzYPL5U/LHH50My3B7I1NFbm9/q4BPqAogYAkQf7x/Mf94ep4UZDJ2kEE2tnHkTsdlOvvO9NIaGAtEUZeWSLow/uLpw/3SF0ew+NSX11msvios9DCX44NyfDgI3ydrDa6/o7FcLw7RgfWdRTbU3bfHuIFMsFZm+6AhtWoKJBOxbZqMLE5L46urCpBJgph1PmxiAJ/VzI9b4LQoyGZ+oml10NoCWeBlol04d+ZNpL9cwBTFaU1DLphauzO5qgECaAA/EZtauhdpV6Dpi1tQIJE27z63SYMXqQZixC1wWtpGU2Bq32v8AwAA//+2LUsAAAAABklEQVQDAHex0UUagyYtAAAAAElFTkSuQmCC"
     }
   ],
-  "texture": "assets/terralite/textures/grass.png"
+  "texture": "assets/terralite/textures/grass.png",
+  "display": {
+    "gui": {
+      "rotation": [
+        30,
+        225,
+        0
+      ],
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.625,
+        0.625,
+        0.625
+      ]
+    }
+  }
 }

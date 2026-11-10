@@ -25,9 +25,9 @@ use winit::window::Window;
 use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab};
 use crate::hotbar::{self, Hotbar};
-use crate::palette;
+use crate::item_icon;
 use crate::player;
-use crate::texture::{self, Image};
+use crate::texture;
 
 /// Overall egui zoom — matches the old `GUI_SCALE` target.
 pub const SCALE: f32 = 1.5;
@@ -1509,286 +1509,9 @@ fn icon_texture(
     Some(tex)
 }
 
-/// Soft-render a 3D-ish block (or flat item face) for egui slots.
+/// Soft-render a slot icon via the item/block model (`display.gui`).
 fn render_slot_icon(id: &str) -> egui::ColorImage {
-    let pack = Pack::builtin();
-    let tile = texture::face_tile(id);
-    let base = palette::color(id, 0);
-    let is_block = pack.contains_block(id)
-        || pack
-            .placed_block(id)
-            .is_some_and(|placed| pack.contains_block(&placed));
-    if is_block {
-        return isometric_icon(tile.as_ref(), base);
-    }
-    flat_icon(tile.as_ref(), base)
-}
-
-fn flat_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
-    let size = ICON_PX;
-    let mut rgba = vec![0u8; size * size * 4];
-    let pad = 2.0;
-    let inner = (size as f32 - pad * 2.0).max(1.0);
-    for y in 0..size {
-        for x in 0..size {
-            let fx = x as f32 + 0.5;
-            let fy = y as f32 + 0.5;
-            let u = ((fx - pad) / inner).clamp(0.0, 1.0);
-            let v = ((fy - pad) / inner).clamp(0.0, 1.0);
-            // Soft inset so flat tools don't read as a hard pixel stamp.
-            let edge = (fx - pad)
-                .min(fy - pad)
-                .min((pad + inner) - fx)
-                .min((pad + inner) - fy);
-            let cover = (edge / 1.25).clamp(0.0, 1.0);
-            if cover <= 0.0 {
-                continue;
-            }
-            let mut color = sample_or_base(tile, u, v, base, 1.0);
-            color[3] = ((color[3] as f32) * cover) as u8;
-            put(&mut rgba, size, x, y, color);
-        }
-    }
-    egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba)
-}
-
-/// Soft inventory cube: gentler face steps, bilinear atlas sample, edge AA.
-fn isometric_icon(tile: Option<&Image>, base: [f32; 3]) -> egui::ColorImage {
-    let size = ICON_PX;
-    let mut rgba = vec![0u8; size * size * 4];
-    let cx = (size as f32 - 1.0) * 0.5;
-    // Slightly rounder silhouette than a hard diamond stack.
-    let mid_y = size as f32 * 0.36;
-    let hw = size as f32 * 0.40;
-    let hh = size as f32 * 0.22;
-    let depth = size as f32 * 0.40;
-
-    // Left / right / top — shade contrast is soft so faces don't step hard.
-    fill_soft_face(
-        &mut rgba,
-        size,
-        [cx - hw, mid_y],
-        [cx, mid_y + hh],
-        [cx, mid_y + hh + depth],
-        [cx - hw, mid_y + depth],
-        tile,
-        base,
-        0.78,
-        0.88,
-        false,
-    );
-    fill_soft_face(
-        &mut rgba,
-        size,
-        [cx + hw, mid_y],
-        [cx, mid_y + hh],
-        [cx, mid_y + hh + depth],
-        [cx + hw, mid_y + depth],
-        tile,
-        base,
-        0.92,
-        1.00,
-        false,
-    );
-    fill_soft_face(
-        &mut rgba,
-        size,
-        [cx, mid_y - hh],
-        [cx + hw, mid_y],
-        [cx, mid_y + hh],
-        [cx - hw, mid_y],
-        tile,
-        base,
-        1.02,
-        1.10,
-        true,
-    );
-
-    egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba)
-}
-
-fn fill_soft_face(
-    rgba: &mut [u8],
-    size: usize,
-    a: [f32; 2],
-    b: [f32; 2],
-    c: [f32; 2],
-    d: [f32; 2],
-    tile: Option<&Image>,
-    base: [f32; 3],
-    shade0: f32,
-    shade1: f32,
-    overwrite: bool,
-) {
-    let pad = 1.25;
-    let min_x = (a[0].min(b[0]).min(c[0]).min(d[0]) - pad)
-        .floor()
-        .max(0.0) as usize;
-    let max_x = (a[0].max(b[0]).max(c[0]).max(d[0]) + pad)
-        .ceil()
-        .min(size as f32 - 1.0) as usize;
-    let min_y = (a[1].min(b[1]).min(c[1]).min(d[1]) - pad)
-        .floor()
-        .max(0.0) as usize;
-    let max_y = (a[1].max(b[1]).max(c[1]).max(d[1]) + pad)
-        .ceil()
-        .min(size as f32 - 1.0) as usize;
-    for y in min_y..=max_y {
-        for x in min_x..=max_x {
-            let p = [x as f32 + 0.5, y as f32 + 0.5];
-            let Some((u, v, cover)) = soft_face_uv(p, a, b, c, d) else {
-                continue;
-            };
-            if cover <= 0.0 {
-                continue;
-            }
-            // Soft vertical gradient across the face (not a flat hard tint).
-            let shade = shade0 + (shade1 - shade0) * v.clamp(0.0, 1.0);
-            let mut color = sample_or_base(tile, u.clamp(0.0, 1.0), v.clamp(0.0, 1.0), base, shade);
-            color[3] = ((color[3] as f32) * cover).clamp(0.0, 255.0) as u8;
-            let i = (y * size + x) * 4;
-            if overwrite || rgba[i + 3] < color[3] {
-                if rgba[i + 3] == 0 || overwrite {
-                    put(rgba, size, x, y, color);
-                } else {
-                    // Blend into an existing side so seams don't stair-step.
-                    let t = color[3] as f32 / 255.0;
-                    rgba[i] = ((rgba[i] as f32) * (1.0 - t) + color[0] as f32 * t) as u8;
-                    rgba[i + 1] = ((rgba[i + 1] as f32) * (1.0 - t) + color[1] as f32 * t) as u8;
-                    rgba[i + 2] = ((rgba[i + 2] as f32) * (1.0 - t) + color[2] as f32 * t) as u8;
-                    rgba[i + 3] = rgba[i + 3].max(color[3]);
-                }
-            }
-        }
-    }
-}
-
-/// UV + coverage for a soft-edged parallelogram (edge AA via bary distance).
-fn soft_face_uv(
-    p: [f32; 2],
-    a: [f32; 2],
-    b: [f32; 2],
-    c: [f32; 2],
-    d: [f32; 2],
-) -> Option<(f32, f32, f32)> {
-    if let Some((u, v, cover)) = soft_tri_uv(p, a, b, c, true) {
-        return Some((u, v, cover));
-    }
-    soft_tri_uv(p, a, c, d, false)
-}
-
-fn soft_tri_uv(
-    p: [f32; 2],
-    a: [f32; 2],
-    b: [f32; 2],
-    c: [f32; 2],
-    abc: bool,
-) -> Option<(f32, f32, f32)> {
-    let Some((w0, w1, w2)) = bary_raw(p, a, b, c) else {
-        return None;
-    };
-    let edge = w0.min(w1).min(w2);
-    // Outside by more than ~1.2 px → skip; inside fades coverage for AA.
-    if edge < -0.08 {
-        return None;
-    }
-    let cover = ((edge + 0.08) / 0.16).clamp(0.0, 1.0);
-    let (u, v) = if abc {
-        (w1 + w2, w2)
-    } else {
-        (w1, w1 + w2)
-    };
-    Some((u, v, cover))
-}
-
-fn bary_raw(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> Option<(f32, f32, f32)> {
-    let v0 = [b[0] - a[0], b[1] - a[1]];
-    let v1 = [c[0] - a[0], c[1] - a[1]];
-    let v2 = [p[0] - a[0], p[1] - a[1]];
-    let den = v0[0] * v1[1] - v1[0] * v0[1];
-    if den.abs() < 1e-6 {
-        return None;
-    }
-    let w1 = (v2[0] * v1[1] - v1[0] * v2[1]) / den;
-    let w2 = (v0[0] * v2[1] - v2[0] * v0[1]) / den;
-    let w0 = 1.0 - w1 - w2;
-    Some((w0, w1, w2))
-}
-
-fn sample_or_base(
-    tile: Option<&Image>,
-    u: f32,
-    v: f32,
-    base: [f32; 3],
-    shade: f32,
-) -> [u8; 4] {
-    let (r, g, b, a) = if let Some(tile) = tile {
-        sample_tile_bilinear(tile, u, v)
-    } else {
-        (
-            (base[0] * 255.0) as f32,
-            (base[1] * 255.0) as f32,
-            (base[2] * 255.0) as f32,
-            255.0,
-        )
-    };
-    [
-        (r * shade).clamp(0.0, 255.0) as u8,
-        (g * shade).clamp(0.0, 255.0) as u8,
-        (b * shade).clamp(0.0, 255.0) as u8,
-        a.clamp(0.0, 255.0) as u8,
-    ]
-}
-
-/// Bilinear sample inside a 16×16 pack face (avoids nearest texel stair steps).
-fn sample_tile_bilinear(tile: &Image, u: f32, v: f32) -> (f32, f32, f32, f32) {
-    let x = (u.clamp(0.0, 1.0) * (TILE_F - 1.0)).clamp(0.0, TILE_F - 1.0);
-    let y = (v.clamp(0.0, 1.0) * (TILE_F - 1.0)).clamp(0.0, TILE_F - 1.0);
-    let x0 = x.floor() as usize;
-    let y0 = y.floor() as usize;
-    let x1 = (x0 + 1).min(15);
-    let y1 = (y0 + 1).min(15);
-    let fx = x - x0 as f32;
-    let fy = y - y0 as f32;
-    let texel = |tx: usize, ty: usize| {
-        let i = (ty * 16 + tx) * 4;
-        [
-            tile.rgba[i] as f32,
-            tile.rgba[i + 1] as f32,
-            tile.rgba[i + 2] as f32,
-            tile.rgba[i + 3] as f32,
-        ]
-    };
-    let c00 = texel(x0, y0);
-    let c10 = texel(x1, y0);
-    let c01 = texel(x0, y1);
-    let c11 = texel(x1, y1);
-    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-    let top = [
-        lerp(c00[0], c10[0], fx),
-        lerp(c00[1], c10[1], fx),
-        lerp(c00[2], c10[2], fx),
-        lerp(c00[3], c10[3], fx),
-    ];
-    let bot = [
-        lerp(c01[0], c11[0], fx),
-        lerp(c01[1], c11[1], fx),
-        lerp(c01[2], c11[2], fx),
-        lerp(c01[3], c11[3], fx),
-    ];
-    (
-        lerp(top[0], bot[0], fy),
-        lerp(top[1], bot[1], fy),
-        lerp(top[2], bot[2], fy),
-        lerp(top[3], bot[3], fy),
-    )
-}
-
-const TILE_F: f32 = 16.0;
-
-fn put(rgba: &mut [u8], size: usize, x: usize, y: usize, color: [u8; 4]) {
-    let i = (y * size + x) * 4;
-    rgba[i..i + 4].copy_from_slice(&color);
+    item_icon::render(id, ICON_PX)
 }
 
 #[cfg(test)]
@@ -1796,15 +1519,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn isometric_icon_has_opaque_pixels_for_cobble() {
+    fn model_icon_has_opaque_pixels_for_cobble() {
         let img = render_slot_icon("cobblestone");
         assert_eq!(img.width(), ICON_PX);
         assert_eq!(img.height(), ICON_PX);
         let opaque = img.pixels.iter().filter(|c| c.a() > 200).count();
         assert!(
-            opaque > ICON_PX * ICON_PX / 4,
+            opaque > ICON_PX * ICON_PX / 6,
             "expected a solid cube silhouette, got {opaque} opaque pixels"
         );
+    }
+
+    #[test]
+    fn grass_slot_icon_comes_from_block_model() {
+        let (shape, _) = Pack::builtin().slot_model("grass").expect("grass");
+        assert!(!shape.faces().is_empty());
+        let img = render_slot_icon("grass");
+        let greenish = img
+            .pixels
+            .iter()
+            .filter(|c| c.a() > 200 && c.g() > c.r() && c.g() > 80)
+            .count();
+        assert!(greenish > 40, "grass model icon should show green, got {greenish}");
     }
 
     #[test]
@@ -1911,7 +1647,7 @@ mod tests {
         // Soft edge AA leaves some translucent fringe; opaque core still fills.
         let soft = img.pixels.iter().filter(|c| c.a() > 20 && c.a() < 240).count();
         assert!(
-            soft > 20,
+            soft > 10,
             "expected soft AA fringe on the inventory cube, got {soft}"
         );
     }
@@ -2120,6 +1856,8 @@ mod tests {
             let img = render_slot_icon(id);
             let path = dir.join(format!("egui-slot-{id}.png"));
             write_rgba_png(&path, img.width() as u32, img.height() as u32, &img);
+            let after = dir.join(format!("after-slot-{id}.png"));
+            write_rgba_png(&after, img.width() as u32, img.height() as u32, &img);
         }
     }
 

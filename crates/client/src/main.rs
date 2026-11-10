@@ -10,6 +10,7 @@ mod drops;
 mod egui_ui;
 mod gui;
 mod hotbar;
+mod item_icon;
 mod jobs;
 mod look;
 mod loot;

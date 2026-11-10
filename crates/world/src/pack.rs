@@ -200,6 +200,33 @@ impl Geometry {
     }
 }
 
+/// Minecraft-style item `display.gui` (degrees / sixteenths / unit scale).
+///
+/// Inventory and creative slots project the block/item model with this
+/// transform — the same contract authors set in Blockbench / models JSON.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ItemDisplay {
+    pub rotation: [f32; 3],
+    pub translation: [f32; 3],
+    pub scale: [f32; 3],
+}
+
+impl ItemDisplay {
+    /// Vanilla `block/block` gui defaults: isometric inventory cube.
+    pub const GUI_BLOCK: Self = Self {
+        rotation: [30.0, 225.0, 0.0],
+        translation: [0.0, 0.0, 0.0],
+        scale: [0.625, 0.625, 0.625],
+    };
+
+    /// Flat `item/generated` gui (no tilt).
+    pub const GUI_ITEM: Self = Self {
+        rotation: [0.0, 0.0, 0.0],
+        translation: [0.0, 0.0, 0.0],
+        scale: [1.0, 1.0, 1.0],
+    };
+}
+
 pub struct ShapeEntry {
     boxes: Vec<CellBox>,
     planes: Vec<Plane>,
@@ -207,6 +234,8 @@ pub struct ShapeEntry {
     faces: Vec<MeshFace>,
     /// PNG paths named by a Blockbench model, indexed by the face's texture id.
     textures: Vec<String>,
+    /// Inventory / creative projection for this model.
+    gui: ItemDisplay,
 }
 
 impl ShapeEntry {
@@ -218,6 +247,11 @@ impl ShapeEntry {
 
     pub fn textures(&self) -> &[String] {
         &self.textures
+    }
+
+    /// `display.gui` for this model (Blockbench / MC JSON, or block default).
+    pub fn gui_display(&self) -> ItemDisplay {
+        self.gui
     }
 }
 
@@ -1909,6 +1943,45 @@ impl Pack {
             .iter()
             .find(|item| item.id == id)
             .map(|item| item.shape.shape())
+    }
+
+    /// Shape + `display.gui` for an inventory / creative slot icon.
+    ///
+    /// Resolution mirrors Minecraft item models: a datapack item that names a
+    /// `.bbmodel` / model JSON wins; otherwise a placeable block uses
+    /// `models/block/<id>` (the same Shape the world meshes).
+    pub fn slot_model(&self, id: &str) -> Option<(Shape<'_>, ItemDisplay)> {
+        if id.is_empty() || id == "air" || id == "empty" {
+            return None;
+        }
+        if let Some(item) = self.model_items.iter().find(|item| item.id == id) {
+            return Some((item.shape.shape(), item.shape.gui_display()));
+        }
+        let block_id = if self.contains_block(id) {
+            id
+        } else if let Some(placed) = self.placed_block(id) {
+            // `placed_block` returns an owned String — resolve via contains + shape_of.
+            return self.slot_model_block(&placed);
+        } else {
+            return None;
+        };
+        self.slot_model_block(block_id)
+    }
+
+    fn slot_model_block(&self, id: &str) -> Option<(Shape<'_>, ItemDisplay)> {
+        let shape = self.shape_of(Block::new(id, 0));
+        if shape.is_empty() {
+            return None;
+        }
+        let gui = self
+            .blocks
+            .get(id)
+            .and_then(|def| match &def.geometry {
+                Geometry::Model(path) => self.models.get(path).map(|entry| entry.gui_display()),
+                Geometry::Shape(_) => None,
+            })
+            .unwrap_or(ItemDisplay::GUI_BLOCK);
+        Some((shape, gui))
     }
 
     /// True when `id` is bone meal from a composter.
@@ -4155,6 +4228,7 @@ fn parse_shapes(value: &Value) -> Result<Registry<ShapeEntry>, String> {
                     planes: Vec::new(),
                     faces: Vec::new(),
                     textures: Vec::new(),
+                    gui: ItemDisplay::GUI_BLOCK,
                 },
             )
             .map_err(|_| format!("duplicate shape {name}"))?;
@@ -4433,12 +4507,44 @@ fn parse_model_in(text: &str, model_path: &str) -> Result<ShapeEntry, String> {
             )?;
         }
     }
+    let gui = parse_display_gui(root).unwrap_or(ItemDisplay::GUI_BLOCK);
     Ok(ShapeEntry {
         boxes,
         planes,
         faces,
         textures: textures.into_iter().map(|texture| texture.path).collect(),
+        gui,
     })
+}
+
+/// Read Minecraft / Blockbench `display.gui` when present.
+fn parse_display_gui(root: &serde_json::Map<String, Value>) -> Option<ItemDisplay> {
+    let gui = root
+        .get("display")
+        .and_then(Value::as_object)?
+        .get("gui")
+        .and_then(Value::as_object)?;
+    let rotation = display_vec3(gui.get("rotation")).unwrap_or(ItemDisplay::GUI_BLOCK.rotation);
+    let translation =
+        display_vec3(gui.get("translation")).unwrap_or(ItemDisplay::GUI_BLOCK.translation);
+    let scale = display_vec3(gui.get("scale")).unwrap_or(ItemDisplay::GUI_BLOCK.scale);
+    Some(ItemDisplay {
+        rotation,
+        translation,
+        scale,
+    })
+}
+
+fn display_vec3(value: Option<&Value>) -> Option<[f32; 3]> {
+    let coords = value?.as_array()?;
+    if coords.len() != 3 {
+        return None;
+    }
+    let mut out = [0.0; 3];
+    for axis in 0..3 {
+        out[axis] = coords[axis].as_f64()? as f32;
+    }
+    Some(out)
 }
 
 #[derive(Clone)]
@@ -5640,6 +5746,15 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn grass_slot_model_uses_gui_display() {
+        let pack = Pack::builtin();
+        let (shape, gui) = pack.slot_model("grass").expect("grass slot model");
+        assert!(!shape.faces().is_empty());
+        assert_eq!(gui.rotation, ItemDisplay::GUI_BLOCK.rotation);
+        assert_eq!(gui.scale, ItemDisplay::GUI_BLOCK.scale);
     }
 
     #[test]
