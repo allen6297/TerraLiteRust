@@ -17735,6 +17735,84 @@ impl State {
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("water_bucket");
         let _ = self.hotbar.collect("nether_wart_block");
+        let _ = self.hotbar.collect("blaze_powder");
+        let _ = self.hotbar.brew_potion();
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Open the shrine brew panel with blaze powder fuel mid-bubble, then quit with a PNG.
+    pub fn arm_blaze_powder_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, bz) = rebuild_world::SHRINE_BREW;
+        let mut by = 4;
+        for y in 0..80 {
+            if self.world.block_at(bx, y, bz).id == "brewing_stand" {
+                by = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(bx, bz);
+        let focus = glam::Vec3::new(bx as f32 + 0.5, by as f32 + 0.95, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            bx as f32 - 2.6,
+            by as f32 + 1.4 + body::EYE_HEIGHT,
+            bz as f32 + 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let bubble_at = [bx as f32 + 0.5, by as f32 + 0.95, bz as f32 + 0.5];
+        self.note_shot_at = Some(bubble_at);
+        self.note_shot_pitch = 8;
+        self.note_shot_book = false;
+        self.note_shot_brew = true;
+        self.bubble_at = Some(bubble_at);
+        self.bubble_mix = 1.0;
+        self.found_bubble = true;
+        self.drops.brew_bubbles(bubble_at);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Bubble, bubble_at);
+        let _ = self.gui.open_brewing([bx, by, bz]);
+        self.gui.note_brew("brewed");
+        self.gui.push_chat("blaze powder");
+        self.gui.push_chat("brewed");
+        self.gui.push_chat("bubble");
+        self.found_shrine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("blaze_rod");
+        let _ = self.hotbar.collect("blaze_powder");
+        let _ = self.hotbar.collect("water_bucket");
+        let _ = self.hotbar.collect("nether_wart_block");
+        // Second powder fuels the water+wart healing brew.
+        let _ = self.hotbar.collect("blaze_powder");
         let _ = self.hotbar.brew_potion();
         self.hotbar_dirty = true;
         self.set_capture(false);

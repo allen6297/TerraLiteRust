@@ -7830,10 +7830,15 @@ mod tests {
         assert_eq!(pack.mace_smash("heavy_mace"), 5);
         assert_eq!(pack.mine_factor("heavy_mace", "stone"), 1.0);
         assert!(pack.is_core("heavy_core"));
+        assert!(pack.is_core("blaze_powder"));
         assert!(!pack.is_core("mace"));
         assert!(!pack.is_mace("heavy_core"));
         assert_eq!(pack.tool_icon("heavy_core"), Some("deepslate"));
+        assert_eq!(pack.tool_icon("blaze_powder"), Some("glowstone"));
         assert!(pack.core_ids().contains(&"heavy_core".to_string()));
+        assert!(pack.core_ids().contains(&"blaze_powder".to_string()));
+        assert_eq!(pack.tool_icon("awkward_potion"), Some("glass"));
+        assert_eq!(pack.food_of("awkward_potion"), Some(1));
         assert!(pack.is_key("trial_key"));
         assert!(!pack.is_key("heavy_core"));
         assert_eq!(pack.tool_icon("trial_key"), Some("copper_chest"));

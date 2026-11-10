@@ -2089,7 +2089,10 @@ impl Gui {
             return false;
         }
         self.brew_at = Some(at);
-        self.brew_note = "enter: water+wart, or healing+gravel splash".to_string();
+        self.brew_note =
+            "enter: water+powder / awkward+wart / water+wart+powder, or healing+gravel splash"
+                .to_string();
+
         self.brew_open = true;
         true
     }

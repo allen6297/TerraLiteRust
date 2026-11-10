@@ -721,13 +721,18 @@ impl Hotbar {
         "efficiency"
     }
 
-    /// The ingredient Enter would brew, when water is in the bar and the potion fits.
+    /// The ingredient Enter would brew, when the mix fits on the bar.
     ///
-    /// Prefer splash conversion (`healing_potion` + `gravel`) when both are present.
-    /// Otherwise `nether_wart_block` or `flower` with water. Missing pieces return `None`.
+    /// Prefer splash conversion (`healing_potion` + `gravel`). Then finish an
+    /// `awkward_potion` with wart/flower, fuel a water+wart brew with
+    /// `blaze_powder`, or start awkward from water + powder. Missing pieces
+    /// return `None`.
     pub fn brew_target(&self) -> Option<&'static str> {
         if self.can_brew_splash() {
             return Some("gravel");
+        }
+        if self.can_finish_awkward() {
+            return self.wart_or_flower();
         }
         let has_water = self
             .slots
@@ -736,18 +741,46 @@ impl Hotbar {
         if !has_water {
             return None;
         }
-        let (id, frees) = self.slots.iter().find_map(|slot| {
+        let has_powder = self
+            .slots
+            .iter()
+            .any(|slot| slot.is_some_and(|item| item.id == "blaze_powder" && item.count > 0));
+        if !has_powder {
+            return None;
+        }
+        if let Some(id) = self.wart_or_flower() {
+            let frees = self.slots.iter().any(|slot| {
+                slot.as_ref().is_some_and(|item| {
+                    (item.id == "nether_wart_block" || item.id == "flower") && item.count == 1
+                })
+            }) || self.slots.iter().any(|slot| {
+                slot.as_ref()
+                    .is_some_and(|item| item.id == "blaze_powder" && item.count == 1)
+            });
+            if !self.room_for("healing_potion") && !frees {
+                return None;
+            }
+            return Some(id);
+        }
+        let frees = self.slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|item| item.id == "blaze_powder" && item.count == 1)
+        });
+        if !self.room_for("awkward_potion") && !frees {
+            return None;
+        }
+        Some("blaze_powder")
+    }
+
+    fn wart_or_flower(&self) -> Option<&'static str> {
+        self.slots.iter().find_map(|slot| {
             let item = slot.as_ref()?;
             if (item.id == "nether_wart_block" || item.id == "flower") && item.count > 0 {
-                Some((item.id, item.count == 1))
+                Some(item.id)
             } else {
                 None
             }
-        })?;
-        if !self.room_for("healing_potion") && !frees {
-            return None;
-        }
-        Some(id)
+        })
     }
 
     fn can_brew_splash(&self) -> bool {
@@ -769,12 +802,32 @@ impl Hotbar {
         self.room_for("splash_healing_potion") || frees
     }
 
-    /// Brew one healing potion, or convert a healing potion + gravel into a splash.
+    fn can_finish_awkward(&self) -> bool {
+        let has_awkward = self
+            .slots
+            .iter()
+            .any(|slot| slot.is_some_and(|item| item.id == "awkward_potion" && item.count > 0));
+        if !has_awkward || self.wart_or_flower().is_none() {
+            return false;
+        }
+        let frees = self.slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|item| item.id == "awkward_potion" && item.count == 1)
+        }) || self.slots.iter().any(|slot| {
+            slot.as_ref().is_some_and(|item| {
+                (item.id == "nether_wart_block" || item.id == "flower") && item.count == 1
+            })
+        });
+        self.room_for("healing_potion") || frees
+    }
+
+    /// Brew healing, awkward, or splash from the stand mix.
     ///
-    /// Nether wart or a flower with water makes `healing_potion`. Gravel with an
-    /// existing healing potion makes `splash_healing_potion`. `"brewed"` spends
-    /// both. `"need water"` / `"need nether wart"` name the drink mix. `"no room"`
-    /// means the bar cannot hold the result.
+    /// Paths: healing + gravel → splash; awkward + wart/flower → healing;
+    /// water + wart/flower + blaze powder (fuel) → healing; water + powder →
+    /// awkward. `"brewed"` spends the mix. `"need water"` / `"need nether wart"`
+    /// / `"need blaze powder"` name the missing piece. `"no room"` means the
+    /// bar cannot hold the result.
     pub fn brew_potion(&mut self) -> &'static str {
         if self.can_brew_splash() {
             let Some(heal) = self.slots.iter().position(|slot| {
@@ -800,6 +853,31 @@ impl Hotbar {
             }
             return "brewed";
         }
+        if self.can_finish_awkward() {
+            let Some(awkward) = self.slots.iter().position(|slot| {
+                slot.is_some_and(|item| item.id == "awkward_potion" && item.count > 0)
+            }) else {
+                return "need water";
+            };
+            let Some(wart) = self.slots.iter().position(|slot| {
+                slot.is_some_and(|item| {
+                    (item.id == "nether_wart_block" || item.id == "flower") && item.count > 0
+                })
+            }) else {
+                return "need nether wart";
+            };
+            let frees = self.item(awkward).is_some_and(|item| item.count == 1)
+                || self.item(wart).is_some_and(|item| item.count == 1);
+            if !self.room_for("healing_potion") && !frees {
+                return "no room";
+            }
+            self.consume_at(awkward);
+            self.consume_at(wart);
+            if !self.collect("healing_potion") {
+                return "no room";
+            }
+            return "brewed";
+        }
         let Some(water) = self
             .slots
             .iter()
@@ -807,15 +885,38 @@ impl Hotbar {
         else {
             return "need water";
         };
-        let Some(wart) = self.slots.iter().position(|slot| {
+        let Some(powder) = self
+            .slots
+            .iter()
+            .position(|slot| slot.is_some_and(|item| item.id == "blaze_powder" && item.count > 0))
+        else {
+            return "need blaze powder";
+        };
+        let wart = self.slots.iter().position(|slot| {
             slot.is_some_and(|item| {
                 (item.id == "nether_wart_block" || item.id == "flower") && item.count > 0
             })
-        }) else {
-            return "need nether wart";
-        };
-        let wart_frees = self.item(wart).is_some_and(|item| item.count == 1);
-        if !self.room_for("healing_potion") && !wart_frees {
+        });
+        if let Some(wart) = wart {
+            let frees = self.item(wart).is_some_and(|item| item.count == 1)
+                || self.item(powder).is_some_and(|item| item.count == 1);
+            if !self.room_for("healing_potion") && !frees {
+                return "no room";
+            }
+            let single = self.item(water).is_some_and(|item| item.count == 1);
+            self.consume_at(water);
+            if single {
+                self.slots[water] = Some(fresh(Block::new("bucket", 0).id, 1));
+            }
+            self.consume_at(wart);
+            self.consume_at(powder);
+            if !self.collect("healing_potion") {
+                return "no room";
+            }
+            return "brewed";
+        }
+        let frees = self.item(powder).is_some_and(|item| item.count == 1);
+        if !self.room_for("awkward_potion") && !frees {
             return "no room";
         }
         let single = self.item(water).is_some_and(|item| item.count == 1);
@@ -823,8 +924,8 @@ impl Hotbar {
         if single {
             self.slots[water] = Some(fresh(Block::new("bucket", 0).id, 1));
         }
-        self.consume_at(wart);
-        if !self.collect("healing_potion") {
+        self.consume_at(powder);
+        if !self.collect("awkward_potion") {
             return "no room";
         }
         "brewed"
@@ -2521,23 +2622,43 @@ mod tests {
         let mut bar = Hotbar::new();
         assert_eq!(bar.brew_potion(), "need water");
         assert!(bar.collect("water_bucket"));
-        assert_eq!(bar.brew_potion(), "need nether wart");
+        assert_eq!(bar.brew_potion(), "need blaze powder");
         assert_eq!(bar.brew_target(), None);
         assert!(bar.collect("nether_wart_block"));
+        assert_eq!(bar.brew_potion(), "need blaze powder");
+        assert_eq!(bar.brew_target(), None);
+        assert!(bar.collect("blaze_powder"));
         assert_eq!(bar.brew_target(), Some("nether_wart_block"));
         assert_eq!(bar.brew_potion(), "brewed");
         assert_eq!(bar.brew_target(), None);
         assert_eq!(bar.slot(1), Some("bucket"));
-        assert_eq!(bar.slot(2), Some("healing_potion"));
-        assert_eq!(bar.count(2), 1);
+        assert!(bar.index_of("healing_potion").is_some());
+        assert!(bar.index_of("blaze_powder").is_none());
 
         let mut flower = Hotbar::new();
         assert!(flower.collect("water_bucket"));
         assert!(flower.collect("flower"));
+        assert!(flower.collect("blaze_powder"));
         assert_eq!(flower.brew_target(), Some("flower"));
         assert_eq!(flower.brew_potion(), "brewed");
         assert_eq!(flower.slot(1), Some("bucket"));
-        assert_eq!(flower.slot(2), Some("healing_potion"));
+        assert!(flower.index_of("healing_potion").is_some());
+    }
+
+    #[test]
+    fn a_brewing_stand_turns_water_and_powder_into_awkward_then_healing() {
+        let mut bar = Hotbar::new();
+        assert!(bar.collect("water_bucket"));
+        assert!(bar.collect("blaze_powder"));
+        assert_eq!(bar.brew_target(), Some("blaze_powder"));
+        assert_eq!(bar.brew_potion(), "brewed");
+        assert_eq!(bar.slot(1), Some("bucket"));
+        assert_eq!(bar.slot(2), Some("awkward_potion"));
+        assert!(bar.collect("nether_wart_block"));
+        assert_eq!(bar.brew_target(), Some("nether_wart_block"));
+        assert_eq!(bar.brew_potion(), "brewed");
+        assert!(bar.index_of("healing_potion").is_some());
+        assert!(bar.index_of("awkward_potion").is_none());
     }
 
     #[test]

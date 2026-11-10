@@ -563,6 +563,8 @@ mod tests {
                 "blackstone".to_string(),
                 "blackstone_bricks".to_string(),
                 "blast_furnace".to_string(),
+                "blaze_powder".to_string(),
+                "blaze_rod".to_string(),
                 "boat".to_string(),
                 "book".to_string(),
                 "bookshelf".to_string(),
@@ -1050,6 +1052,10 @@ mod tests {
             book.match_grid(&["breeze_rod".into(), "wool".into()])
                 .as_deref(),
             Some("wind_charge")
+        );
+        assert_eq!(
+            book.match_grid(&["blaze_rod".into()]).as_deref(),
+            Some("blaze_powder")
         );
         assert_eq!(
             book.match_grid(&["painting".into(), "chain".into()])
