@@ -16552,6 +16552,51 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Advancements list screen with mixed locked/unlocked rows, then quit with a PNG.
+    pub fn arm_advancements_screen_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.found_flight = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        let _ = self.advancements.unlock_silent("craft");
+        let _ = self.advancements.unlock_silent("kill");
+        let _ = self.advancements.unlock_silent("sleep");
+        self.menu.show_advancements();
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Mid-hold advancement toast (crafting milestone), then quit with a PNG.
     pub fn arm_advancement_toast_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -19976,6 +20021,11 @@ impl State {
                 match key.physical_key {
                     winit::keyboard::PhysicalKey::Code(KeyCode::Escape) => true,
                     winit::keyboard::PhysicalKey::Code(KeyCode::KeyM) if self.map_open => true,
+                    winit::keyboard::PhysicalKey::Code(KeyCode::KeyL)
+                        if self.menu.is_advancements() =>
+                    {
+                        true
+                    }
                     _ => false,
                 }
             }
@@ -20614,6 +20664,16 @@ impl State {
                 let _ = self.advancements.unlock("map");
                 self.clear_motion();
                 self.set_capture(false);
+            }
+            KeyCode::KeyL if pressed && self.playing && !self.gui.is_open() => {
+                if self.menu.is_advancements() {
+                    let action = self.menu.escape();
+                    self.apply_menu(action);
+                } else if !self.menu.is_open() {
+                    self.menu.show_advancements();
+                    self.clear_motion();
+                    self.set_capture(false);
+                }
             }
             KeyCode::KeyT if pressed && self.playing => {
                 if self.gui.open_chat() {
@@ -24868,6 +24928,7 @@ impl State {
             let death = self.dead.then(|| self.death_view());
             let map = (!self.dead && !self.menu.is_open() && !self.gui.is_open() && self.map_open)
                 .then(|| self.held_map_view());
+            let advancement_rows = self.advancements.screen_rows();
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -24879,6 +24940,7 @@ impl State {
                 death,
                 map,
                 toast,
+                &advancement_rows,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();

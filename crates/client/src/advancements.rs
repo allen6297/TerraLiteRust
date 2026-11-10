@@ -49,6 +49,15 @@ pub const MILESTONES: &[Milestone] = &[
     },
 ];
 
+/// One row on the advancements list screen.
+#[derive(Clone, Copy, Debug)]
+pub struct AdvancementRow {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub subtitle: &'static str,
+    pub unlocked: bool,
+}
+
 /// Paint state for the active toast (alpha + horizontal slide).
 #[derive(Clone, Debug)]
 pub struct ToastView {
@@ -104,6 +113,31 @@ impl Advancements {
 
     pub fn is_unlocked(&self, id: &str) -> bool {
         self.unlocked.contains(id)
+    }
+
+    /// Unlock without popping a toast (list-screen shots / install helpers).
+    pub fn unlock_silent(&mut self, id: &str) -> bool {
+        let Some(mile) = milestone(id) else {
+            return false;
+        };
+        if !self.unlocked.insert(mile.id.to_string()) {
+            return false;
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// Rows for the advancements list screen (baked order).
+    pub fn screen_rows(&self) -> Vec<AdvancementRow> {
+        MILESTONES
+            .iter()
+            .map(|mile| AdvancementRow {
+                id: mile.id,
+                title: mile.title,
+                subtitle: mile.subtitle,
+                unlocked: self.unlocked.contains(mile.id),
+            })
+            .collect()
     }
 
     /// Unlock a baked milestone. Returns true when a new toast starts.

@@ -22,7 +22,7 @@ use rebuild_world::Pack;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::advancements::ToastView;
+use crate::advancements::{AdvancementRow, ToastView};
 use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab, SettingsControl};
 use crate::hotbar::{self, Hotbar};
@@ -220,6 +220,7 @@ impl EguiHost {
         death: Option<DeathView>,
         map: Option<MapView>,
         toast: Option<ToastView>,
+        advancement_rows: &[AdvancementRow],
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
@@ -233,7 +234,7 @@ impl EguiHost {
             if let Some(view) = death {
                 pending = draw_death(ui, view);
             } else if menu.is_open() {
-                pending = draw_menu(ui, menu, binds);
+                pending = draw_menu(ui, menu, binds, advancement_rows);
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
                 draw_pinned_tip(ui, gui);
@@ -436,6 +437,123 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
         .corner_radius(CornerRadius::same(4))
         .min_size(Vec2::new(ui.available_width().max(280.0), 34.0));
     ui.add(btn)
+}
+
+fn draw_advancements_screen(
+    ui: &mut Ui,
+    menu: &mut Menu,
+    rows: &[AdvancementRow],
+) -> MenuAction {
+    let mut action = MenuAction::None;
+    let unlocked = rows.iter().filter(|row| row.unlocked).count();
+    let total = rows.len();
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show(ui, |ui| {
+            let avail = ui.available_size();
+            let panel_w = (avail.x * 0.72).clamp(420.0, 640.0);
+            let panel_h = (avail.y * 0.82).clamp(360.0, 620.0);
+            ui.vertical_centered(|ui| {
+                ui.add_space(((avail.y - panel_h) * 0.35).max(8.0));
+                show_panel(ui, panel_w, |ui| {
+                    ui.set_min_height(panel_h);
+                    ui.horizontal(|ui| {
+                        title_label(ui, "ADVANCEMENTS");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let back =
+                                egui::Button::new(RichText::new("Back").size(14.0).color(INK))
+                                    .fill(BUTTON)
+                                    .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                    .corner_radius(CornerRadius::same(4))
+                                    .min_size(Vec2::new(88.0, 30.0));
+                            if ui.add(back).clicked() {
+                                if let Some(index) =
+                                    menu.menu_rows().iter().position(|label| label == "back")
+                                {
+                                    action = menu.activate_row(index);
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("{unlocked} / {total} unlocked · Esc / L close"))
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("advancements_list")
+                        .max_height((panel_h - 90.0).max(200.0))
+                        .show(ui, |ui| {
+                            ui.set_width(panel_w - 36.0);
+                            for row in rows {
+                                Frame::new()
+                                    .fill(if row.unlocked { ROW } else { SLOT_WELL })
+                                    .stroke(Stroke::new(
+                                        1.0,
+                                        if row.unlocked { SELECT } else { SLOT_EDGE },
+                                    ))
+                                    .corner_radius(CornerRadius::same(5))
+                                    .inner_margin(Margin::symmetric(12, 10))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            let badge = if row.unlocked {
+                                                RichText::new("DONE")
+                                                    .size(11.0)
+                                                    .color(Color32::from_rgb(20, 18, 12))
+                                                    .strong()
+                                            } else {
+                                                RichText::new("LOCKED")
+                                                    .size(11.0)
+                                                    .color(MUTED)
+                                                    .strong()
+                                            };
+                                            let fill = if row.unlocked { SELECT } else { BUTTON };
+                                            Frame::new()
+                                                .fill(fill)
+                                                .corner_radius(CornerRadius::same(3))
+                                                .inner_margin(Margin::symmetric(6, 3))
+                                                .show(ui, |ui| {
+                                                    ui.label(badge);
+                                                });
+                                            ui.add_space(8.0);
+                                            ui.vertical(|ui| {
+                                                let title = if row.unlocked {
+                                                    RichText::new(row.title)
+                                                        .size(15.0)
+                                                        .color(INK)
+                                                        .strong()
+                                                } else {
+                                                    RichText::new("???")
+                                                        .size(15.0)
+                                                        .color(MUTED)
+                                                        .strong()
+                                                };
+                                                ui.label(title);
+                                                ui.label(
+                                                    RichText::new(if row.unlocked {
+                                                        row.subtitle
+                                                    } else {
+                                                        "Keep exploring"
+                                                    })
+                                                    .size(12.0)
+                                                    .color(if row.unlocked {
+                                                        DETAIL
+                                                    } else {
+                                                        MUTED
+                                                    }),
+                                                );
+                                            });
+                                        });
+                                    });
+                                ui.add_space(6.0);
+                            }
+                        });
+                });
+            });
+        });
+    action
 }
 
 fn draw_advancement_toast(ui: &mut Ui, toast: &ToastView) {
@@ -691,12 +809,20 @@ fn draw_map_overlay(ui: &mut Ui, view: &MapView, icons: &mut HashMap<String, Tex
         });
 }
 
-fn draw_menu(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuAction {
+fn draw_menu(
+    ui: &mut Ui,
+    menu: &mut Menu,
+    binds: &mut Keybinds,
+    advancement_rows: &[AdvancementRow],
+) -> MenuAction {
     if menu.is_keybinds() {
         return draw_keybinds(ui, menu, binds);
     }
     if menu.is_settings() {
         return draw_settings(ui, menu);
+    }
+    if menu.is_advancements() {
+        return draw_advancements_screen(ui, menu, advancement_rows);
     }
     let mut action = MenuAction::None;
     let title = menu.page_title();

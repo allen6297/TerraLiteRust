@@ -4363,6 +4363,7 @@ enum MenuPage {
     Main,
     Settings,
     Keybinds,
+    Advancements,
     Worlds,
     Pause,
     Closed,
@@ -4379,6 +4380,8 @@ pub struct Menu {
     settings_return: MenuPage,
     /// Keybinds returns here (pause or settings).
     keybinds_return: MenuPage,
+    /// Advancements list returns here (pause or closed).
+    advancements_return: MenuPage,
     selected: usize,
     size: rebuild_world::WorldSize,
     muted: bool,
@@ -4413,6 +4416,7 @@ impl Menu {
             page: MenuPage::Main,
             settings_return: MenuPage::Main,
             keybinds_return: MenuPage::Main,
+            advancements_return: MenuPage::Pause,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4441,6 +4445,7 @@ impl Menu {
             page: MenuPage::Closed,
             settings_return: MenuPage::Main,
             keybinds_return: MenuPage::Main,
+            advancements_return: MenuPage::Pause,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4930,6 +4935,7 @@ impl Menu {
             MenuPage::Main => "TERRALITE",
             MenuPage::Settings => "SETTINGS",
             MenuPage::Keybinds => "KEYBINDS",
+            MenuPage::Advancements => "ADVANCEMENTS",
             MenuPage::Worlds => "WORLDS",
             MenuPage::Pause => "PAUSED",
             MenuPage::Closed => "",
@@ -4955,6 +4961,7 @@ impl Menu {
             "join" => "localhost".to_string(),
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
+            "advancements" => "milestones unlocked this world".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
@@ -4999,7 +5006,8 @@ impl Menu {
         self.activate()
     }
 
-    /// Leave settings / keybinds for the page that opened them. Escape on pause resumes.
+    /// Leave settings / keybinds / advancements for the page that opened them.
+    /// Escape on pause resumes.
     pub fn escape(&mut self) -> MenuAction {
         match self.page {
             MenuPage::Settings => {
@@ -5011,6 +5019,16 @@ impl Menu {
                 self.page = self.keybinds_return;
                 self.selected = 0;
                 MenuAction::None
+            }
+            MenuPage::Advancements => {
+                let back = self.advancements_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
             }
             MenuPage::Worlds => {
                 self.page = MenuPage::Main;
@@ -5025,9 +5043,12 @@ impl Menu {
         }
     }
 
-    /// Leave settings or keybinds. The page that opened them stays up.
+    /// Leave settings, keybinds, or advancements. The page that opened them stays up.
     pub fn back(&mut self) {
-        if matches!(self.page, MenuPage::Settings | MenuPage::Keybinds) {
+        if matches!(
+            self.page,
+            MenuPage::Settings | MenuPage::Keybinds | MenuPage::Advancements
+        ) {
             let _ = self.escape();
         }
     }
@@ -5154,10 +5175,24 @@ impl Menu {
                 self.open_keybinds(MenuPage::Pause);
                 MenuAction::None
             }
+            MenuPage::Pause if label == "advancements" => {
+                self.open_advancements(MenuPage::Pause);
+                MenuAction::None
+            }
             MenuPage::Pause if label == "title" => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
                 MenuAction::Title
+            }
+            MenuPage::Advancements if label == "back" => {
+                let back = self.advancements_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
             }
             MenuPage::Worlds if label == "back" => {
                 self.page = MenuPage::Main;
@@ -5274,6 +5309,10 @@ impl Menu {
         self.page == MenuPage::Keybinds
     }
 
+    pub fn is_advancements(&self) -> bool {
+        self.page == MenuPage::Advancements
+    }
+
     fn open_keybinds(&mut self, back: MenuPage) {
         self.keybinds_return = back;
         self.page = MenuPage::Keybinds;
@@ -5283,6 +5322,17 @@ impl Menu {
     /// Open keybinds from the title menu (proof shots / automation).
     pub fn show_keybinds(&mut self) {
         self.open_keybinds(MenuPage::Main);
+    }
+
+    fn open_advancements(&mut self, back: MenuPage) {
+        self.advancements_return = back;
+        self.page = MenuPage::Advancements;
+        self.selected = 0;
+    }
+
+    /// Open the advancements list (proof shots / hotkey).
+    pub fn show_advancements(&mut self) {
+        self.open_advancements(MenuPage::Closed);
     }
 
     fn make_world(&mut self) {
@@ -5306,7 +5356,19 @@ impl Menu {
         match self.page {
             MenuPage::Settings => self.settings_rows(),
             MenuPage::Keybinds => vec!["back".to_string()],
-            MenuPage::Pause => self.pause.labels.clone(),
+            MenuPage::Advancements => vec!["back".to_string()],
+            MenuPage::Pause => {
+                let mut rows = self.pause.labels.clone();
+                // Older pause.json packs may omit the row — keep the screen reachable.
+                if !rows.iter().any(|label| label == "advancements") {
+                    let insert = rows
+                        .iter()
+                        .position(|label| label == "title")
+                        .unwrap_or(rows.len());
+                    rows.insert(insert, "advancements".to_string());
+                }
+                rows
+            }
             MenuPage::Worlds => {
                 let mut rows = self.worlds.clone();
                 rows.push("new".to_string());
@@ -5330,6 +5392,7 @@ impl Menu {
             "join" => "localhost".to_string(),
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
+            "advancements" => "milestones unlocked this world".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
@@ -5437,7 +5500,7 @@ const FALLBACK_PAUSE: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["resume", "host", "join", "settings", "keybinds", "title"]
+  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "title"]
 }"#;
 
 const FALLBACK_WORLDS: &str = r#"{
