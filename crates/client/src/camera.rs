@@ -264,14 +264,19 @@ pub fn crouch_drop(amount: f32) -> f32 {
     amount.clamp(0.0, 1.0) * (body::EYE_HEIGHT - body::CROUCH_EYE)
 }
 
-/// Sprint widens the view for a moment. A hit tightens it. A spyglass stays narrow.
+/// Degrees the view widens at a full sprint (before view-bob scale).
+pub const SPRINT_FOV: f32 = 10.0;
+
+/// Sprint widens the view. A hit tightens it. A spyglass stays narrow.
+///
+/// `sprint` is already scaled by the view-bob setting (off → no punch).
 pub fn punched_fov(base: f32, sprint: f32, hit: f32) -> f32 {
     if base < LOOK_FOV - 1.0 {
         return base;
     }
     let sprint = sprint.clamp(0.0, 1.0);
     let hit = hit.clamp(0.0, 1.0);
-    base + sprint * 6.0 - hit * 4.0
+    base + sprint * SPRINT_FOV - hit * 4.0
 }
 
 /// The ordinary view, in degrees.
@@ -311,9 +316,14 @@ mod tests {
         assert_eq!(nibble(0.0), 0.0);
         assert_eq!(nibble(1.0), 0.04);
         assert_eq!(nibble(2.0), 0.04);
-        assert_eq!(punched_fov(LOOK_FOV, 1.0, 0.0), LOOK_FOV + 6.0);
+        assert_eq!(punched_fov(LOOK_FOV, 1.0, 0.0), LOOK_FOV + SPRINT_FOV);
         assert_eq!(punched_fov(LOOK_FOV, 0.0, 1.0), LOOK_FOV - 4.0);
         assert_eq!(punched_fov(SPYGLASS_FOV, 1.0, 1.0), SPYGLASS_FOV);
+        assert_eq!(
+            punched_fov(LOOK_FOV, Bob::Low.scale(), 0.0),
+            LOOK_FOV + SPRINT_FOV * 0.4
+        );
+        assert_eq!(punched_fov(LOOK_FOV, Bob::Off.scale(), 0.0), LOOK_FOV);
         assert_eq!(head_bob(0.4, 0.0), (0.0, 0.0));
         let (full_side, full_rise) = head_bob(1.2, Bob::Full.scale());
         let (low_side, low_rise) = head_bob(1.2, Bob::Low.scale());

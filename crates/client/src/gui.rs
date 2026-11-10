@@ -5127,11 +5127,19 @@ pub fn bite_quads(width: f32, height: f32, amount: f32, drink: bool) -> Vec<Quad
 
 /// A small plate above the hotbar while Shift is held. `amount` fades from `0` to `1`.
 pub fn crouch_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "sneak")
+}
+
+/// A small plate above the hotbar while Ctrl-sprint is held.
+pub fn sprint_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "sprint")
+}
+
+fn status_plate(width: f32, height: f32, amount: f32, label: &str) -> Vec<Quad> {
     let amount = amount.clamp(0.0, 1.0);
     if amount <= 0.02 || width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
-    let label = "sneak";
     let text_w = measure(label, 1.0);
     let plate_w = text_w + 16.0;
     let plate_h = 18.0;
@@ -7892,6 +7900,10 @@ mod tests {
         let low = crouch_quads(200.0, 100.0, 1.0);
         assert!(low.iter().any(|quad| quad.color == WELL));
         assert!(low.iter().any(|quad| quad.color == INK));
+        assert!(sprint_quads(200.0, 100.0, 0.0).is_empty());
+        assert!(sprint_quads(200.0, 100.0, 1.0)
+            .iter()
+            .any(|quad| quad.color == WELL));
         assert_eq!(look_label("oak_log").as_deref(), Some("Oak Log"));
         assert_eq!(look_label("coal_ore").as_deref(), Some("Coal Ore"));
         assert_eq!(look_label("water").as_deref(), Some("Water"));

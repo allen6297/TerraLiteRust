@@ -845,6 +845,14 @@ pub struct State {
     crouch_shot_eye: glam::Vec3,
     crouch_shot_yaw: f32,
     crouch_shot_pitch: f32,
+    /// One-shot walk FOV vs sprint FOV stitch, then quit.
+    sprint_shot_path: Option<std::path::PathBuf>,
+    sprint_shot_frames: u32,
+    sprint_shot_phase: SprintShotPhase,
+    sprint_shot_walk: Option<CapturedRgba>,
+    sprint_shot_eye: glam::Vec3,
+    sprint_shot_yaw: f32,
+    sprint_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -865,8 +873,12 @@ pub struct State {
     bob_amount: f32,
     /// `0` standing, `1` fully crouched. Eases when Shift changes.
     crouch: f32,
-    /// `1` at the start of a sprint, then it fades. Widens the view.
+    /// `1` while sprinting (snaps open, eases shut). Widens the view.
     sprint_kick: f32,
+    /// Seconds of continuous sprint. Feeds the breath cue on stop.
+    sprint_run: f32,
+    /// HUD plate amount for the sprint cue, `0`..`1`.
+    sprint_show: f32,
     /// `1` when a hit lands, then it fades. Tightens the view.
     hit_kick: f32,
     /// Red edge, `1` just hurt down to `0`.
@@ -1682,6 +1694,13 @@ impl State {
             crouch_shot_eye: glam::Vec3::ZERO,
             crouch_shot_yaw: 0.0,
             crouch_shot_pitch: 0.0,
+            sprint_shot_path: None,
+            sprint_shot_frames: 0,
+            sprint_shot_phase: SprintShotPhase::Idle,
+            sprint_shot_walk: None,
+            sprint_shot_eye: glam::Vec3::ZERO,
+            sprint_shot_yaw: 0.0,
+            sprint_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1695,6 +1714,8 @@ impl State {
             bob_amount: 0.0,
             crouch: 0.0,
             sprint_kick: 0.0,
+            sprint_run: 0.0,
+            sprint_show: 0.0,
             hit_kick: 0.0,
             hurt_flash: 0.0,
             sip: 0.0,
@@ -5240,6 +5261,77 @@ impl State {
         self.pose_dirty = true;
     }
 
+    /// Walk FOV then sprint FOV from the stairs overlook, stitched side by side.
+    pub fn arm_sprint_shot(&mut self, path: std::path::PathBuf) {
+        self.sprint_shot_path = Some(path);
+        self.sprint_shot_frames = 0;
+        self.sprint_shot_phase = SprintShotPhase::WaitingWalk;
+        self.sprint_shot_walk = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        self.input.fast = false;
+        self.input.forward = false;
+        self.sprint_kick = 0.0;
+        self.sprint_show = 0.0;
+        self.sprint_asked = false;
+        self.sprint_blocked = false;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.sprint_shot_eye = eye;
+        self.sprint_shot_yaw = yaw;
+        self.sprint_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_sprint_shot_camera(&mut self) {
+        if self.sprint_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.sprint_shot_eye,
+            self.sprint_shot_yaw,
+            self.sprint_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.sprint_shot_eye;
+        self.posed_yaw = self.sprint_shot_yaw;
+        self.posed_pitch = self.sprint_shot_pitch;
+        self.pose_dirty = true;
+        match self.sprint_shot_phase {
+            SprintShotPhase::WaitingWalk | SprintShotPhase::Idle => {
+                self.input.fast = false;
+                self.input.forward = false;
+                self.sprint_kick = 0.0;
+                self.sprint_show = 0.0;
+                self.sprint_asked = false;
+                self.sprint_blocked = false;
+            }
+            SprintShotPhase::WaitingSprint => {
+                self.input.fast = true;
+                self.input.forward = true;
+                self.sprint_kick = 1.0;
+                self.sprint_show = 1.0;
+                self.sprint_asked = true;
+                self.sprint_blocked = false;
+                self.sprint_run = 1.0;
+            }
+        }
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -5404,6 +5496,75 @@ impl State {
                     self.quit = true;
                 }
             }
+        }
+    }
+
+    fn poll_sprint_shot(&mut self) {
+        let Some(path) = self.sprint_shot_path.clone() else {
+            return;
+        };
+        self.pin_sprint_shot_camera();
+        self.sprint_shot_frames = self.sprint_shot_frames.saturating_add(1);
+        if self.sprint_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.sprint_shot_frames > 600 {
+                eprintln!("sprint shot timed out");
+                self.sprint_shot_path = None;
+                self.sprint_shot_phase = SprintShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.sprint_shot_phase {
+            SprintShotPhase::WaitingWalk => match capture_window_rgba(&self.window) {
+                Ok(walk) => {
+                    self.sprint_shot_walk = Some(walk);
+                    self.sprint_shot_frames = 0;
+                    self.sprint_shot_phase = SprintShotPhase::WaitingSprint;
+                }
+                Err(err) => {
+                    eprintln!("sprint walk capture failed: {err}");
+                    if self.sprint_shot_frames > 400 {
+                        self.sprint_shot_path = None;
+                        self.sprint_shot_phase = SprintShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            SprintShotPhase::WaitingSprint => {
+                let Some(walk) = self.sprint_shot_walk.take() else {
+                    self.sprint_shot_path = None;
+                    self.sprint_shot_phase = SprintShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(sprint) => match stitch_held_light_proof(&walk, &sprint, &path) {
+                        Ok(()) => {
+                            eprintln!("sprint shot wrote {}", path.display());
+                            self.sprint_shot_path = None;
+                            self.sprint_shot_phase = SprintShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("sprint stitch failed: {err}");
+                            self.sprint_shot_path = None;
+                            self.sprint_shot_phase = SprintShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("sprint capture failed: {err}");
+                        self.sprint_shot_walk = Some(walk);
+                        if self.sprint_shot_frames > 400 {
+                            self.sprint_shot_path = None;
+                            self.sprint_shot_phase = SprintShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            SprintShotPhase::Idle => {}
         }
     }
 
@@ -7862,6 +8023,9 @@ impl State {
         self.jump_blocked = false;
         self.sprint_asked = false;
         self.sprint_blocked = false;
+        self.sprint_kick = 0.0;
+        self.sprint_run = 0.0;
+        self.sprint_show = 0.0;
         self.air_peak = self.camera.eye.y;
         self.boat.dismount();
         self.pig.dismount();
@@ -7939,7 +8103,6 @@ impl State {
         self.hurt_flash = (self.hurt_flash - dt * 2.2).max(0.0);
         self.sleep_fade = (self.sleep_fade - dt * 1.4).max(0.0);
         self.sip = (self.sip - dt * 1.8).max(0.0);
-        self.sprint_kick = (self.sprint_kick - dt * 3.5).max(0.0);
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
         self.bob_amount = (self.bob_amount - dt * 2.5).max(0.0);
         let crouch_goal = if self.input.crouch { 1.0 } else { 0.0 };
@@ -7973,6 +8136,7 @@ impl State {
         self.pin_held_light_shot_camera();
         self.pin_night_spawn_shot_camera();
         self.pin_crouch_shot_camera();
+        self.pin_sprint_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -8007,8 +8171,16 @@ impl State {
         }
         if self.boat.aboard() {
             self.steer_boat(dt);
+            self.sprint_asked = false;
+            self.sprint_blocked = false;
+            self.sprint_run = 0.0;
+            self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
         } else if self.pig.ridden() {
             self.steer_pig(dt);
+            self.sprint_asked = false;
+            self.sprint_blocked = false;
+            self.sprint_run = 0.0;
+            self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
         } else {
             let mut motion = self.input;
             if motion.crouch {
@@ -8035,6 +8207,7 @@ impl State {
             }
             let dashing =
                 motion.fast && (motion.forward || motion.back || motion.left || motion.right);
+            let mut sprinting = false;
             if dashing {
                 if !self.sprint_asked {
                     self.sprint_asked = true;
@@ -8045,15 +8218,31 @@ impl State {
                     ];
                     self.sprint_blocked = self.try_script_sprint(cell[0], cell[1], cell[2]);
                     if !self.sprint_blocked {
+                        // Snap open for a clear sprint start.
                         self.sprint_kick = 1.0;
+                        self.sprint_run = 0.0;
                     }
                 }
                 if self.sprint_blocked {
                     motion.fast = false;
+                } else {
+                    sprinting = true;
+                    self.sprint_kick = 1.0;
+                    self.sprint_run += dt;
                 }
             } else {
+                if self.sprint_asked && !self.sprint_blocked && self.sprint_run > 0.35 {
+                    self.audio.play(crate::audio::Sound::Breath);
+                    if self.sprint_run > 2.5 {
+                        self.gui.push_chat("winded");
+                    }
+                }
                 self.sprint_asked = false;
                 self.sprint_blocked = false;
+                self.sprint_run = 0.0;
+            }
+            if !sprinting {
+                self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
             }
             self.camera
                 .step_paced(dt, &motion, &self.world, &obstacles, self.hunger.pace());
@@ -8067,6 +8256,9 @@ impl State {
             self.note_cactus(dt);
             self.note_magma(dt);
         }
+        let sprinting_now = self.sprint_asked && !self.sprint_blocked;
+        let show_goal = if sprinting_now { 1.0 } else { 0.0 };
+        self.sprint_show += (show_goal - self.sprint_show) * (dt * 12.0).min(1.0);
         let moving = self.input.forward || self.input.back || self.input.left || self.input.right;
         {
             let look = self.camera.walk_axes().0;
@@ -8078,10 +8270,12 @@ impl State {
                 self.dig.is_held(),
             );
         }
-        match self
-            .hunger
-            .tick(dt, moving, self.dig.is_held(), self.hearts < body::HEARTS)
-        {
+        match self.hunger.tick(
+            dt,
+            moving,
+            self.dig.is_held() || sprinting_now,
+            self.hearts < body::HEARTS,
+        ) {
             crate::body::HungerTick::Hurt => self.apply_damage(1),
             crate::body::HungerTick::Heal => {
                 if self.hearts < body::HEARTS {
@@ -8483,9 +8677,14 @@ impl State {
 
         let aspect = self.size.width as f32 / self.size.height as f32;
         let base = crate::camera::look_fov(self.spyglass_zoomed());
-        let fov = crate::camera::punched_fov(base, self.sprint_kick, self.hit_kick);
+        let bob_scale = self.menu.bob().scale();
+        let fov = crate::camera::punched_fov(
+            base,
+            self.sprint_kick * bob_scale,
+            self.hit_kick,
+        );
         let (side, rise) =
-            crate::camera::head_bob(self.bob_phase, self.bob_amount * self.menu.bob().scale());
+            crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
         let mut view_eye = self.camera.bobbed_eye(
             side,
             rise - crate::camera::nibble(self.sip) - crate::camera::crouch_drop(self.crouch),
@@ -8957,6 +9156,9 @@ impl State {
         if self.crouch > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::crouch_quads(gui_w, gui_h, self.crouch));
         }
+        if self.sprint_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::sprint_quads(gui_w, gui_h, self.sprint_show));
+        }
         if self.sleep_fade > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sleep_quads(gui_w, gui_h, self.sleep_fade));
         }
@@ -9140,6 +9342,7 @@ impl State {
         self.poll_night_spawn_shot();
         self.poll_bed_sleep_shot();
         self.poll_crouch_shot();
+        self.poll_sprint_shot();
     }
 }
 
@@ -9148,6 +9351,13 @@ enum HeldLightShotPhase {
     Idle,
     WaitingDark,
     WaitingLit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SprintShotPhase {
+    Idle,
+    WaitingWalk,
+    WaitingSprint,
 }
 
 struct CapturedRgba {

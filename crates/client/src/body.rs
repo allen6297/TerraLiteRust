@@ -283,9 +283,9 @@ impl Hunger {
         if self.food <= 0 { STARVE_PACE } else { 1.0 }
     }
 
-    /// Drain while moving or mining. At zero, a heart is spent every few seconds.
+    /// Drain while moving, mining, or sprinting (`hard`). At zero, hearts drain.
     /// Well-fed, still, and wounded restores a heart and spends one food.
-    pub fn tick(&mut self, dt: f32, moving: bool, mining: bool, wounded: bool) -> HungerTick {
+    pub fn tick(&mut self, dt: f32, moving: bool, hard: bool, wounded: bool) -> HungerTick {
         if dt <= 0.0 {
             return HungerTick::None;
         }
@@ -300,7 +300,7 @@ impl Hunger {
             return HungerTick::None;
         }
         self.starve = 0.0;
-        if !moving && !mining {
+        if !moving && !hard {
             if wounded && self.food >= REGEN_FOOD {
                 self.regen += dt;
                 if self.regen >= REGEN_EVERY {
@@ -315,7 +315,7 @@ impl Hunger {
             return HungerTick::None;
         }
         self.regen = 0.0;
-        let per = if mining { WORK_HUNGER } else { WALK_HUNGER };
+        let per = if hard { WORK_HUNGER } else { WALK_HUNGER };
         self.work += dt;
         while self.work >= per && self.food > 0 {
             self.work -= per;
