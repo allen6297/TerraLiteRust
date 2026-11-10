@@ -1046,6 +1046,8 @@ pub struct State {
     found_fireflies: bool,
     /// Once: walked up to the pad wolf.
     found_wolf: bool,
+    /// Once: walked up to the pad cat.
+    found_cat: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -2027,6 +2029,7 @@ impl State {
             found_compound: false,
             found_fireflies: false,
             found_wolf: false,
+            found_cat: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3748,6 +3751,10 @@ impl State {
             self.found_wolf = true;
             self.gui.push_chat("a wolf");
         }
+        if !self.found_cat && near(crate::mobs::CAT_PAD.0, crate::mobs::CAT_PAD.1) {
+            self.found_cat = true;
+            self.gui.push_chat("a cat");
+        }
     }
 
     /// Once: hold raw, look at a campfire or smoker — tip to use it.
@@ -5057,7 +5064,7 @@ impl State {
         }
     }
 
-    /// Feed the cat raw meat, or sit a tamed cat, when the look ray hits it.
+    /// Feed the cat raw meat, or empty-hand sit/follow a tamed cat.
     fn try_cat(&mut self) -> bool {
         let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
         let forward = self.camera.forward();
@@ -5065,14 +5072,18 @@ impl State {
         if !self.cat.aimed(eye, forward) {
             return false;
         }
+        let held = self.hotbar.slot(self.hotbar.selected());
         if self.cat.tamed() {
+            if held.is_some() {
+                return false;
+            }
             self.cat.sit();
             self.rebuild_cat();
             self.gui
                 .push_chat(if self.cat.sitting() { "sit" } else { "follow" });
             return true;
         }
-        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+        let Some(id) = held else {
             return false;
         };
         if !crate::mobs::cat_food(id) {
@@ -8134,6 +8145,72 @@ impl State {
             )
         };
         self.hotbar_dirty = true;
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Tamed cat companion sitting by the player, then quit with a PNG.
+    pub fn arm_cat_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 8..=14 {
+            for x in 9..=15 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 1..=3 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        self.cat.place_at([12.5, 1.0, 11.2]);
+        let _ = self.cat.feed();
+        let _ = self.cat.sit();
+        self.rebuild_cat();
+        self.found_cat = true;
+        self.gui.push_chat("sit");
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        let focus = glam::Vec3::from(self.cat.origin()) + glam::Vec3::new(0.0, 0.3, 0.0);
+        let eye = glam::Vec3::new(focus.x - 0.3, focus.y + 1.25 + body::EYE_HEIGHT, focus.z - 2.4);
         self.camera = Camera::looking_at(eye, focus);
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;

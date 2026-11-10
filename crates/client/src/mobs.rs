@@ -1617,6 +1617,8 @@ pub fn cat_food(id: &str) -> bool {
 }
 
 const CAT_HOME: [f32; 3] = [12.0, 1.0, 10.0];
+/// Pad home for tips and shots.
+pub const CAT_PAD: (i32, i32) = (12, 10);
 /// The tamed cat hisses when the zombie is this close, in blocks.
 const SCARE: f32 = 4.0;
 /// Entity ticks between hisses.
@@ -1649,6 +1651,12 @@ impl Cat {
         self.origin
     }
 
+    /// Put the body somewhere for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.loose = 0;
+    }
+
     pub fn tamed(&self) -> bool {
         self.tamed
     }
@@ -1667,7 +1675,8 @@ impl Cat {
         true
     }
 
-    /// Sit or stand. False when the cat is still wild. True when it sits.
+    /// Empty-hand companion toggle: sit or stand-and-follow.
+    /// False when the cat is still wild. True when it sits.
     pub fn sit(&mut self) -> bool {
         if !self.tamed {
             return false;
