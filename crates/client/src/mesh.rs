@@ -42,7 +42,8 @@ use std::collections::{HashMap, HashSet};
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
     Plane, Shape, buffer_level, buffer_max, compound_accepts, conduit_edge_tube, conduit_fill_span,
-    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, is_lamp, lamp_on, shape_of,
+    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, is_lamp, is_spout, is_tank,
+    lamp_on, pump_dir, pump_on, shape_of, tank_level,
 };
 
 use crate::daylight;
@@ -1591,6 +1592,35 @@ fn mesh_partial_shapes(
                             max: [11, 11, 11],
                         }]);
                         mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                    }
+                    continue;
+                }
+                if is_spout(block.id) {
+                    let shape = shape_of(block);
+                    if !shape.is_empty() {
+                        mesh_cell(block, shape, cell, sample, light, sun, mesh);
+                        if !shape.faces().is_empty() {
+                            mesh_faces(block, shape, cell, sample, light, sun, mesh);
+                        }
+                    }
+                    // Open spout with water pressure shows a drip from the nozzle.
+                    if pump_on(block.metadata) {
+                        let dir = pump_dir(block.metadata);
+                        let intake = sample(
+                            cell[0] - dir[0],
+                            cell[1] - dir[1],
+                            cell[2] - dir[2],
+                        );
+                        let wet = intake.fill == FILL_WATER
+                            || (is_tank(intake.id) && tank_level(intake) > 0);
+                        if wet {
+                            let drip = Block::new("water", 0);
+                            let drip_shape = Shape::from_boxes(&[CellBox {
+                                min: [7, 0, 7],
+                                max: [9, 3, 9],
+                            }]);
+                            mesh_cell(drip, drip_shape, cell, sample, light, sun, mesh);
+                        }
                     }
                     continue;
                 }

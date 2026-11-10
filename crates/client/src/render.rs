@@ -5639,7 +5639,18 @@ impl State {
         }
         if is_spout(block.id) {
             let power = if pump_on(block.metadata) { "open" } else { "closed" };
-            return Some(format!("Spout  {power}"));
+            let dir = pump_dir(block.metadata);
+            let intake = self.world.block_at(
+                target.block[0] - dir[0],
+                target.block[1] - dir[1],
+                target.block[2] - dir[2],
+            );
+            let spray = is_tank(intake.id) && intake.fill == FILL_WATER && tank_level(intake) > 1;
+            return Some(if spray && pump_on(block.metadata) {
+                format!("Spout  {power}  spray")
+            } else {
+                format!("Spout  {power}")
+            });
         }
         if is_tank(block.id) {
             let level = tank_level(block);
