@@ -154,6 +154,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
+    stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
@@ -401,6 +402,20 @@ pub const RUINED_PORTAL_CHEST: (i32, i32) = (RUINED_PORTAL.0 + 2, RUINED_PORTAL.
 
 const PORTAL_CHUNK: (i32, i32) = (-2, -2);
 
+/// Desert temple remnant, east of the demo pad.
+///
+/// The chunk is `(2, 0)`. Walk east from the stairs onto the sand. Hollow
+/// sandstone square with a chest inside and a pressure plate at the south gate.
+pub const DESERT_TEMPLE: (i32, i32) = (40, 8);
+
+/// Loot chest in the temple interior, one block north of center.
+pub const DESERT_TEMPLE_CHEST: (i32, i32) = (DESERT_TEMPLE.0, DESERT_TEMPLE.1 + 1);
+
+/// Stone plate on the south gate — a quiet trap remnant.
+pub const DESERT_TEMPLE_PLATE: (i32, i32) = (DESERT_TEMPLE.0, DESERT_TEMPLE.1 - 3);
+
+const TEMPLE_CHUNK: (i32, i32) = (2, 0);
+
 /// Broken stone-brick shrine, southeast of the demo pad.
 ///
 /// The chunk is `(2, 2)`. Walk east past the pad, then south. A chest sits on
@@ -555,7 +570,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let guaranteed = (chunk_x, chunk_z) == PORTAL_CHUNK;
     let reserved = matches!(
         (chunk_x, chunk_z),
-        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | (0, 0)
+        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | TEMPLE_CHUNK | (0, 0)
     );
     if !guaranteed {
         if reserved || hash2(chunk_x.wrapping_mul(31), chunk_z.wrapping_mul(17)) % 113 != 0 {
@@ -646,6 +661,105 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
     let gold_lx = (cx + 1 - chunk_x * 16) as u8;
     let gold_lz = (cz + 2 - chunk_z * 16) as u8;
     blocks.push((gold_lx, floor, gold_lz, Block::new("gilded_blackstone", 0)));
+}
+
+/// Hollow sandstone square + sand apron + chest. Guaranteed in [`TEMPLE_CHUNK`];
+/// rare scatter only in desert biomes.
+fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    let guaranteed = (chunk_x, chunk_z) == TEMPLE_CHUNK;
+    let reserved = matches!(
+        (chunk_x, chunk_z),
+        CAMP_CHUNK | SHAFT_CHUNK | SHRINE_CHUNK | CLAY_CHUNK | PORTAL_CHUNK | (0, 0)
+    );
+    if !guaranteed {
+        if reserved {
+            return;
+        }
+        let cx = chunk_x * 16 + 8;
+        let cz = chunk_z * 16 + 8;
+        if biome_at(cx, cz) != Biome::Desert {
+            return;
+        }
+        if hash2(chunk_x.wrapping_mul(41), chunk_z.wrapping_mul(19)) % 97 != 0 {
+            return;
+        }
+    }
+    let (cx, cz) = if guaranteed {
+        DESERT_TEMPLE
+    } else {
+        (chunk_x * 16 + 8, chunk_z * 16 + 8)
+    };
+    let floor = column_height(cx, cz, Biome::Desert).max(2);
+    // Clear a 9×9 pad and lay sand so the remnant reads as desert.
+    let x0 = ((cx - 4) - chunk_x * 16) as u8;
+    let x1 = ((cx + 4) - chunk_x * 16) as u8;
+    let z0 = ((cz - 4) - chunk_z * 16) as u8;
+    let z1 = ((cz + 4) - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x >= x0 && *x <= x1 && *z >= z0 && *z <= z1 && *y + 1 >= floor));
+    let sand = Block::new("sand", 0);
+    let sandstone = Block::new("sandstone", 0);
+    let red = Block::new("red_sandstone", 0);
+    for dz in -4..=4 {
+        for dx in -4..=4 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.push((lx, floor - 1, lz, sand));
+        }
+    }
+    // Hollow 7×7 square walls (relative −3..+3), broken gaps + taller corners.
+    for dz in -3i32..=3 {
+        for dx in -3i32..=3 {
+            let edge = dx.abs() == 3 || dz.abs() == 3;
+            if !edge {
+                continue;
+            }
+            // South gate opening.
+            if dz == -3 && dx.abs() <= 1 {
+                continue;
+            }
+            // Weathered gaps.
+            if (dx + dz * 2).rem_euclid(5) == 0 {
+                continue;
+            }
+            let corner = dx.abs() == 3 && dz.abs() == 3;
+            let tall = if corner { 3u16 } else { 2 };
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            for dy in 0..tall {
+                let block = if corner && dy == tall - 1 {
+                    red
+                } else if (dx + dy as i32).rem_euclid(3) == 0 {
+                    red
+                } else {
+                    sandstone
+                };
+                blocks.push((lx, floor + dy, lz, block));
+            }
+        }
+    }
+    // Low step pyramid nub on the north wall (reads "temple", not just a box).
+    for &(dx, dy) in &[(0, 2), (-1, 2), (1, 2), (0, 3)] {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + 3 - chunk_z * 16) as u8;
+        blocks.push((lx, floor + dy, lz, if dy == 3 { red } else { sandstone }));
+    }
+    // Interior chest + south-gate pressure plate remnant.
+    let (chest_x, chest_z) = if guaranteed {
+        DESERT_TEMPLE_CHEST
+    } else {
+        (cx, cz + 1)
+    };
+    let chest_lx = (chest_x - chunk_x * 16) as u8;
+    let chest_lz = (chest_z - chunk_z * 16) as u8;
+    blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
+    let (plate_x, plate_z) = if guaranteed {
+        DESERT_TEMPLE_PLATE
+    } else {
+        (cx, cz - 3)
+    };
+    let plate_lx = (plate_x - chunk_x * 16) as u8;
+    let plate_lz = (plate_z - chunk_z * 16) as u8;
+    blocks.push((plate_lx, floor, plate_lz, Block::new("plate", 0)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -785,10 +899,19 @@ pub enum Biome {
     Forest,
     Hills,
     Marsh,
+    Desert,
 }
 
-/// Plains, forest, hills, or marsh. The noise cell is 32 blocks, the same on every world size.
+/// Guaranteed sand pocket around the demo desert temple.
+fn desert_pocket(x: i32, z: i32) -> bool {
+    (x - DESERT_TEMPLE.0).abs() <= 14 && (z - DESERT_TEMPLE.1).abs() <= 14
+}
+
+/// Plains, forest, hills, marsh, or desert. The noise cell is 32 blocks, the same on every world size.
 pub fn biome_at(x: i32, z: i32) -> Biome {
+    if desert_pocket(x, z) {
+        return Biome::Desert;
+    }
     let n = value_noise(x, z, 32);
     if n < 0.32 {
         Biome::Marsh
@@ -796,8 +919,10 @@ pub fn biome_at(x: i32, z: i32) -> Biome {
         Biome::Plains
     } else if n < 0.78 {
         Biome::Forest
-    } else {
+    } else if n < 0.90 {
         Biome::Hills
+    } else {
+        Biome::Desert
     }
 }
 
@@ -805,7 +930,7 @@ fn column_height(x: i32, z: i32, biome: Biome) -> u16 {
     let n = value_noise(x, z, 8);
     let height = match biome {
         Biome::Marsh => 3,
-        Biome::Plains => 4 + (n > 0.72) as u16,
+        Biome::Plains | Biome::Desert => 4 + (n > 0.72) as u16,
         Biome::Forest => 4 + (n > 0.4) as u16,
         Biome::Hills => 5 + (n * 7.0) as u16,
     };
@@ -841,6 +966,7 @@ fn column_block(
             Biome::Hills => Block::new("grass", 2),
             Biome::Forest => Block::new("grass", 1),
             Biome::Plains => Block::new("grass", 0),
+            Biome::Desert => Block::new("sand", 0),
         };
     }
     if y + 3 >= height {
@@ -873,6 +999,7 @@ pub fn sky_tint(biome: Biome) -> [f32; 3] {
         Biome::Forest => [0.72, 0.92, 0.78],
         Biome::Hills => [0.82, 0.88, 1.0],
         Biome::Marsh => [0.78, 0.90, 0.68],
+        Biome::Desert => [1.08, 0.96, 0.72],
     }
 }
 
@@ -1060,7 +1187,9 @@ mod tests {
         assert!(sky_tint(Biome::Forest)[1] > sky_tint(Biome::Forest)[0]);
         assert!(sky_tint(Biome::Hills)[2] > sky_tint(Biome::Hills)[0]);
         assert!(sky_tint(Biome::Marsh)[1] > sky_tint(Biome::Marsh)[2]);
+        assert!(sky_tint(Biome::Desert)[0] > sky_tint(Biome::Desert)[2]);
         assert_eq!(biome_at(40, 24), biome_at(40, 24));
+        assert_eq!(biome_at(DESERT_TEMPLE.0, DESERT_TEMPLE.1), Biome::Desert);
     }
 
     #[test]
@@ -1287,6 +1416,50 @@ mod tests {
         assert_eq!(
             cluster
                 .block_at(RUINED_PORTAL_CHEST.0, i32::from(floor), RUINED_PORTAL_CHEST.1)
+                .id,
+            "chest"
+        );
+    }
+
+    #[test]
+    fn a_desert_temple_stands_east_of_the_pad() {
+        assert_eq!(biome_at(DESERT_TEMPLE.0, DESERT_TEMPLE.1), Biome::Desert);
+        let temple = generate_chunk(TEMPLE_CHUNK.0, TEMPLE_CHUNK.1);
+        let (cx, cz) = DESERT_TEMPLE;
+        let lx = (cx - TEMPLE_CHUNK.0 * 16) as u8;
+        let lz = (cz - TEMPLE_CHUNK.1 * 16) as u8;
+        let floor = column_height(cx, cz, Biome::Desert).max(2);
+        let mut sandstone = false;
+        for y in floor..(floor + 4) {
+            if temple.block(lx + 3, y, lz).id == "sandstone"
+                || temple.block(lx + 3, y, lz).id == "red_sandstone"
+            {
+                sandstone = true;
+            }
+        }
+        assert!(sandstone, "east wall should include sandstone");
+        let chest_lx = (DESERT_TEMPLE_CHEST.0 - TEMPLE_CHUNK.0 * 16) as u8;
+        let chest_lz = (DESERT_TEMPLE_CHEST.1 - TEMPLE_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            temple.block(chest_lx, floor, chest_lz).id,
+            "chest",
+            "loot chest inside the square"
+        );
+        let plate_lx = (DESERT_TEMPLE_PLATE.0 - TEMPLE_CHUNK.0 * 16) as u8;
+        let plate_lz = (DESERT_TEMPLE_PLATE.1 - TEMPLE_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            temple.block(plate_lx, floor, plate_lz).id,
+            "plate",
+            "pressure plate at the south gate"
+        );
+        assert_ne!(TEMPLE_CHUNK, CAMP_CHUNK);
+        assert_ne!(TEMPLE_CHUNK, PORTAL_CHUNK);
+        assert_ne!(TEMPLE_CHUNK, SHRINE_CHUNK);
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster
+                .block_at(DESERT_TEMPLE_CHEST.0, i32::from(floor), DESERT_TEMPLE_CHEST.1)
                 .id,
             "chest"
         );

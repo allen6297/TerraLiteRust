@@ -5,6 +5,7 @@
 //! of the camp chest finds. `data/terralite/loot/shrine_chest.json` is the
 //! southeast shrine. `data/terralite/loot/mine_chest.json` is the west mine
 //! mouth. `data/terralite/loot/portal_chest.json` is the northwest ruined portal.
+//! `data/terralite/loot/temple_chest.json` is the east desert temple.
 //! `data/terralite/loot/blocks/<id>.json` overrides break drops for that
 //! block (`drops` only). `loot.chest` / ModAPI `chestLoot` replaces a table's
 //! `drops` list. `drops` is the ordinary list. `omen` is the list after an
@@ -76,6 +77,15 @@ pub fn portal_chest_file() -> PathBuf {
 /// The ruined-portal chest table from the data pack.
 pub fn load_portal_chest() -> Result<Table, String> {
     load_chest("portal_chest", &portal_chest_file())
+}
+
+pub fn temple_chest_file() -> PathBuf {
+    loot_file("temple_chest")
+}
+
+/// The desert-temple chest table from the data pack.
+pub fn load_temple_chest() -> Result<Table, String> {
+    load_chest("temple_chest", &temple_chest_file())
 }
 
 fn load_chest(table: &str, path: &std::path::Path) -> Result<Table, String> {

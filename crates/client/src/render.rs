@@ -1350,6 +1350,8 @@ pub struct State {
     found_mine: bool,
     /// Once: walked up to the northwest ruined portal.
     found_portal: bool,
+    /// Once: walked up to the east desert temple.
+    found_temple: bool,
     found_rails: bool,
     found_clay: bool,
     /// Once: walked up to the starter compound demo by the pad.
@@ -1526,6 +1528,12 @@ pub struct State {
     portal_shot_eye: glam::Vec3,
     portal_shot_yaw: f32,
     portal_shot_pitch: f32,
+    /// One-shot desert temple proof PNG, then quit.
+    temple_shot_path: Option<std::path::PathBuf>,
+    temple_shot_frames: u32,
+    temple_shot_eye: glam::Vec3,
+    temple_shot_yaw: f32,
+    temple_shot_pitch: f32,
     /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
     wind_mix: f32,
     /// Eased water-edge proximity, `0` far through `1` at the surface.
@@ -2565,6 +2573,7 @@ impl State {
             found_shrine: false,
             found_mine: false,
             found_portal: false,
+            found_temple: false,
             found_rails: false,
             found_clay: false,
             found_compound: false,
@@ -2666,6 +2675,11 @@ impl State {
             portal_shot_eye: glam::Vec3::ZERO,
             portal_shot_yaw: 0.0,
             portal_shot_pitch: 0.0,
+            temple_shot_path: None,
+            temple_shot_frames: 0,
+            temple_shot_eye: glam::Vec3::ZERO,
+            temple_shot_yaw: 0.0,
+            temple_shot_pitch: 0.0,
             wind_mix: 0.0,
             lap_mix: 0.0,
             lap_at: None,
@@ -6150,6 +6164,15 @@ impl State {
             self.found_portal = true;
             self.gui.push_chat("a ruined portal");
         }
+        if !self.found_temple
+            && near(
+                rebuild_world::DESERT_TEMPLE.0,
+                rebuild_world::DESERT_TEMPLE.1,
+            )
+        {
+            self.found_temple = true;
+            self.gui.push_chat("a desert temple");
+        }
         if !self.found_lodestone
             && near(
                 rebuild_world::SHAFT_LODESTONE.0,
@@ -6705,7 +6728,8 @@ impl State {
         let fresh = fresh_camp(has_record, hit.block[0], hit.block[2], self.omen)
             .or_else(|| fresh_shrine(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_mine(has_record, hit.block[0], hit.block[2], self.omen))
-            .or_else(|| fresh_portal(has_record, hit.block[0], hit.block[2], self.omen));
+            .or_else(|| fresh_portal(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_temple(has_record, hit.block[0], hit.block[2], self.omen));
         if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
@@ -12855,6 +12879,108 @@ impl State {
                 eprintln!("portal shot failed: {err}");
                 if self.portal_shot_frames > 260 {
                     self.portal_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    /// Sandstone desert temple east of the pad, then quit.
+    pub fn arm_desert_temple_shot(&mut self, path: std::path::PathBuf) {
+        self.temple_shot_path = Some(path);
+        self.temple_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 0));
+        self.clock.set_time_of_day(0.28);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_temple = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a desert temple");
+
+        let (cx, cz) = rebuild_world::DESERT_TEMPLE;
+        let mut cy = 4;
+        for y in 0..80 {
+            let id = self.world.block_at(cx, y, cz).id;
+            if id == "sandstone" || id == "red_sandstone" || id == "sand" {
+                cy = y;
+                if id == "sandstone" || id == "red_sandstone" {
+                    break;
+                }
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 2.0, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            cy as f32 + 1.8 + body::EYE_HEIGHT,
+            cz as f32 - 7.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.temple_shot_eye = eye;
+        self.temple_shot_yaw = yaw;
+        self.temple_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_temple_shot_camera(&mut self) {
+        if self.temple_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.temple_shot_eye,
+            self.temple_shot_yaw,
+            self.temple_shot_pitch,
+        );
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.temple_shot_eye;
+        self.posed_yaw = self.temple_shot_yaw;
+        self.posed_pitch = self.temple_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+    }
+
+    fn poll_temple_shot(&mut self) {
+        let Some(path) = self.temple_shot_path.clone() else {
+            return;
+        };
+        self.pin_temple_shot_camera();
+        self.temple_shot_frames = self.temple_shot_frames.saturating_add(1);
+        if self.temple_shot_frames < 120 || !self.chunk_bake.is_idle() {
+            if self.temple_shot_frames > 600 {
+                eprintln!("temple shot timed out");
+                self.temple_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("temple shot wrote {}", path.display());
+                self.temple_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("temple shot failed: {err}");
+                if self.temple_shot_frames > 260 {
+                    self.temple_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -24334,6 +24460,7 @@ impl State {
             rebuild_world::Biome::Plains | rebuild_world::Biome::Forest => 0.95,
             rebuild_world::Biome::Hills => 0.4,
             rebuild_world::Biome::Marsh => 0.2,
+            rebuild_world::Biome::Desert => 0.05,
         };
         let habitat = meadow.max(shore_mix);
         let firefly_mood = if sky_open {
@@ -26462,6 +26589,7 @@ impl State {
         self.poll_shrine_shot();
         self.poll_mine_shot();
         self.poll_portal_shot();
+        self.poll_temple_shot();
         self.poll_swap_shot();
         self.poll_break_shot();
     }
@@ -27157,6 +27285,11 @@ fn portal_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::RUINED_PORTAL_CHEST
 }
 
+/// The east desert-temple interior chest.
+fn temple_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::DESERT_TEMPLE_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -27710,6 +27843,28 @@ fn fresh_portal(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> 
     portal_loot(x, z, omen)
 }
 
+/// One drop from the desert-temple chest, read from the data pack.
+fn temple_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !temple_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_temple_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the desert-temple chest.
+fn fresh_temple(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    temple_loot(x, z, omen)
+}
+
 /// One drop from this chest, read from the data pack. The same cell always
 /// yields the same item. `omen` uses the richer list. `None` means the file
 /// could not be read.
@@ -28213,6 +28368,25 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_portal(true, x, z, false).is_none());
         assert!(super::fresh_portal(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_temple_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::DESERT_TEMPLE_CHEST;
+        assert!(super::temple_cell(x, z));
+        assert!(!super::temple_cell(
+            rebuild_world::DESERT_TEMPLE.0,
+            rebuild_world::DESERT_TEMPLE.1
+        ));
+        assert!(!super::camp_cell(x, z));
+        assert!(!super::portal_cell(x, z));
+        let table = crate::loot::load_temple_chest().unwrap();
+        let paid = super::fresh_temple(false, x, z, false).unwrap();
+        let rich = super::fresh_temple(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_temple(true, x, z, false).is_none());
+        assert!(super::fresh_temple(false, 0, 0, false).is_none());
     }
 
     #[test]
