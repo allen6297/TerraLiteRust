@@ -83,6 +83,8 @@ pub enum Sound {
     Scrape,
     /// A soft torch / lantern place pop.
     Pop,
+    /// A soft anvil repair clang.
+    Ring,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -661,6 +663,7 @@ impl Audio {
             Sound::Thunk => wood_thunk(),
             Sound::Scrape => chest_scrape(),
             Sound::Pop => torch_pop(),
+            Sound::Ring => anvil_clang(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -909,6 +912,25 @@ fn iron_ring() -> Vec<i16> {
         let ring = (t * 880.0 * std::f32::consts::TAU).sin() * (-t * 14.0).exp();
         let mixed = (click * 0.8 + ring * 0.55).clamp(-1.0, 1.0);
         samples.push((mixed * 30_000.0) as i16);
+    }
+    samples
+}
+
+/// Soft anvil clang. Lower and shorter than the ore break ring.
+fn anvil_clang() -> Vec<i16> {
+    let seconds = 0.18;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 211u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let hit = if t < 0.01 { 1.0 - t / 0.01 } else { 0.0 };
+        let ring = (t * 620.0 * std::f32::consts::TAU).sin() * (-t * 16.0).exp()
+            + (t * 1_180.0 * std::f32::consts::TAU).sin() * (-t * 22.0).exp() * 0.35;
+        let mixed = (hit * 0.55 + ring * 0.7 + n * 0.06).clamp(-1.0, 1.0);
+        samples.push((mixed * 0.22 * 32_767.0) as i16);
     }
     samples
 }
@@ -1523,6 +1545,17 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn anvil_ring_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Ring);
+        assert_eq!(audio.played, vec![Sound::Ring]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Ring);
+        assert_eq!(audio.played, vec![Sound::Ring]);
     }
 
     #[test]

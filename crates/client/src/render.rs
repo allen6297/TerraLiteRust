@@ -1170,6 +1170,8 @@ pub struct State {
     buzz_at: Option<[f32; 3]>,
     /// Once: stood by a beehive and heard the buzz.
     found_buzz: bool,
+    /// Once: repaired on an anvil and heard the clang.
+    found_clang: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2218,6 +2220,7 @@ impl State {
             buzz_mix: 0.0,
             buzz_at: None,
             found_buzz: false,
+            found_clang: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -11624,16 +11627,17 @@ impl State {
         self.wanted_focus = chunk_of(self.camera.eye);
 
         let clang_at = [ax as f32 + 0.5, ay as f32 + 0.95, az as f32 + 0.5];
-        self.note_shot_at = Some(clang_at);
-        self.note_shot_pitch = 1;
+        self.note_shot_at = None;
         self.note_shot_book = false;
         self.note_shot_brew = false;
         self.drops.puff(clang_at, [0.72, 0.72, 0.78]);
         self.rebuild_drops();
-        self.play_world(crate::audio::Sound::Note(1), clang_at);
+        self.play_world(crate::audio::Sound::Ring, clang_at);
         let _ = self.gui.open_anvil([ax, ay, az]);
         self.gui.note_anvil("repaired");
         self.gui.push_chat("repaired");
+        self.found_clang = true;
+        self.gui.push_chat("clang");
         self.found_mine = true;
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("iron_pickaxe");
@@ -16241,9 +16245,13 @@ impl State {
         if word == "repaired" {
             if let Some(at) = self.gui.anvil_at() {
                 let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
-                self.play_world(crate::audio::Sound::Note(1), source);
+                self.play_world(crate::audio::Sound::Ring, source);
                 self.drops.puff(source, [0.72, 0.72, 0.78]);
                 self.rebuild_drops();
+                if !self.found_clang {
+                    self.found_clang = true;
+                    self.gui.push_chat("clang");
+                }
             }
         }
     }
