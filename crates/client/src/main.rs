@@ -1,4 +1,5 @@
 mod advancements;
+mod statistics;
 mod arrows;
 mod audio;
 mod pearls;
@@ -233,6 +234,8 @@ struct Args {
     shot_advancement_toast: Option<std::path::PathBuf>,
     /// Advancements list screen, then quit.
     shot_advancements_screen: Option<std::path::PathBuf>,
+    /// Statistics pause screen, then quit.
+    shot_statistics_screen: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -494,6 +497,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_held_map_overlay: args.shot_held_map_overlay,
         shot_advancement_toast: args.shot_advancement_toast,
         shot_advancements_screen: args.shot_advancements_screen,
+        shot_statistics_screen: args.shot_statistics_screen,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -633,6 +637,7 @@ struct App {
     shot_held_map_overlay: Option<std::path::PathBuf>,
     shot_advancement_toast: Option<std::path::PathBuf>,
     shot_advancements_screen: Option<std::path::PathBuf>,
+    shot_statistics_screen: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -915,6 +920,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_advancements_screen.take() {
                     state.arm_advancements_screen_shot(path);
+                }
+                if let Some(path) = self.shot_statistics_screen.take() {
+                    state.arm_statistics_screen_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1284,6 +1292,7 @@ where
         shot_held_map_overlay: None,
         shot_advancement_toast: None,
         shot_advancements_screen: None,
+        shot_statistics_screen: None,
         name: None,
         host: false,
         join: false,
@@ -1720,6 +1729,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-advancements-screen".to_string())?;
                 parsed.shot_advancements_screen = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-statistics-screen" | "--shot-statistics" | "--shot-stats" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-statistics-screen".to_string())?;
+                parsed.shot_statistics_screen = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2347,6 +2362,17 @@ mod tests {
         assert_eq!(
             args.shot_advancements_screen.as_deref(),
             Some(std::path::Path::new("advancements-screen.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-statistics-screen".into(),
+            "statistics-screen.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_statistics_screen.as_deref(),
+            Some(std::path::Path::new("statistics-screen.png"))
         );
     }
 }

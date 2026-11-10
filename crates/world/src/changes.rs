@@ -68,6 +68,23 @@ pub struct StoredChest {
     pub slots: Vec<CarriedSlot>,
 }
 
+/// World-save statistics counters (blocks, walk, kills, time, deaths).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StatisticsSave {
+    pub blocks_broken: u64,
+    pub blocks_placed: u64,
+    pub distance_walked: f64,
+    pub mobs_killed: u64,
+    pub time_played: f64,
+    pub deaths: u64,
+}
+
+impl StatisticsSave {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct Aside {
     inventory: Vec<CarriedSlot>,
@@ -76,6 +93,7 @@ struct Aside {
     chests: Vec<StoredChest>,
     /// Baked milestone ids the player has unlocked (advancement toasts).
     advancements: Vec<String>,
+    statistics: StatisticsSave,
 }
 
 /// Read `path`. A file that is not there is an empty list.
@@ -134,6 +152,23 @@ pub fn read_advancements(path: &Path) -> Result<Vec<String>, String> {
             parse_advancements(&text).map_err(|err| format!("{}: {err}", path.display()))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(format!("{}: {err}", path.display())),
+    }
+}
+
+/// Write world statistics. Cells, inventory, hotbar, player, and advancements stay.
+pub fn write_statistics(path: &Path, stats: &StatisticsSave) -> Result<(), String> {
+    let changes = read_changes(path)?;
+    let mut aside = read_aside(path)?;
+    aside.statistics = stats.clone();
+    write_document(path, &changes, &aside)
+}
+
+/// World statistics in `path`. Missing file / field is empty defaults.
+pub fn read_statistics(path: &Path) -> Result<StatisticsSave, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => parse_statistics(&text).map_err(|err| format!("{}: {err}", path.display())),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(StatisticsSave::default()),
         Err(err) => Err(format!("{}: {err}", path.display())),
     }
 }
@@ -277,6 +312,7 @@ fn parse_aside(text: &str) -> Result<Aside, String> {
         player: parse_player(text)?,
         chests: parse_chests(text)?,
         advancements: parse_advancements(text)?,
+        statistics: parse_statistics(text)?,
     })
 }
 
@@ -293,6 +329,7 @@ fn write_document(path: &Path, changes: &[CellChange], aside: &Aside) -> Result<
         aside.player,
         &aside.chests,
         &aside.advancements,
+        &aside.statistics,
     );
     fs::write(path, text).map_err(|err| format!("{}: {err}", path.display()))
 }
@@ -359,7 +396,15 @@ pub fn parse_changes(text: &str) -> Result<Vec<CellChange>, String> {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn format_changes(changes: &[CellChange]) -> String {
-    format_document(changes, &[], None, None, &[], &[])
+    format_document(
+        changes,
+        &[],
+        None,
+        None,
+        &[],
+        &[],
+        &StatisticsSave::default(),
+    )
 }
 
 fn format_document(
@@ -369,6 +414,7 @@ fn format_document(
     player: Option<PlayerPlace>,
     chests: &[StoredChest],
     advancements: &[String],
+    statistics: &StatisticsSave,
 ) -> String {
     let mut cells = changes.to_vec();
     cells.sort_by_key(|cell| (cell.z, cell.y, cell.x));
@@ -420,6 +466,9 @@ fn format_document(
     if !advancements.is_empty() {
         sections.push(format_advancements(advancements));
     }
+    if !statistics.is_empty() {
+        sections.push(format_statistics(statistics));
+    }
     let mut out = String::from("{\n");
     for (index, section) in sections.iter().enumerate() {
         out.push_str(section);
@@ -430,6 +479,52 @@ fn format_document(
     }
     out.push_str("}\n");
     out
+}
+
+fn format_statistics(stats: &StatisticsSave) -> String {
+    format!(
+        "  \"statistics\": {{\n    \"blocks_broken\": {},\n    \"blocks_placed\": {},\n    \"distance_walked\": {},\n    \"mobs_killed\": {},\n    \"time_played\": {},\n    \"deaths\": {}\n  }}",
+        stats.blocks_broken,
+        stats.blocks_placed,
+        json_num(stats.distance_walked as f32),
+        stats.mobs_killed,
+        json_num(stats.time_played as f32),
+        stats.deaths
+    )
+}
+
+pub fn parse_statistics(text: &str) -> Result<StatisticsSave, String> {
+    let root = save_object(text)?;
+    let Some(obj) = root.get("statistics") else {
+        return Ok(StatisticsSave::default());
+    };
+    let obj = obj
+        .as_object()
+        .ok_or_else(|| "statistics must be an object".to_string())?;
+    let u64_field = |key: &str| -> Result<u64, String> {
+        match obj.get(key) {
+            None => Ok(0),
+            Some(value) => value
+                .as_u64()
+                .ok_or_else(|| format!("statistics.{key} must be an integer")),
+        }
+    };
+    let f64_field = |key: &str| -> Result<f64, String> {
+        match obj.get(key) {
+            None => Ok(0.0),
+            Some(value) => value
+                .as_f64()
+                .ok_or_else(|| format!("statistics.{key} must be a number")),
+        }
+    };
+    Ok(StatisticsSave {
+        blocks_broken: u64_field("blocks_broken")?,
+        blocks_placed: u64_field("blocks_placed")?,
+        distance_walked: f64_field("distance_walked")?.max(0.0),
+        mobs_killed: u64_field("mobs_killed")?,
+        time_played: f64_field("time_played")?.max(0.0),
+        deaths: u64_field("deaths")?,
+    })
 }
 
 fn format_advancements(ids: &[String]) -> String {
@@ -997,6 +1092,40 @@ mod tests {
             parse_changes(r#"{"blocks":[{"x":0,"y":0,"z":0,"id":"stone","metadata":16}]}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn statistics_survive_a_later_block_edit() {
+        let path: PathBuf =
+            std::env::temp_dir().join(format!("rebuild-stats-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        assert!(read_statistics(&path).unwrap().is_empty());
+        let stats = StatisticsSave {
+            blocks_broken: 4,
+            blocks_placed: 2,
+            distance_walked: 12.5,
+            mobs_killed: 1,
+            time_played: 90.0,
+            deaths: 0,
+        };
+        write_statistics(&path, &stats).unwrap();
+        let edit = [CellChange {
+            x: 3,
+            y: 1,
+            z: 5,
+            block: Block::new("stone", 0),
+        }];
+        write_changes(&path, &edit).unwrap();
+        assert_eq!(read_changes(&path).unwrap(), edit);
+        let loaded = read_statistics(&path).unwrap();
+        assert_eq!(loaded.blocks_broken, 4);
+        assert_eq!(loaded.blocks_placed, 2);
+        assert!((loaded.distance_walked - 12.5).abs() < 0.01);
+        assert_eq!(loaded.mobs_killed, 1);
+        assert!((loaded.time_played - 90.0).abs() < 0.01);
+        write_advancements(&path, &["craft".into()]).unwrap();
+        assert_eq!(read_statistics(&path).unwrap().blocks_broken, 4);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

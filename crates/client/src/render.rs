@@ -1262,6 +1262,8 @@ pub struct State {
     map_open: bool,
     /// Baked milestone unlocks + active egui toast.
     advancements: crate::advancements::Advancements,
+    /// World statistics (break/place/walk/kills/time/deaths).
+    statistics: crate::statistics::Statistics,
     /// F is down on a held spyglass.
     zoom_key: bool,
     /// Seconds until a held goat horn can sound again.
@@ -2453,6 +2455,7 @@ impl State {
             compound_flow_told: false,
             map_open: false,
             advancements: crate::advancements::Advancements::new(),
+            statistics: crate::statistics::Statistics::new(),
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
@@ -2800,6 +2803,19 @@ impl State {
             Ok(ids) => self.advancements.install(&ids),
             Err(err) => eprintln!("advancements: {err}"),
         }
+        match rebuild_world::read_statistics(path) {
+            Ok(saved) => {
+                let mut stats = crate::statistics::Statistics::new();
+                stats.blocks_broken = saved.blocks_broken;
+                stats.blocks_placed = saved.blocks_placed;
+                stats.distance_walked = saved.distance_walked;
+                stats.mobs_killed = saved.mobs_killed;
+                stats.time_played = saved.time_played;
+                stats.deaths = saved.deaths;
+                self.statistics.install(&stats);
+            }
+            Err(err) => eprintln!("statistics: {err}"),
+        }
     }
 
     fn flush_advancements(&mut self) {
@@ -2810,6 +2826,24 @@ impl State {
         let ids = self.advancements.list();
         if let Err(err) = rebuild_world::write_advancements(&path, &ids) {
             eprintln!("could not save advancements: {err}");
+        }
+    }
+
+    fn flush_statistics(&mut self) {
+        if !self.statistics.take_dirty() {
+            return;
+        }
+        let path = crate::net::world_file(&self.loaded_world);
+        let saved = rebuild_world::StatisticsSave {
+            blocks_broken: self.statistics.blocks_broken,
+            blocks_placed: self.statistics.blocks_placed,
+            distance_walked: self.statistics.distance_walked,
+            mobs_killed: self.statistics.mobs_killed,
+            time_played: self.statistics.time_played,
+            deaths: self.statistics.deaths,
+        };
+        if let Err(err) = rebuild_world::write_statistics(&path, &saved) {
+            eprintln!("could not save statistics: {err}");
         }
     }
 
@@ -7781,6 +7815,7 @@ impl State {
                 origin[1].floor() as i32,
                 origin[2].floor() as i32,
             );
+            self.statistics.note_kill();
             let _ = self.advancements.unlock("kill");
         }
         dropped
@@ -7801,6 +7836,9 @@ impl State {
         self.hearts -= amount;
         if self.hearts <= 0 {
             self.hearts = 0;
+            if !self.dead {
+                self.statistics.note_death();
+            }
             self.dead = true;
             self.clear_motion();
             self.menu.close_menu();
@@ -9725,6 +9763,10 @@ impl State {
         );
         let kind = pending.as_ref().map(|edit| edit.kind).unwrap_or(cell.kind);
         if kind == TAG_BREAK && !before.is_air() {
+            // Count player-initiated breaks only (pending edit from this client).
+            if pending.is_some() {
+                self.statistics.note_break();
+            }
             let scooped = before.id == "water"
                 && pending
                     .as_ref()
@@ -9876,6 +9918,12 @@ impl State {
             }
         }
         if kind == TAG_PLACE {
+            if pending.is_some()
+                && !cell.block.is_air()
+                && (before.is_air() || before.id != cell.block.id)
+            {
+                self.statistics.note_place();
+            }
             if hinge(before.id) && before.id == cell.block.id {
                 let word = if cell.block.metadata & 1 == 1 {
                     "open"
@@ -16552,6 +16600,53 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Statistics pause screen with sample counters, then quit with a PNG.
+    pub fn arm_statistics_screen_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        self.statistics.blocks_broken = 128;
+        self.statistics.blocks_placed = 64;
+        self.statistics.distance_walked = 1532.0;
+        self.statistics.mobs_killed = 17;
+        self.statistics.time_played = 3725.0;
+        self.statistics.deaths = 3;
+        self.menu.show_statistics();
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Advancements list screen with mixed locked/unlocked rows, then quit with a PNG.
     pub fn arm_advancements_screen_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -22684,6 +22779,26 @@ impl State {
     pub fn tick(&mut self, dt: f32) {
         self.advancements.tick(dt);
         self.flush_advancements();
+        if self.playing {
+            let walking = !self.menu.is_open()
+                && !self.gui.is_open()
+                && !self.map_open
+                && !self.dead
+                && (self.input.forward
+                    || self.input.back
+                    || self.input.left
+                    || self.input.right
+                    || self.camera.slide.length_squared() > 0.01);
+            self.statistics.tick_play(
+                dt,
+                self.camera.eye.x,
+                self.camera.eye.z,
+                walking,
+            );
+        } else {
+            self.statistics.clear_walk_anchor();
+        }
+        self.flush_statistics();
         self.flush_hotbar();
         self.flush_bag();
         self.flush_pose(dt);
@@ -24929,6 +25044,7 @@ impl State {
             let map = (!self.dead && !self.menu.is_open() && !self.gui.is_open() && self.map_open)
                 .then(|| self.held_map_view());
             let advancement_rows = self.advancements.screen_rows();
+            let statistics_rows = self.statistics.screen_rows();
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -24941,6 +25057,7 @@ impl State {
                 map,
                 toast,
                 &advancement_rows,
+                &statistics_rows,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();

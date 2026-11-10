@@ -45,11 +45,12 @@ mod terrain;
 
 pub use changes::{
     CarriedSlot, CellChange, HOTBAR_OFFHAND_SLOT, HOTBAR_SAVE_SLOT_LIMIT, HOTBAR_SAVE_SLOTS,
-    HotbarSave, INVENTORY_SLOTS, PlayerPlace, StoredChest, apply_changes, bar_from_wire,
-    carried_from_wire, ensure_chest, parse_advancements, parse_inventory, read_advancements,
-    read_changes, read_chests, read_ender_chest, read_hotbar, read_inventory, read_player,
-    remove_chest, store_chest_slots, write_advancements, write_changes, write_chests, write_hotbar,
-    write_inventory, write_player,
+    HotbarSave, INVENTORY_SLOTS, PlayerPlace, StatisticsSave, StoredChest, apply_changes,
+    bar_from_wire, carried_from_wire, ensure_chest, parse_advancements, parse_inventory,
+    parse_statistics, read_advancements, read_changes, read_chests, read_ender_chest, read_hotbar,
+    read_inventory, read_player, read_statistics, remove_chest, store_chest_slots,
+    write_advancements, write_changes, write_chests, write_hotbar, write_inventory, write_player,
+    write_statistics,
 };
 pub use chunk::{
     BATTERY_CHARGE, BATTERY_MAX, Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, TANK_BUCKET,

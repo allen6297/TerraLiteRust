@@ -4364,6 +4364,7 @@ enum MenuPage {
     Settings,
     Keybinds,
     Advancements,
+    Statistics,
     Worlds,
     Pause,
     Closed,
@@ -4382,6 +4383,8 @@ pub struct Menu {
     keybinds_return: MenuPage,
     /// Advancements list returns here (pause or closed).
     advancements_return: MenuPage,
+    /// Statistics screen returns here (pause or closed).
+    statistics_return: MenuPage,
     selected: usize,
     size: rebuild_world::WorldSize,
     muted: bool,
@@ -4417,6 +4420,7 @@ impl Menu {
             settings_return: MenuPage::Main,
             keybinds_return: MenuPage::Main,
             advancements_return: MenuPage::Pause,
+            statistics_return: MenuPage::Pause,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4446,6 +4450,7 @@ impl Menu {
             settings_return: MenuPage::Main,
             keybinds_return: MenuPage::Main,
             advancements_return: MenuPage::Pause,
+            statistics_return: MenuPage::Pause,
             selected: 0,
             size: rebuild_world::WorldSize::Small,
             muted: false,
@@ -4936,6 +4941,7 @@ impl Menu {
             MenuPage::Settings => "SETTINGS",
             MenuPage::Keybinds => "KEYBINDS",
             MenuPage::Advancements => "ADVANCEMENTS",
+            MenuPage::Statistics => "STATISTICS",
             MenuPage::Worlds => "WORLDS",
             MenuPage::Pause => "PAUSED",
             MenuPage::Closed => "",
@@ -4962,6 +4968,7 @@ impl Menu {
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
+            "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
@@ -5030,6 +5037,16 @@ impl Menu {
                     MenuAction::None
                 }
             }
+            MenuPage::Statistics => {
+                let back = self.statistics_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
             MenuPage::Worlds => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5043,11 +5060,14 @@ impl Menu {
         }
     }
 
-    /// Leave settings, keybinds, or advancements. The page that opened them stays up.
+    /// Leave settings, keybinds, advancements, or statistics.
     pub fn back(&mut self) {
         if matches!(
             self.page,
-            MenuPage::Settings | MenuPage::Keybinds | MenuPage::Advancements
+            MenuPage::Settings
+                | MenuPage::Keybinds
+                | MenuPage::Advancements
+                | MenuPage::Statistics
         ) {
             let _ = self.escape();
         }
@@ -5179,6 +5199,10 @@ impl Menu {
                 self.open_advancements(MenuPage::Pause);
                 MenuAction::None
             }
+            MenuPage::Pause if label == "statistics" => {
+                self.open_statistics(MenuPage::Pause);
+                MenuAction::None
+            }
             MenuPage::Pause if label == "title" => {
                 self.page = MenuPage::Main;
                 self.selected = 0;
@@ -5186,6 +5210,16 @@ impl Menu {
             }
             MenuPage::Advancements if label == "back" => {
                 let back = self.advancements_return;
+                self.page = back;
+                self.selected = 0;
+                if back == MenuPage::Closed {
+                    MenuAction::Resume
+                } else {
+                    MenuAction::None
+                }
+            }
+            MenuPage::Statistics if label == "back" => {
+                let back = self.statistics_return;
                 self.page = back;
                 self.selected = 0;
                 if back == MenuPage::Closed {
@@ -5335,6 +5369,21 @@ impl Menu {
         self.open_advancements(MenuPage::Closed);
     }
 
+    pub fn is_statistics(&self) -> bool {
+        self.page == MenuPage::Statistics
+    }
+
+    fn open_statistics(&mut self, back: MenuPage) {
+        self.statistics_return = back;
+        self.page = MenuPage::Statistics;
+        self.selected = 0;
+    }
+
+    /// Open statistics (proof shots).
+    pub fn show_statistics(&mut self) {
+        self.open_statistics(MenuPage::Closed);
+    }
+
     fn make_world(&mut self) {
         let name = crate::net::fresh_world_name(&self.worlds);
         if crate::net::ensure_world(&name).is_err() {
@@ -5357,15 +5406,18 @@ impl Menu {
             MenuPage::Settings => self.settings_rows(),
             MenuPage::Keybinds => vec!["back".to_string()],
             MenuPage::Advancements => vec!["back".to_string()],
+            MenuPage::Statistics => vec!["back".to_string()],
             MenuPage::Pause => {
                 let mut rows = self.pause.labels.clone();
-                // Older pause.json packs may omit the row — keep the screen reachable.
-                if !rows.iter().any(|label| label == "advancements") {
-                    let insert = rows
-                        .iter()
-                        .position(|label| label == "title")
-                        .unwrap_or(rows.len());
-                    rows.insert(insert, "advancements".to_string());
+                // Older pause.json packs may omit rows — keep screens reachable.
+                for label in ["advancements", "statistics"] {
+                    if !rows.iter().any(|row| row == label) {
+                        let insert = rows
+                            .iter()
+                            .position(|row| row == "title")
+                            .unwrap_or(rows.len());
+                        rows.insert(insert, label.to_string());
+                    }
                 }
                 rows
             }
@@ -5393,6 +5445,7 @@ impl Menu {
             "settings" => "world size, sun, sound, bob, and trace".to_string(),
             "keybinds" => "move, jump, sneak, inventory, mouse…".to_string(),
             "advancements" => "milestones unlocked this world".to_string(),
+            "statistics" => "blocks, walk, kills, time, deaths".to_string(),
             "worlds" => "load or start a named save".to_string(),
             "quit" => "leave the game".to_string(),
             "resume" => "return to the world".to_string(),
@@ -5500,7 +5553,7 @@ const FALLBACK_PAUSE: &str = r#"{
   "open": "escape",
   "close": "escape",
   "kind": "menu",
-  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "title"]
+  "labels": ["resume", "host", "join", "settings", "keybinds", "advancements", "statistics", "title"]
 }"#;
 
 const FALLBACK_WORLDS: &str = r#"{

@@ -23,6 +23,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::advancements::{AdvancementRow, ToastView};
+use crate::statistics::StatRow;
 use crate::body::Armor;
 use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab, SettingsControl};
 use crate::hotbar::{self, Hotbar};
@@ -221,6 +222,7 @@ impl EguiHost {
         map: Option<MapView>,
         toast: Option<ToastView>,
         advancement_rows: &[AdvancementRow],
+        statistics_rows: &[StatRow],
     ) -> FullOutput {
         let raw = self.winit.take_egui_input(window);
         let mut pending = MenuAction::None;
@@ -234,7 +236,7 @@ impl EguiHost {
             if let Some(view) = death {
                 pending = draw_death(ui, view);
             } else if menu.is_open() {
-                pending = draw_menu(ui, menu, binds, advancement_rows);
+                pending = draw_menu(ui, menu, binds, advancement_rows, statistics_rows);
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
                 draw_pinned_tip(ui, gui);
@@ -437,6 +439,84 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
         .corner_radius(CornerRadius::same(4))
         .min_size(Vec2::new(ui.available_width().max(280.0), 34.0));
     ui.add(btn)
+}
+
+fn draw_statistics_screen(
+    ui: &mut Ui,
+    menu: &mut Menu,
+    rows: &[StatRow],
+) -> MenuAction {
+    let mut action = MenuAction::None;
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show(ui, |ui| {
+            let panel_w = (ui.available_width() * 0.58).clamp(360.0, 480.0);
+            // Centered Area avoids vertical_centered clip cutting the last row.
+            egui::Area::new(egui::Id::new("statistics_screen"))
+                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    show_panel(ui, panel_w, |ui| {
+                        ui.horizontal(|ui| {
+                            title_label(ui, "STATISTICS");
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let back = egui::Button::new(
+                                    RichText::new("Back").size(14.0).color(INK),
+                                )
+                                .fill(BUTTON)
+                                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                .corner_radius(CornerRadius::same(4))
+                                .min_size(Vec2::new(88.0, 30.0));
+                                if ui.add(back).clicked() {
+                                    if let Some(index) =
+                                        menu.menu_rows().iter().position(|label| label == "back")
+                                    {
+                                        action = menu.activate_row(index);
+                                    }
+                                }
+                            });
+                        });
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("this world · Esc closes")
+                                .size(13.0)
+                                .color(MUTED),
+                        );
+                        ui.add_space(10.0);
+                        for (index, row) in rows.iter().enumerate() {
+                            Frame::new()
+                                .fill(ROW)
+                                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                .corner_radius(CornerRadius::same(5))
+                                .inner_margin(Margin::symmetric(12, 8))
+                                .show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(row.label).size(14.0).color(MUTED),
+                                        );
+                                        ui.with_layout(
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    RichText::new(&row.value)
+                                                        .size(16.0)
+                                                        .color(INK)
+                                                        .strong(),
+                                                );
+                                            },
+                                        );
+                                    });
+                                });
+                            if index + 1 != rows.len() {
+                                ui.add_space(5.0);
+                            }
+                        }
+                        ui.add_space(4.0);
+                    });
+                });
+        });
+    action
 }
 
 fn draw_advancements_screen(
@@ -814,6 +894,7 @@ fn draw_menu(
     menu: &mut Menu,
     binds: &mut Keybinds,
     advancement_rows: &[AdvancementRow],
+    statistics_rows: &[StatRow],
 ) -> MenuAction {
     if menu.is_keybinds() {
         return draw_keybinds(ui, menu, binds);
@@ -823,6 +904,9 @@ fn draw_menu(
     }
     if menu.is_advancements() {
         return draw_advancements_screen(ui, menu, advancement_rows);
+    }
+    if menu.is_statistics() {
+        return draw_statistics_screen(ui, menu, statistics_rows);
     }
     let mut action = MenuAction::None;
     let title = menu.page_title();
