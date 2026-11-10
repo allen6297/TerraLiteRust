@@ -176,6 +176,10 @@ struct Args {
     shot_shadows_day: Option<std::path::PathBuf>,
     /// Midnight moon cast shadow on grass, then quit.
     shot_shadows_night: Option<std::path::PathBuf>,
+    /// Soft bounce fill on open day shade, then quit.
+    shot_bounce_day: Option<std::path::PathBuf>,
+    /// Soft bounce fill under a roof / cave mouth, then quit.
+    shot_bounce_interior: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -385,6 +389,8 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_hud: args.shot_hud,
         shot_shadows_day: args.shot_shadows_day,
         shot_shadows_night: args.shot_shadows_night,
+        shot_bounce_day: args.shot_bounce_day,
+        shot_bounce_interior: args.shot_bounce_interior,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -490,6 +496,8 @@ struct App {
     shot_hud: Option<std::path::PathBuf>,
     shot_shadows_day: Option<std::path::PathBuf>,
     shot_shadows_night: Option<std::path::PathBuf>,
+    shot_bounce_day: Option<std::path::PathBuf>,
+    shot_bounce_interior: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -686,6 +694,12 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_shadows_night.take() {
                     state.arm_shadows_shot(path, 0.0);
+                }
+                if let Some(path) = self.shot_bounce_day.take() {
+                    state.arm_bounce_shot(path, false);
+                }
+                if let Some(path) = self.shot_bounce_interior.take() {
+                    state.arm_bounce_shot(path, true);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -1016,6 +1030,8 @@ where
         shot_hud: None,
         shot_shadows_day: None,
         shot_shadows_night: None,
+        shot_bounce_day: None,
+        shot_bounce_interior: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -1291,6 +1307,18 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-shadows-night".to_string())?;
                 parsed.shot_shadows_night = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-bounce-day" | "--shot-bounce-shade" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-bounce-day".to_string())?;
+                parsed.shot_bounce_day = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-bounce-interior" | "--shot-bounce-roof" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-bounce-interior".to_string())?;
+                parsed.shot_bounce_interior = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter

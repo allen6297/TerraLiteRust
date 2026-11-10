@@ -209,21 +209,36 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
     let extra = (1.0 - sky) * (1.0 - coverage) * (1.0 - use_trace);
     let cave_mul = mix(1.0, 0.16, extra);
     let vis = mix(1.0 - coverage, sun_vis, use_trace);
-    // Bounce is baked per face, so it steps where two blocks meet. Inside the
-    // ray grid the filtered sky carries that fill instead.
-    let indirect = input.bounce * u.params.y * vis * mix(sky, sky_open, use_trace) * (1.0 - use_trace);
-    // sky_open and contact are 1 in the open and 0 when closed. Closed stays
-    // darker, but the floor stays high so a night probe is a soft shade,
-    // not a black square.
-    let sky_fill = mix(0.84, 1.0, sqrt(clamp(sky_open, 0.0, 1.0)));
+    // Mesh bounce stays off the soft grid (probes own that fill) and still
+    // drops under cast coverage so a wall does not light its own umbra.
+    let mesh_bounce = input.bounce * u.params.y * vis * sky * (1.0 - use_trace);
+    // Soft path-traced sky bounce: filtered sky_open from the ray grid.
+    // Stronger on shaded sides / under a roof mouth. Independent of sun_shade
+    // so the VG-550 umbra floors stay. Never multiplies corner AO into sun.
+    // Vertical faces keep most of the hemi so a shaded wall still picks up fill.
+    let hemi = 0.72 + 0.28 * max(nrm.y, 0.0);
+    let soft_sky = sqrt(clamp(sky_open, 0.0, 1.0));
+    // Cave mouths keep a readable floor; deep interiors ease down but stay lit.
+    let mouth = mix(0.38, 1.0, soft_sky) * mix(0.75, 1.0, sqrt(clamp(contact, 0.0, 1.0)));
+    let shade_w = mix(0.40, 1.0, occluded);
+    // Strong enough to read after albedo multiply; still under direct sun.
+    let soft_bounce = vec3<f32>(0.22, 0.26, 0.32) * u.params.y * hemi * mouth * shade_w * use_trace;
+    // Cheap raster fill on shaded faces: a little sky hemi, AO fill-only.
+    // Keep this modest so cast umbra still reads darker than open sun.
+    let raster_hemi = vec3<f32>(0.06, 0.075, 0.09) * u.params.y * hemi * sky * occluded * (1.0 - use_trace);
+    // sky_open and contact soften the direct path in the open. In umbra the
+    // soften eases off so bounce carries the fill instead of washing shade.
+    let sky_fill = mix(0.84, 1.0, soft_sky);
     let crease = mix(0.90, 1.0, sqrt(clamp(contact, 0.0, 1.0)));
-    let soften = mix(1.0, sky_fill * crease, use_trace);
+    let soften = mix(1.0, mix(1.0, sky_fill * crease, 1.0 - occluded * 0.7), use_trace);
     // Warm lights (lantern / torch / campfire) pulse with params.w.
     let warm = max(input.block.r - input.block.b * 0.55 - input.block.g * 0.12, 0.0);
     let warm_w = smoothstep(0.02, 0.12, warm);
     let block = input.block * mix(1.0, u.params.w, warm_w);
-    let lit = ambient * sun_shade * cave_mul * soften + indirect + block;
-    let lit_rgb = lit * albedo;
+    // Mesh bounce stays under albedo (surface color). Soft sky fill is added
+    // after so a dark stone interior still reads the bounce.
+    let lit = ambient * sun_shade * cave_mul * soften + mesh_bounce + raster_hemi + block;
+    let lit_rgb = lit * albedo + soft_bounce;
     let dist = distance(input.world_pos, u.fog_eye.xyz);
     let fog_end = max(u.fog_color.w, u.fog_eye.w + 1.0);
     let fog = smoothstep(u.fog_eye.w, fog_end, dist);
@@ -885,6 +900,13 @@ pub struct State {
     shadows_shot_eye: glam::Vec3,
     shadows_shot_yaw: f32,
     shadows_shot_pitch: f32,
+    /// One-shot soft bounce fill (day shade or roof interior), then quit.
+    bounce_shot_path: Option<std::path::PathBuf>,
+    bounce_shot_frames: u32,
+    bounce_shot_time: f32,
+    bounce_shot_eye: glam::Vec3,
+    bounce_shot_yaw: f32,
+    bounce_shot_pitch: f32,
     /// One-shot walk FOV vs sprint FOV stitch, then quit.
     sprint_shot_path: Option<std::path::PathBuf>,
     sprint_shot_frames: u32,
@@ -2066,6 +2088,12 @@ impl State {
             shadows_shot_eye: glam::Vec3::ZERO,
             shadows_shot_yaw: 0.0,
             shadows_shot_pitch: 0.0,
+            bounce_shot_path: None,
+            bounce_shot_frames: 0,
+            bounce_shot_time: 0.42,
+            bounce_shot_eye: glam::Vec3::ZERO,
+            bounce_shot_yaw: 0.0,
+            bounce_shot_pitch: 0.0,
             sprint_shot_path: None,
             sprint_shot_frames: 0,
             sprint_shot_phase: SprintShotPhase::Idle,
@@ -7947,6 +7975,216 @@ impl State {
         self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
         self.gui.push_chat("PLAYER and CRAFT tabs");
         let _ = self.window.focus_window();
+    }
+
+    /// Soft bounce fill proof: open shaded lawn (`interior=false`) or under a roof.
+    pub fn arm_bounce_shot(&mut self, path: std::path::PathBuf, interior: bool) {
+        self.bounce_shot_path = Some(path);
+        self.bounce_shot_frames = 0;
+        self.bounce_shot_time = 0.34;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(self.bounce_shot_time);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        let mut changes = Vec::new();
+        // Wipe leftover save junk in the proof pad before building.
+        for z in 5..=15 {
+            for x in 4..=12 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=7 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        if interior {
+            // Stone porch: open south mouth, roof at y=4, bounce fills the shade.
+            for z in 7..=11 {
+                for x in 6..=10 {
+                    changes.push(CellChange {
+                        x,
+                        y: 1,
+                        z,
+                        block: Block::new("stone", 0),
+                    });
+                    changes.push(CellChange {
+                        x,
+                        y: 4,
+                        z,
+                        block: Block::new("stone", 0),
+                    });
+                }
+            }
+            for z in 7..=11 {
+                for y in 2..=3 {
+                    changes.push(CellChange {
+                        x: 6,
+                        y,
+                        z,
+                        block: Block::new("stone", 0),
+                    });
+                    changes.push(CellChange {
+                        x: 10,
+                        y,
+                        z,
+                        block: Block::new("stone", 0),
+                    });
+                }
+            }
+            for x in 6..=10 {
+                for y in 2..=3 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z: 7,
+                        block: Block::new("stone", 0),
+                    });
+                }
+            }
+            // Mouth + interior air stay open so soft sky reaches the ceiling.
+            for z in 8..=12 {
+                for x in 7..=9 {
+                    for y in 2..=3 {
+                        changes.push(CellChange {
+                            x,
+                            y,
+                            z,
+                            block: Block::AIR,
+                        });
+                    }
+                }
+            }
+        } else {
+            // Tall wall on open lawn — shaded west face + ground umbra get bounce fill.
+            for z in 7..=11 {
+                for y in 1..=5 {
+                    changes.push(CellChange {
+                        x: 10,
+                        y,
+                        z,
+                        block: Block::new("stone", 0),
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye_warm = if interior {
+            [8.0_f32, 2.8, 10.5]
+        } else {
+            [7.5_f32, 2.6, 10.0]
+        };
+        for _ in 0..96 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        let (eye, target) = if interior {
+            // Outside the south mouth, look in under the roof so ceiling and
+            // side walls show soft sky bounce against the deeper umbra.
+            (
+                glam::Vec3::new(8.0, 2.35 + body::EYE_HEIGHT, 14.4),
+                glam::Vec3::new(8.0, 2.9, 8.4),
+            )
+        } else {
+            (
+                glam::Vec3::new(5.2, 2.5 + body::EYE_HEIGHT, 12.8),
+                glam::Vec3::new(9.0, 1.6, 9.0),
+            )
+        };
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.bounce_shot_eye = eye;
+        self.bounce_shot_yaw = yaw;
+        self.bounce_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.gui.push_chat(if interior {
+            "bounce: interior"
+        } else {
+            "bounce: day shade"
+        });
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_bounce_shot_camera(&mut self) {
+        if self.bounce_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(self.bounce_shot_time);
+        self.dusk_show = 0.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.bounce_shot_eye,
+            self.bounce_shot_yaw,
+            self.bounce_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.bounce_shot_eye;
+        self.posed_yaw = self.bounce_shot_yaw;
+        self.posed_pitch = self.bounce_shot_pitch;
+        self.pose_dirty = true;
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
     }
 
     /// Tall stone wall casting sun/moon shade onto open grass, then quit with a PNG.
@@ -15907,6 +16145,37 @@ impl State {
         }
     }
 
+    fn poll_bounce_shot(&mut self) {
+        let Some(path) = self.bounce_shot_path.clone() else {
+            return;
+        };
+        self.pin_bounce_shot_camera();
+        self.bounce_shot_frames = self.bounce_shot_frames.saturating_add(1);
+        if self.bounce_shot_frames < 220 || !self.chunk_bake.is_idle() {
+            if self.bounce_shot_frames > 900 {
+                eprintln!("bounce shot timed out");
+                self.bounce_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("bounce shot wrote {}", path.display());
+                self.bounce_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("bounce shot failed: {err}");
+                if self.bounce_shot_frames > 280 {
+                    self.bounce_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_bed_sleep_shot(&mut self) {
         let Some(path) = self.bed_sleep_shot_path.clone() else {
             return;
@@ -18937,6 +19206,7 @@ impl State {
             && !self.dead
             && firefly_mood > 0.25
             && self.shadows_shot_path.is_none()
+            && self.bounce_shot_path.is_none()
         {
             if self.firefly_wait <= 0.0 {
                 self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
@@ -18968,7 +19238,7 @@ impl State {
                 }
             }
         }
-        if self.shadows_shot_path.is_some() {
+        if self.shadows_shot_path.is_some() || self.bounce_shot_path.is_some() {
             self.dusk_show = 0.0;
         } else if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0
         {
@@ -19390,7 +19660,7 @@ impl State {
             self.hooks.drive_entities(&mut self.world, steps);
             self.flush_script_writes();
             let feet = [self.camera.eye.x, self.camera.eye.z];
-            if self.shadows_shot_path.is_none() {
+            if self.shadows_shot_path.is_none() && self.bounce_shot_path.is_none() {
                 self.sheep.tick_near(steps, feet, &self.world);
                 self.rebuild_sheep();
                 self.pig.tick_near(steps, feet, &self.world);
@@ -19402,6 +19672,8 @@ impl State {
                 self.pig_count = 0;
                 self.fox_buf = None;
                 self.fox_count = 0;
+                self.goat_buf = None;
+                self.goat_count = 0;
             }
             self.horse.tick_near(steps, feet, &self.world);
             self.rebuild_horse();
@@ -19645,7 +19917,7 @@ impl State {
             } else {
                 None
             };
-            if self.shadows_shot_path.is_some() {
+            if self.shadows_shot_path.is_some() || self.bounce_shot_path.is_some() {
                 self.fox_buf = None;
                 self.fox_count = 0;
             } else {
@@ -19665,10 +19937,15 @@ impl State {
                 self.camera.eye.y - body::EYE_HEIGHT,
                 self.camera.eye.z,
             ];
-            if let Some(ram) = self.goat.tick(steps, feet_at, &self.world) {
-                self.goat_ram(ram);
+            if self.shadows_shot_path.is_none() && self.bounce_shot_path.is_none() {
+                if let Some(ram) = self.goat.tick(steps, feet_at, &self.world) {
+                    self.goat_ram(ram);
+                }
+                self.rebuild_goat();
+            } else {
+                self.goat_buf = None;
+                self.goat_count = 0;
             }
-            self.rebuild_goat();
         }
         self.wanted_focus = chunk_of(self.camera.eye);
         let look = look::raycast(self.camera.eye, self.camera.forward(), &self.world);
@@ -20598,6 +20875,7 @@ impl State {
         self.poll_bed_sleep_shot();
         self.poll_crouch_shot();
         self.poll_shadows_shot();
+        self.poll_bounce_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
@@ -22616,7 +22894,7 @@ mod tests {
         assert!(src.contains("nrm * 0.42"));
         assert!(src.contains("let reach = 3.6"));
         assert!(src.contains("array<f32, 3>(0.8, 1.8, 3.0)"));
-        assert!(src.contains("mix(0.84, 1.0, sqrt(clamp(sky_open, 0.0, 1.0)))"));
+        assert!(src.contains("mix(0.84, 1.0, soft_sky)"));
         assert!(src.contains("mix(0.90, 1.0, sqrt(clamp(contact, 0.0, 1.0)))"));
         assert!(src.contains("sqrt(clamp(sky_open, 0.0, 1.0))"));
         assert!(src.contains("sqrt(clamp(contact, 0.0, 1.0))"));
@@ -22627,7 +22905,14 @@ mod tests {
         assert!(src.contains("1.0 - use_trace"));
         assert!(src.contains("sky_open"));
         assert!(src.contains("contact"));
-        assert!(src.contains("mix(sky, sky_open, use_trace)"));
+        assert!(src.contains("soft_bounce"));
+        assert!(src.contains("raster_hemi"));
+        assert!(src.contains("mesh_bounce"));
+        assert!(src.contains("vec3<f32>(0.22, 0.26, 0.32)"));
+        assert!(src.contains("lit * albedo + soft_bounce"));
+        // Bounce fill must not multiply corner AO into sun coverage.
+        assert!(!src.contains("sun_shade * input.ao"));
+        assert!(!src.contains("occluded * sky * sun_shade"));
         assert!(!src.to_lowercase().contains("pathtrace"));
         assert!(!src.to_lowercase().contains("path trace"));
         assert!(src.contains("discard"));

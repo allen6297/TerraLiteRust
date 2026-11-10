@@ -4456,7 +4456,10 @@ mod tests {
         let sky = vertex.ao.clamp(0.0, 1.0);
         let extra = (1.0 - sky) * (1.0 - coverage);
         let cave_mul = 1.0 + (0.16 - 1.0) * extra;
-        let indirect = vertex.bounce[1] * brightness * (1.0 - coverage) * sky;
+        let mesh_bounce = vertex.bounce[1] * brightness * (1.0 - coverage) * sky;
+        let hemi = 0.72 + 0.28 * vertex.normal[1].max(0.0);
+        let raster_hemi = 0.075 * brightness * hemi * sky * coverage;
+        let indirect = mesh_bounce + raster_hemi;
         ambient * facing * brightness * shadow_mul * cave_mul + vertex.block[1] + indirect
     }
 
