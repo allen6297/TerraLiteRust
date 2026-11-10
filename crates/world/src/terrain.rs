@@ -195,6 +195,9 @@ pub const CAMP_SMOKER: (i32, i32) = (CAMP_FIRE.0 - 2, CAMP_FIRE.1);
 /// Note block east of the fire, for pitch cycling with a rising mote.
 pub const CAMP_NOTE: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 + 2);
 
+/// Cartography table east of the fire (between the oak log and the note).
+pub const CAMP_CHART: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 + 1);
+
 /// Hanging sign in the south gate, pointing the path north of camp.
 pub const CAMP_SIGN: (i32, i32) = (CAMP_FIRE.0, CAMP_FIRE.1 + 3);
 
@@ -287,6 +290,8 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
     blocks.push((local_x - 2, floor, local_z, Block::new("smoker", 0)));
     // Southeast of the fire: use to cycle pitch and see a mote.
     blocks.push((local_x + 2, floor, local_z + 2, Block::new("note_block", 0)));
+    // East of the fire: widen a held map at the chart table.
+    blocks.push((local_x + 2, floor, local_z + 1, Block::new("cartography_table", 0)));
     // South gate lintel height: hanging sign with the north-path tip.
     blocks.push((local_x, floor + 1, local_z + 3, Block::new("hanging_sign", 0)));
     // East of the fire: insert a music disc to play.
@@ -984,6 +989,11 @@ mod tests {
         assert_eq!(
             (2 * 16 + i32::from(x + 2), -2 * 16 + i32::from(z + 2)),
             CAMP_NOTE
+        );
+        assert_eq!(camp.block(x + 2, y, z + 1).id, "cartography_table");
+        assert_eq!(
+            (2 * 16 + i32::from(x + 2), -2 * 16 + i32::from(z + 1)),
+            CAMP_CHART
         );
         assert_eq!(camp.block(x, y + 1, z + 3).id, "hanging_sign");
         assert_eq!(

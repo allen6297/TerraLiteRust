@@ -1186,6 +1186,8 @@ pub struct State {
     found_sherd: bool,
     /// Once: found the mine-mouth lodestone.
     found_lodestone: bool,
+    /// Once: found the camp cartography table.
+    found_chart: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2242,6 +2244,7 @@ impl State {
             found_chime: false,
             found_sherd: false,
             found_lodestone: false,
+            found_chart: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -4025,6 +4028,10 @@ impl State {
         if !self.found_camp && near(rebuild_world::CAMP_FIRE.0, rebuild_world::CAMP_FIRE.1) {
             self.found_camp = true;
             self.gui.push_chat("a camp");
+        }
+        if !self.found_chart && near(rebuild_world::CAMP_CHART.0, rebuild_world::CAMP_CHART.1) {
+            self.found_chart = true;
+            self.gui.push_chat("a chart table — widen a map");
         }
         if !self.found_farm && near(rebuild_world::CAMP_FARM.0, rebuild_world::CAMP_FARM.1) {
             self.found_farm = true;
@@ -12590,6 +12597,77 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(jx + dx * 8, jz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Open the camp cartography table mid-widen, then quit with a PNG.
+    pub fn arm_chart_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CAMP_CHART;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "cartography_table" {
+                cy = y;
+                break;
+            }
+        }
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: cx,
+                y: cy,
+                z: cz,
+                block: Block::new("cartography_table", 0),
+            }],
+        );
+        self.chunk_bake.touch(cx, cz);
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 - 2.2,
+            cy as f32 + 0.85 + body::EYE_HEIGHT,
+            cz as f32 + 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("map");
+        let _ = self.hotbar.chart_map();
+        self.hotbar_dirty = true;
+        let _ = self.gui.open_chart();
+        self.gui.note_chart("wider");
+        self.gui.push_chat("a chart table — widen a map");
+        self.gui.push_chat("wider");
+        self.found_camp = true;
+        self.found_chart = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
