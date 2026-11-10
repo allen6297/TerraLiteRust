@@ -1154,6 +1154,8 @@ pub struct State {
     found_thunk: bool,
     /// Once: opened a chest and heard the lid scrape.
     found_scrape: bool,
+    /// Once: placed a torch or lantern and heard the pop.
+    found_pop: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2194,6 +2196,7 @@ impl State {
             found_gull: false,
             found_thunk: false,
             found_scrape: false,
+            found_pop: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -7495,14 +7498,20 @@ impl State {
                 };
                 self.gui.push_chat(word);
             }
-            self.play_world(
-                crate::audio::Sound::Place,
-                [
-                    cell.x as f32 + 0.5,
-                    cell.y as f32 + 0.5,
-                    cell.z as f32 + 0.5,
-                ],
-            );
+            let source = [
+                cell.x as f32 + 0.5,
+                cell.y as f32 + 0.5,
+                cell.z as f32 + 0.5,
+            ];
+            if cell.block.id == "torch" || cell.block.id == "lantern" {
+                self.play_world(crate::audio::Sound::Pop, source);
+                if !self.found_pop {
+                    self.found_pop = true;
+                    self.gui.push_chat("pop");
+                }
+            } else {
+                self.play_world(crate::audio::Sound::Place, source);
+            }
             self.slot_punch = 1.0;
             if before.id == "chiseled_bookshelf"
                 && cell.block.id == "chiseled_bookshelf"
@@ -13220,6 +13229,109 @@ impl State {
         self.hotbar_dirty = true;
         self.drops = crate::drops::Drops::new();
         self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
+    /// Placed torch with soft pop tip, then quit with a PNG.
+    pub fn arm_torch_pop_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        self.clock.set_time_of_day(0.0);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let tx = 6;
+        let ty = 1;
+        let tz = 14;
+        let mut changes = Vec::new();
+        for z in 8..=16 {
+            for x in 4..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 1..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: tx,
+            y: 1,
+            z: tz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: tx,
+            y: 2,
+            z: tz,
+            block: Block::new("torch", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let flame = glam::Vec3::new(tx as f32 + 0.5, ty as f32 + 1.55, tz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            tx as f32 - 1.0,
+            ty as f32 + 0.5 + body::EYE_HEIGHT,
+            tz as f32 - 2.6,
+        );
+        self.camera = Camera::looking_at(eye, flame);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let source = [tx as f32 + 0.5, ty as f32 + 1.55, tz as f32 + 0.5];
+        self.found_pop = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("pop");
+        self.play_world(crate::audio::Sound::Pop, source);
+        self.drops = crate::drops::Drops::new();
+        self.rebuild_drops();
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(tx + dx * 8, tz + dz * 8);
+            }
+        }
         let _ = self.window.focus_window();
     }
 

@@ -188,6 +188,8 @@ struct Args {
     shot_door: Option<std::path::PathBuf>,
     /// Chest lid scrape, then quit.
     shot_scrape: Option<std::path::PathBuf>,
+    /// Torch place pop, then quit.
+    shot_pop: Option<std::path::PathBuf>,
     /// Dusk fireflies over water, then quit.
     shot_firefly: Option<std::path::PathBuf>,
     /// Wolf companion sit/follow, then quit.
@@ -359,6 +361,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_thunk: args.shot_thunk,
         shot_door: args.shot_door,
         shot_scrape: args.shot_scrape,
+        shot_pop: args.shot_pop,
         shot_firefly: args.shot_firefly,
         shot_wolf: args.shot_wolf,
         shot_cat: args.shot_cat,
@@ -447,6 +450,7 @@ struct App {
     shot_thunk: Option<std::path::PathBuf>,
     shot_door: Option<std::path::PathBuf>,
     shot_scrape: Option<std::path::PathBuf>,
+    shot_pop: Option<std::path::PathBuf>,
     shot_firefly: Option<std::path::PathBuf>,
     shot_wolf: Option<std::path::PathBuf>,
     shot_cat: Option<std::path::PathBuf>,
@@ -638,6 +642,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_scrape.take() {
                     state.arm_chest_scrape_shot(path);
+                }
+                if let Some(path) = self.shot_pop.take() {
+                    state.arm_torch_pop_shot(path);
                 }
                 if let Some(path) = self.shot_firefly.take() {
                     state.arm_firefly_shot(path);
@@ -908,6 +915,7 @@ where
         shot_thunk: None,
         shot_door: None,
         shot_scrape: None,
+        shot_pop: None,
         shot_firefly: None,
         shot_wolf: None,
         shot_cat: None,
@@ -1197,6 +1205,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-scrape".to_string())?;
                 parsed.shot_scrape = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-pop" | "--shot-torch" | "--shot-torch-pop" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-pop".to_string())?;
+                parsed.shot_pop = Some(std::path::PathBuf::from(value));
             }
             "--shot-firefly" | "--shot-fireflies" => {
                 let value = iter

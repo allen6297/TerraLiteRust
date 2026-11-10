@@ -77,6 +77,8 @@ pub enum Sound {
     Thunk,
     /// A soft wooden chest lid scrape.
     Scrape,
+    /// A soft torch / lantern place pop.
+    Pop,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -610,6 +612,7 @@ impl Audio {
             Sound::Gull => gull_cry(),
             Sound::Thunk => wood_thunk(),
             Sound::Scrape => chest_scrape(),
+            Sound::Pop => torch_pop(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -960,6 +963,24 @@ fn gull_cry() -> Vec<i16> {
     samples.extend(bird_tone(780.0, 0.14, 0.13, 71));
     samples.extend(vec![0i16; (22_050.0 * 0.06) as usize]);
     samples.extend(bird_tone(1_050.0, 0.16, 0.11, 79));
+    samples
+}
+
+/// Soft torch place pop. Short spark with a warm low under-tone.
+fn torch_pop() -> Vec<i16> {
+    let seconds = 0.08;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 131u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let warm = (t * 240.0 * std::f32::consts::TAU).sin() * 0.3;
+        let spark = (t * 1_480.0 * std::f32::consts::TAU).sin() * 0.22;
+        let env = (t / 0.006).min(1.0) * (1.0 - t / seconds).max(0.0).powf(1.6);
+        samples.push(((n * 0.2 + warm + spark) * 0.15 * env * 32_767.0) as i16);
+    }
     samples
 }
 
@@ -1438,6 +1459,17 @@ mod tests {
         audio.set_muted(true);
         audio.play(Sound::Scrape);
         assert_eq!(audio.played, vec![Sound::Scrape]);
+    }
+
+    #[test]
+    fn torch_pop_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Pop);
+        assert_eq!(audio.played, vec![Sound::Pop]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Pop);
+        assert_eq!(audio.played, vec![Sound::Pop]);
     }
 
     #[test]
