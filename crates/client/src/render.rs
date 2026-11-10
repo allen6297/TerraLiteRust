@@ -1164,6 +1164,12 @@ pub struct State {
     found_patter: bool,
     /// Once: stood by a furnace / smoker / blast and heard the heat crackle.
     found_heat: bool,
+    /// Eased beehive proximity, `0` far through `1` at the hive.
+    buzz_mix: f32,
+    /// World position of the beehive feeding `buzz_mix`, when nearby.
+    buzz_at: Option<[f32; 3]>,
+    /// Once: stood by a beehive and heard the buzz.
+    found_buzz: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2209,6 +2215,9 @@ impl State {
             patter_at: None,
             found_patter: false,
             found_heat: false,
+            buzz_mix: 0.0,
+            buzz_at: None,
+            found_buzz: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -13244,6 +13253,118 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Beehive buzz plate, then quit with a PNG.
+    pub fn arm_bee_buzz_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let hx = 11;
+        let hy = 2;
+        let hz = 17;
+        let mut changes = Vec::new();
+        for z in (hz - 1)..=(hz + 1) {
+            for x in (hx - 1)..=(hx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Oak post with a beehive and a flower for the plate.
+        changes.push(CellChange {
+            x: hx,
+            y: hy,
+            z: hz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: hx,
+            y: hy + 1,
+            z: hz,
+            block: Block::new("beehive", 1),
+        });
+        changes.push(CellChange {
+            x: hx + 1,
+            y: hy,
+            z: hz,
+            block: Block::new("flower", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let source = [hx as f32 + 0.5, hy as f32 + 1.55, hz as f32 + 0.5];
+        self.buzz_at = Some(source);
+        self.buzz_mix = 1.0;
+        self.found_buzz = true;
+        self.bee.place_at([hx as f32 + 1.2, hy as f32 + 1.4, hz as f32 + 0.2]);
+        self.rebuild_bee();
+        self.drops = crate::drops::Drops::new();
+        self.rebuild_drops();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("buzz");
+        self.play_world(crate::audio::Sound::Buzz, source);
+
+        let focus = glam::Vec3::new(hx as f32 + 0.5, hy as f32 + 1.55, hz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            hx as f32 + 0.5,
+            hy as f32 + 0.35 + body::EYE_HEIGHT,
+            hz as f32 - 2.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(hx + dx * 8, hz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Furnace heat crackle plate, then quit with a PNG.
     pub fn arm_furnace_heat_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -18040,6 +18161,13 @@ impl State {
             self.found_heat = true;
             self.gui.push_chat("heat");
         }
+        let (hive_mix, hive_at) = nearest_beehive(&self.world, eye);
+        self.buzz_mix += (hive_mix - self.buzz_mix) * (dt * 2.0).min(1.0);
+        self.buzz_at = hive_at;
+        if hive_mix > 0.35 && !self.found_buzz {
+            self.found_buzz = true;
+            self.gui.push_chat("buzz");
+        }
         let (lamp_mix, lamp_at) = nearest_lantern(&self.world, eye);
         self.hiss_mix += (lamp_mix - self.hiss_mix) * (dt * 2.2).min(1.0);
         self.hiss_at = lamp_at;
@@ -18248,6 +18376,16 @@ impl State {
                     );
                 }
             }
+            if let Some(level) = self.audio.buzz_ready(dt, self.buzz_mix) {
+                if let Some(source) = self.buzz_at {
+                    self.play_world_soft(crate::audio::Sound::Buzz, source, level);
+                } else {
+                    self.audio.play_heard(
+                        crate::audio::Sound::Buzz,
+                        crate::audio::Hearing::even(level),
+                    );
+                }
+            }
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
@@ -18260,6 +18398,7 @@ impl State {
             let _ = self.audio.hiss_ready(dt, 0.0);
             let _ = self.audio.gull_ready(dt, 0.0);
             let _ = self.audio.patter_ready(dt, 0.0);
+            let _ = self.audio.buzz_ready(dt, 0.0);
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
@@ -20665,6 +20804,40 @@ fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
     }
 }
 
+/// Soft proximity to a beehive. Mix is `0` outside ~9 blocks, rising to `1`
+/// at the hive. Returns the hive center for spatial buzz.
+fn nearest_beehive(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 8;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 3)..=(cy + 3) {
+                if world.block_at(x, y, z).id != "beehive" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.55, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 9.0 => {
+            let t = ((9.0 - dist) / 9.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// Soft proximity to a furnace, smoker, or blast furnace. Mix is `0` outside
 /// ~10 blocks, rising to `1` at the block. Feeds the shared crackle ambience.
 fn nearest_furnace(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -21260,6 +21433,25 @@ mod tests {
             }],
         );
         assert!(!super::open_sky(&cluster, eye));
+    }
+
+    #[test]
+    fn bee_buzz_mix_rises_beside_a_hive() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        let eye = [0.5, 2.5, 0.5];
+        assert_eq!(super::nearest_beehive(&cluster, eye).0, 0.0);
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[rebuild_world::CellChange {
+                x: 1,
+                y: 2,
+                z: 0,
+                block: rebuild_world::Block::new("beehive", 0),
+            }],
+        );
+        let (mix, at) = super::nearest_beehive(&cluster, eye);
+        assert!(mix > 0.3, "hive mix {mix}");
+        assert!(at.is_some());
     }
 
     #[test]

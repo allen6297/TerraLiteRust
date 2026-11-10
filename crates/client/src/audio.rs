@@ -69,6 +69,8 @@ pub enum Sound {
     Rustle,
     /// Soft rain tapping on leaves under a wet canopy.
     Patter,
+    /// Soft bee buzz near a beehive.
+    Buzz,
     /// A soft warm lantern / torch hiss.
     Hiss,
     /// A soft wooden fence-gate / door creak.
@@ -287,6 +289,8 @@ pub struct Audio {
     rustle_left: f32,
     /// Seconds until the next rain-on-leaves patter.
     patter_left: f32,
+    /// Seconds until the next bee buzz.
+    buzz_left: f32,
     /// Seconds until the next lantern hiss.
     hiss_left: f32,
     /// Seconds until the next dawn shore gull.
@@ -321,6 +325,7 @@ impl Audio {
             drip_left: 0.0,
             rustle_left: 0.0,
             patter_left: 0.0,
+            buzz_left: 0.0,
             hiss_left: 0.0,
             gull_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
@@ -540,6 +545,24 @@ impl Audio {
         Some(0.12 + mix * 0.26)
     }
 
+    /// Loudness for the next bee buzz, or `None` this frame.
+    ///
+    /// `mix` is proximity to a beehive (`0` far → `1` at the hive).
+    pub fn buzz_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.08 {
+            self.buzz_left = 0.0;
+            return None;
+        }
+        self.buzz_left -= dt;
+        if self.buzz_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edge (~2.4s); steadier at the hive (~1.0s).
+        self.buzz_left = 2.4 - mix * 1.4;
+        Some(0.11 + mix * 0.24)
+    }
+
     /// Loudness for the next lantern / torch hiss, or `None` this frame.
     ///
     /// `mix` is proximity (`0` far → `1` at the light).
@@ -631,6 +654,7 @@ impl Audio {
             Sound::Drip => cave_drip(),
             Sound::Rustle => leaf_rustle(),
             Sound::Patter => rain_on_leaves(),
+            Sound::Buzz => bee_buzz(),
             Sound::Hiss => lantern_hiss(),
             Sound::Creak => gate_creak(),
             Sound::Gull => gull_cry(),
@@ -1099,6 +1123,25 @@ fn leaf_rustle() -> Vec<i16> {
     samples
 }
 
+/// Soft bee wing buzz. Mid tone with a thin rasp.
+fn bee_buzz() -> Vec<i16> {
+    let seconds = 0.22;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 191u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let wing = (t * 260.0 * std::f32::consts::TAU).sin() * 0.42
+            + (t * 520.0 * std::f32::consts::TAU).sin() * 0.18;
+        let rasp = (t * 1_350.0 * std::f32::consts::TAU).sin() * 0.08;
+        let env = (t / 0.02).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.22 + wing + rasp) * 0.12 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
 /// Soft rain taps on leaves. Shorter and wetter than a dry rustle.
 fn rain_on_leaves() -> Vec<i16> {
     let seconds = 0.2;
@@ -1480,6 +1523,22 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn bee_buzz_waits_for_hive_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.buzz_ready(0.1, 0.0).is_none());
+        let level = audio
+            .buzz_ready(0.1, 1.0)
+            .expect("at the hive buzzes on the first beat");
+        assert!(level > 0.3 && level <= 0.4);
+        assert!(audio.buzz_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Buzz, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Buzz]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Buzz, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Buzz]);
     }
 
     #[test]
