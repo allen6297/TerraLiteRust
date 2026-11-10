@@ -39,6 +39,14 @@ pub enum ScriptHook {
     AfterPlace {
         id: String,
     },
+    /// Compound fill was placed into a host (`water` / `ember`).
+    FillPlace {
+        id: String,
+    },
+    /// Compound fill was cleared from a host.
+    FillRemove {
+        id: String,
+    },
     OnSelect {
         id: String,
     },
@@ -147,6 +155,8 @@ impl ScriptHook {
             | Self::BeforePlace { id }
             | Self::AfterBreak { id }
             | Self::AfterPlace { id }
+            | Self::FillPlace { id }
+            | Self::FillRemove { id }
             | Self::OnSelect { id }
             | Self::OnScreen { id }
             | Self::BreakSpeed { id }
@@ -190,6 +200,8 @@ impl ScriptHook {
             Self::BeforePlace { .. } => "before-place",
             Self::AfterBreak { .. } => "after-break",
             Self::AfterPlace { .. } => "after-place",
+            Self::FillPlace { .. } => "fill-place",
+            Self::FillRemove { .. } => "fill-remove",
             Self::OnSelect { .. } => "on-select",
             Self::OnScreen { .. } => "on-screen",
             Self::BreakSpeed { .. } => "break-speed",
@@ -232,6 +244,8 @@ impl ScriptHook {
             Self::BeforePlace { .. } => "before_place",
             Self::AfterBreak { .. } => "after_break",
             Self::AfterPlace { .. } => "after_place",
+            Self::FillPlace { .. } => "fill_place",
+            Self::FillRemove { .. } => "fill_remove",
             Self::OnSelect { .. } => "on_select",
             Self::OnScreen { .. } => "on_screen",
             Self::BreakSpeed { .. } => "break_speed",
@@ -274,6 +288,8 @@ impl ScriptHook {
             "before_place" => Ok(Self::BeforePlace { id }),
             "after_break" => Ok(Self::AfterBreak { id }),
             "after_place" => Ok(Self::AfterPlace { id }),
+            "fill_place" => Ok(Self::FillPlace { id }),
+            "fill_remove" => Ok(Self::FillRemove { id }),
             "on_select" => Ok(Self::OnSelect { id }),
             "on_screen" => Ok(Self::OnScreen { id }),
             "break_speed" => Ok(Self::BreakSpeed { id }),
@@ -348,6 +364,8 @@ pub(crate) struct ScriptTable {
     before_place: Vec<ScriptSlot>,
     after_break: Vec<ScriptSlot>,
     after_place: Vec<ScriptSlot>,
+    fill_place: Vec<ScriptSlot>,
+    fill_remove: Vec<ScriptSlot>,
     on_select: Vec<ScriptSlot>,
     on_screen: Vec<ScriptSlot>,
     break_speed: Vec<ScriptSlot>,
@@ -418,6 +436,8 @@ impl ScriptTable {
             before_place: Vec::new(),
             after_break: Vec::new(),
             after_place: Vec::new(),
+            fill_place: Vec::new(),
+            fill_remove: Vec::new(),
             on_select: Vec::new(),
             on_screen: Vec::new(),
             break_speed: Vec::new(),
@@ -676,6 +696,62 @@ impl ScriptTable {
             if let Err(err) = call(self, hook, world, &args, &view, ScriptWrites::Open) {
                 eprintln!("rosegold: hook failed: {err}");
             }
+        }
+    }
+
+    /// `events.fill_place` / `hooks.fill_place` — fill kind entered a host.
+    pub(crate) fn fill_place(&self, world: &mut Cluster, kind: &str, x: i32, y: i32, z: i32) {
+        let bar = self.bar();
+        let view = Self::view_of(&bar);
+        let args = [
+            Arg::Text(kind.to_string()),
+            Arg::Int(x),
+            Arg::Int(y),
+            Arg::Int(z),
+        ];
+        for hook in &self.fill_place {
+            if let Err(err) = call(self, hook, world, &args, &view, ScriptWrites::Open) {
+                eprintln!("rosegold: hook failed: {err}");
+            }
+        }
+    }
+
+    /// `events.fill_remove` / `hooks.fill_remove` — fill kind left a host.
+    pub(crate) fn fill_remove(&self, world: &mut Cluster, kind: &str, x: i32, y: i32, z: i32) {
+        let bar = self.bar();
+        let view = Self::view_of(&bar);
+        let args = [
+            Arg::Text(kind.to_string()),
+            Arg::Int(x),
+            Arg::Int(y),
+            Arg::Int(z),
+        ];
+        for hook in &self.fill_remove {
+            if let Err(err) = call(self, hook, world, &args, &view, ScriptWrites::Open) {
+                eprintln!("rosegold: hook failed: {err}");
+            }
+        }
+    }
+
+    /// Fire fill_place / fill_remove when the cell's fill byte changed.
+    pub(crate) fn note_fill_change(
+        &self,
+        world: &mut Cluster,
+        x: i32,
+        y: i32,
+        z: i32,
+        before: u8,
+        after: u8,
+    ) {
+        if before == after {
+            return;
+        }
+        if after != crate::chunk::FILL_NONE {
+            if let Some(kind) = crate::chunk::fill_name(after) {
+                self.fill_place(world, kind, x, y, z);
+            }
+        } else if let Some(kind) = crate::chunk::fill_name(before) {
+            self.fill_remove(world, kind, x, y, z);
         }
     }
 
@@ -1443,6 +1519,8 @@ impl ScriptTable {
             "before_place" => Some(&self.before_place),
             "after_break" => Some(&self.after_break),
             "after_place" => Some(&self.after_place),
+            "fill_place" => Some(&self.fill_place),
+            "fill_remove" => Some(&self.fill_remove),
             "on_select" => Some(&self.on_select),
             "on_screen" => Some(&self.on_screen),
             "break_speed" => Some(&self.break_speed),
@@ -1491,6 +1569,8 @@ impl ScriptTable {
             ScriptHook::BeforePlace { .. } => self.before_place.push(item),
             ScriptHook::AfterBreak { .. } => self.after_break.push(item),
             ScriptHook::AfterPlace { .. } => self.after_place.push(item),
+            ScriptHook::FillPlace { .. } => self.fill_place.push(item),
+            ScriptHook::FillRemove { .. } => self.fill_remove.push(item),
             ScriptHook::OnSelect { .. } => self.on_select.push(item),
             ScriptHook::OnScreen { .. } => self.on_screen.push(item),
             ScriptHook::BreakSpeed { .. } => self.break_speed.push(item),
@@ -1817,16 +1897,7 @@ fn invoke(
     writes: ScriptWrites,
 ) -> Result<rebuild_rosegold::Call, String> {
     let result = hook.host.call(hook.slot, args, &mut |query| {
-        answer(
-            world,
-            &table.writes,
-            &table.live_spawns,
-            &table.lines,
-            &table.pending_screens,
-            view,
-            &writes,
-            query,
-        )
+        answer(table, world, view, &writes, query)
     });
     let said: Vec<String> = table.lines.borrow_mut().drain(..).collect();
     let mut call = result?;
@@ -1836,17 +1907,16 @@ fn invoke(
 }
 
 fn answer(
+    table: &ScriptTable,
     world: &mut Cluster,
-    writes: &std::cell::RefCell<Vec<crate::changes::CellChange>>,
-    live_spawns: &std::cell::RefCell<
-        Vec<Result<(String, i32, i32, i32), (String, i32, i32, i32)>>,
-    >,
-    lines: &std::cell::RefCell<Vec<String>>,
-    pending_screens: &std::cell::RefCell<Vec<String>>,
     view: &ScriptView<'_>,
     gate: &ScriptWrites,
     query: Query,
 ) -> Result<Answer, String> {
+    let writes = &table.writes;
+    let live_spawns = &table.live_spawns;
+    let lines = &table.lines;
+    let pending_screens = &table.pending_screens;
     let pack = Pack::builtin();
     match query {
         Query::Block { x, y, z } => {
@@ -1940,6 +2010,52 @@ fn answer(
             }
             Ok(Answer::Bool(wrote))
         }
+        Query::Fill { x, y, z } => {
+            if !world.in_bounds(x, y, z) {
+                return Ok(Answer::Text(String::new()));
+            }
+            Ok(Answer::Text(
+                crate::chunk::fill_name(world.block_at(x, y, z).fill)
+                    .unwrap_or("")
+                    .to_string(),
+            ))
+        }
+        Query::SetFill { x, y, z, kind } => {
+            if !matches!(gate, ScriptWrites::Open) || !world.in_bounds(x, y, z) {
+                return Ok(Answer::Bool(false));
+            }
+            let current = world.block_at(x, y, z);
+            if !crate::chunk::compound_host(current.id) {
+                return Ok(Answer::Bool(false));
+            }
+            let fill = if kind.is_empty() || kind == "none" {
+                Some(crate::chunk::FILL_NONE)
+            } else {
+                crate::chunk::fill_kind(&kind)
+            };
+            let Some(fill) = fill else {
+                return Ok(Answer::Bool(false));
+            };
+            if current.fill == fill {
+                return Ok(Answer::Bool(true));
+            }
+            let before = current.fill;
+            let block = current.with_fill(fill);
+            let wrote = world.set_block(x, y, z, block);
+            if wrote {
+                writes.borrow_mut().push(crate::changes::CellChange {
+                    x,
+                    y,
+                    z,
+                    block: world.block_at(x, y, z),
+                });
+                table.note_fill_change(world, x, y, z, before, fill);
+            }
+            Ok(Answer::Bool(wrote))
+        }
+        Query::IsCompound { x, y, z } => Ok(Answer::Bool(
+            world.in_bounds(x, y, z) && crate::chunk::compound_host(world.block_at(x, y, z).id),
+        )),
         Query::Time => Ok(Answer::Float(view.time.map(f64::from).unwrap_or(-1.0))),
         Query::IsDay => Ok(Answer::Bool(
             view.time.is_some_and(|time| (0.25..0.75).contains(&time)),

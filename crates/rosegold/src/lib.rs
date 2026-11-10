@@ -285,6 +285,25 @@ pub enum Query {
         z: i32,
         meta: i32,
     },
+    /// Compound fill kind (`water` / `ember`), or `""` when empty / outside.
+    Fill {
+        x: i32,
+        y: i32,
+        z: i32,
+    },
+    /// Set compound fill to `water` / `ember`, or clear with `""` / `none`.
+    SetFill {
+        x: i32,
+        y: i32,
+        z: i32,
+        kind: String,
+    },
+    /// True when the cell's solid can hold a compound fill.
+    IsCompound {
+        x: i32,
+        y: i32,
+        z: i32,
+    },
     /// A chat line from `chat.say`. It does not change the world.
     Say {
         text: String,
@@ -772,6 +791,22 @@ fn query_of(name: &str, args: &[Value]) -> Result<Query, String> {
             y: int_at(args, 1)?,
             z: int_at(args, 2)?,
             meta: int_at(args, 3)?,
+        }),
+        "world.get_fill" => Ok(Query::Fill {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+        }),
+        "world.set_fill" => Ok(Query::SetFill {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+            kind: text_at(args, 3)?,
+        }),
+        "world.is_compound" => Ok(Query::IsCompound {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
         }),
         "world.time_of_day" => Ok(Query::Time),
         "world.is_day" => Ok(Query::IsDay),

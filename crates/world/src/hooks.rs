@@ -766,6 +766,7 @@ pub fn apply_authoritative(world: &mut Cluster, edit: Edit, hooks: &Hooks) -> bo
             if !would_apply(world, edit) {
                 return false;
             }
+            let before = world.block_at(x, y, z);
             let event = BeforePlace { x, y, z, block };
             if hooks.before_place(&event) == BreakVerdict::Cancel
                 || hooks.scripts.before_place(world, &event) == BreakVerdict::Cancel
@@ -777,6 +778,10 @@ pub fn apply_authoritative(world: &mut Cluster, edit: Edit, hooks: &Hooks) -> bo
                 let event = AfterPlace { x, y, z, block };
                 hooks.after_place(&event);
                 hooks.scripts.after_place(world, &event);
+                let after = world.block_at(x, y, z);
+                hooks
+                    .scripts
+                    .note_fill_change(world, x, y, z, before.fill, after.fill);
             }
             changed
         }
@@ -887,6 +892,31 @@ mod tests {
             min: [40.0, 40.0, 40.0],
             max: [40.6, 41.8, 40.6],
         }
+    }
+
+    #[test]
+    fn filling_a_grate_applies_compound_fill() {
+        use crate::chunk::{FILL_WATER, fill_name};
+        let mut world = {
+            let chunk =
+                Chunk::from_blocks(0, 0, [(2, 1, 2, Block::new("copper_grate", 0))]).unwrap();
+            Cluster::try_from_chunks(0, 0, [chunk]).unwrap()
+        };
+        let hooks = Hooks::new();
+        assert_eq!(world.block_at(2, 1, 2).fill, 0);
+        assert!(apply_authoritative(
+            &mut world,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+                player: far_player(),
+            },
+            &hooks
+        ));
+        assert_eq!(world.block_at(2, 1, 2).fill, FILL_WATER);
+        assert_eq!(fill_name(world.block_at(2, 1, 2).fill), Some("water"));
     }
 
     #[test]

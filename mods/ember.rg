@@ -16,6 +16,13 @@ class EmberPulse impl Tickable {
             world.set_block(2, 3, 1, "ember:glow_brick");
             BlockEntities.setInt(2, 3, 1, "charge", 3);
             print("ember glow tile planted");
+            // Compound demo: grate + empty fence, then charge the grate with ember fill.
+            world.set_block(4, 1, 12, "copper_grate");
+            world.set_block(5, 1, 12, "fence");
+            if (world.is_compound(4, 1, 12)) {
+                world.set_fill(4, 1, 12, "ember");
+                print("ember fill on grate: " + world.get_fill(4, 1, 12));
+            }
         }
         if (n > 2 && n % 5 == 0) {
             if (world.get_block(2, 3, 1) == "ember:glow_brick") {
@@ -27,6 +34,12 @@ class EmberPulse impl Tickable {
                 }
             }
         }
+    }
+}
+
+fn on_ember_fill(kind: String, x: Int, y: Int, z: Int) {
+    if (kind == "ember") {
+        chat.say("ember fill @" + x + "," + y + "," + z);
     }
 }
 
@@ -152,6 +165,7 @@ fn on_init() {
 
     Mod.listenTick("ember-pulse", ember_tick);
     Mod.listenUseBlock("ember-wand", ember_use_block);
+    Mod.listenFillPlace("ember-fill-place", on_ember_fill);
     Mod.log("registered " + brick.id + ", ember:ember, " + shade.id + ", ember_glow");
 }
 
