@@ -894,6 +894,14 @@ pub struct State {
     eat_shot_eye: glam::Vec3,
     eat_shot_yaw: f32,
     eat_shot_pitch: f32,
+    /// One-shot grounded vs jump FOV stitch, then quit.
+    jump_shot_path: Option<std::path::PathBuf>,
+    jump_shot_frames: u32,
+    jump_shot_phase: JumpShotPhase,
+    jump_shot_ground: Option<CapturedRgba>,
+    jump_shot_eye: glam::Vec3,
+    jump_shot_yaw: f32,
+    jump_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -966,6 +974,8 @@ pub struct State {
     water_sub: f32,
     /// Brief FOV punch on the splash that enters water.
     splash_kick: f32,
+    /// Brief FOV widen on jump takeoff.
+    jump_kick: f32,
     /// Seconds until the next rain patter while fog is up.
     rain_wait: f32,
     /// Seconds until a held mace can swing again.
@@ -1792,6 +1802,13 @@ impl State {
             eat_shot_eye: glam::Vec3::ZERO,
             eat_shot_yaw: 0.0,
             eat_shot_pitch: 0.0,
+            jump_shot_path: None,
+            jump_shot_frames: 0,
+            jump_shot_phase: JumpShotPhase::Idle,
+            jump_shot_ground: None,
+            jump_shot_eye: glam::Vec3::ZERO,
+            jump_shot_yaw: 0.0,
+            jump_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1830,6 +1847,7 @@ impl State {
             was_wet: false,
             water_sub: 0.0,
             splash_kick: 0.0,
+            jump_kick: 0.0,
             rain_wait: 0.0,
             mace_wait: 0.0,
             omen: false,
@@ -5665,6 +5683,68 @@ impl State {
         }
     }
 
+    /// Grounded FOV then jump takeoff FOV from the stairs overlook, stitched side by side.
+    pub fn arm_jump_shot(&mut self, path: std::path::PathBuf) {
+        self.jump_shot_path = Some(path);
+        self.jump_shot_frames = 0;
+        self.jump_shot_phase = JumpShotPhase::WaitingGround;
+        self.jump_shot_ground = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.input.jump = false;
+        self.jump_kick = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.jump_shot_eye = eye;
+        self.jump_shot_yaw = yaw;
+        self.jump_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_jump_shot_camera(&mut self) {
+        if self.jump_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.jump_shot_eye,
+            self.jump_shot_yaw,
+            self.jump_shot_pitch,
+        );
+        self.posed_eye = self.jump_shot_eye;
+        self.posed_yaw = self.jump_shot_yaw;
+        self.posed_pitch = self.jump_shot_pitch;
+        self.pose_dirty = true;
+        match self.jump_shot_phase {
+            JumpShotPhase::WaitingGround | JumpShotPhase::Idle => {
+                self.camera.on_ground = true;
+                self.camera.velocity_y = 0.0;
+                self.input.jump = false;
+                self.jump_kick = 0.0;
+            }
+            JumpShotPhase::WaitingAir => {
+                self.camera.on_ground = false;
+                self.camera.velocity_y = 4.0;
+                self.input.jump = true;
+                self.jump_kick = 1.0;
+            }
+        }
+    }
+
     /// Idle view then mid-chew FOV/plate from the stairs overlook, stitched side by side.
     pub fn arm_eat_shot(&mut self, path: std::path::PathBuf) {
         self.eat_shot_path = Some(path);
@@ -6431,6 +6511,75 @@ impl State {
                 }
             }
             EatShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_jump_shot(&mut self) {
+        let Some(path) = self.jump_shot_path.clone() else {
+            return;
+        };
+        self.pin_jump_shot_camera();
+        self.jump_shot_frames = self.jump_shot_frames.saturating_add(1);
+        if self.jump_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.jump_shot_frames > 600 {
+                eprintln!("jump shot timed out");
+                self.jump_shot_path = None;
+                self.jump_shot_phase = JumpShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.jump_shot_phase {
+            JumpShotPhase::WaitingGround => match capture_window_rgba(&self.window) {
+                Ok(ground) => {
+                    self.jump_shot_ground = Some(ground);
+                    self.jump_shot_frames = 0;
+                    self.jump_shot_phase = JumpShotPhase::WaitingAir;
+                }
+                Err(err) => {
+                    eprintln!("jump ground capture failed: {err}");
+                    if self.jump_shot_frames > 400 {
+                        self.jump_shot_path = None;
+                        self.jump_shot_phase = JumpShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            JumpShotPhase::WaitingAir => {
+                let Some(ground) = self.jump_shot_ground.take() else {
+                    self.jump_shot_path = None;
+                    self.jump_shot_phase = JumpShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(air) => match stitch_held_light_proof(&ground, &air, &path) {
+                        Ok(()) => {
+                            eprintln!("jump shot wrote {}", path.display());
+                            self.jump_shot_path = None;
+                            self.jump_shot_phase = JumpShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("jump stitch failed: {err}");
+                            self.jump_shot_path = None;
+                            self.jump_shot_phase = JumpShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("jump air capture failed: {err}");
+                        self.jump_shot_ground = Some(ground);
+                        if self.jump_shot_frames > 400 {
+                            self.jump_shot_path = None;
+                            self.jump_shot_phase = JumpShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            JumpShotPhase::Idle => {}
         }
     }
 
@@ -8934,6 +9083,7 @@ impl State {
         self.was_wet = false;
         self.water_sub = 0.0;
         self.splash_kick = 0.0;
+        self.jump_kick = 0.0;
         self.clear_boat_feel();
         self.sync_pointer();
     }
@@ -9018,6 +9168,7 @@ impl State {
         }
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
         self.splash_kick = (self.splash_kick - dt * 5.0).max(0.0);
+        self.jump_kick = (self.jump_kick - dt * 5.5).max(0.0);
         if !self.boat.aboard() {
             self.boat_kick = (self.boat_kick - dt * 6.0).max(0.0);
             self.boat_show = (self.boat_show - dt * 5.0).max(0.0);
@@ -9061,6 +9212,7 @@ impl State {
         self.pin_attack_shot_camera();
         self.pin_hunger_shot_camera();
         self.pin_eat_shot_camera();
+        self.pin_jump_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -9121,6 +9273,9 @@ impl State {
                         self.camera.eye.z.floor() as i32,
                     ];
                     self.jump_blocked = self.try_script_jump(cell[0], cell[1], cell[2]);
+                    if !self.jump_blocked {
+                        self.jump_kick = 1.0;
+                    }
                 }
                 if self.jump_blocked {
                     motion.jump = false;
@@ -9619,13 +9774,15 @@ impl State {
         } else {
             crate::camera::chew_fov(self.sip, self.chew_phase) * bob_scale
         };
+        let jump = self.jump_kick * crate::camera::JUMP_FOV * bob_scale;
         let fov = crate::camera::punched_fov(
             base,
             self.sprint_kick * bob_scale,
             self.hit_kick * bob_scale,
             water_fov,
             self.boat_kick * bob_scale,
-        ) + chew;
+        ) + chew
+            + jump;
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
         let chew_bob = if self.sipping {
@@ -10329,6 +10486,7 @@ impl State {
         self.poll_attack_shot();
         self.poll_hunger_shot();
         self.poll_eat_shot();
+        self.poll_jump_shot();
     }
 }
 
@@ -10379,6 +10537,13 @@ enum EatShotPhase {
     Idle,
     WaitingIdle,
     WaitingChew,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JumpShotPhase {
+    Idle,
+    WaitingGround,
+    WaitingAir,
 }
 
 struct CapturedRgba {

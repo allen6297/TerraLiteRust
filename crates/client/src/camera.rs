@@ -294,6 +294,9 @@ pub const WATER_FOV: f32 = 8.0;
 /// Degrees the view widens while rowing a boat (before view-bob scale).
 pub const BOAT_FOV: f32 = 5.0;
 
+/// Degrees the view widens at jump takeoff (before view-bob scale).
+pub const JUMP_FOV: f32 = 4.0;
+
 /// Sprint / water / boat widen the view. A hit or landing tightens it. Spyglass stays narrow.
 ///
 /// `sprint`, `hit`, and `boat` are already scaled by the view-bob setting (off → no punch).
@@ -373,6 +376,7 @@ mod tests {
             punched_fov(LOOK_FOV, 0.0, 0.0, 0.0, 1.0),
             LOOK_FOV + BOAT_FOV
         );
+        assert_eq!(JUMP_FOV, 4.0);
         assert_eq!(head_bob(0.4, 0.0), (0.0, 0.0));
         let (full_side, full_rise) = head_bob(1.2, Bob::Full.scale());
         let (low_side, low_rise) = head_bob(1.2, Bob::Low.scale());
