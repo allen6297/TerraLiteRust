@@ -7841,6 +7841,8 @@ mod tests {
         assert_eq!(pack.food_of("awkward_potion"), Some(1));
         assert_eq!(pack.tool_icon("strength_potion"), Some("magma"));
         assert_eq!(pack.food_of("strength_potion"), Some(2));
+        assert!(pack.is_core("wither_skull"));
+        assert_eq!(pack.tool_icon("wither_skull"), Some("coal_ore"));
         assert!(pack.is_key("trial_key"));
         assert!(!pack.is_key("heavy_core"));
         assert_eq!(pack.tool_icon("trial_key"), Some("copper_chest"));

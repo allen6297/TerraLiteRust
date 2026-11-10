@@ -5271,6 +5271,226 @@ impl Blaze {
     }
 }
 
+/// Fortress corridor pad — stands on [`rebuild_world::NETHER_FORTRESS`].
+pub const WITHER_SKELETON_PAD: (i32, i32) = rebuild_world::NETHER_FORTRESS;
+
+const WITHER_HEARTS: i32 = 6;
+const WITHER_HEIGHT: f32 = 2.35;
+const WITHER_REACH: f32 = 1.35;
+const WITHER_STEP: f32 = 0.11;
+const WITHER_SWING_EVERY: u32 = 22;
+
+/// Tall dark skeleton that patrols the nether fortress corridor and melee-swings.
+pub struct WitherSkeleton {
+    origin: [f32; 3],
+    home: [f32; 3],
+    yaw: f32,
+    swing: u32,
+    hearts: i32,
+    down: f32,
+    loose: u32,
+    attacking: bool,
+}
+
+impl WitherSkeleton {
+    pub fn new() -> Self {
+        let (x, z) = WITHER_SKELETON_PAD;
+        let floor = f32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        let home = [x as f32 + 0.5, floor, z as f32 + 0.5];
+        Self {
+            origin: home,
+            home,
+            yaw: 0.0,
+            swing: 0,
+            hearts: WITHER_HEARTS,
+            down: 0.0,
+            loose: 0,
+            attacking: false,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = WITHER_HEARTS;
+        self.down = 0.0;
+        self.swing = 0;
+        self.loose = 0;
+        self.attacking = false;
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 1.2, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=5.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 0.95
+    }
+
+    /// Spend hearts. True when this hit drops the skeleton.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.down = 9.0;
+        self.attacking = false;
+        true
+    }
+
+    /// Return home after a knockdown. True on the frame it rises.
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if self.hearts > 0 {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.hearts = WITHER_HEARTS;
+        self.origin = self.home;
+        self.swing = 0;
+        self.down = 0.0;
+        self.loose = 0;
+        self.attacking = false;
+        true
+    }
+
+    /// Chase the player along the corridor. True when a melee swing is due.
+    pub fn tick_near(
+        &mut self,
+        count: u32,
+        player: [f32; 2],
+        clear: bool,
+        world: &Cluster,
+    ) -> bool {
+        if self.loose > 0 {
+            self.loose = self.loose.saturating_sub(count);
+            self.attacking = false;
+            return false;
+        }
+        if self.hearts <= 0 {
+            return false;
+        }
+        let mut hit = false;
+        for _ in 0..count {
+            let feet_y = self.origin[1].floor() as i32;
+            let dx = player[0] - self.origin[0];
+            let dz = player[1] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist > WITHER_REACH {
+                let from = [self.origin[0], self.origin[2]];
+                if let Some(next) =
+                    land_step(world, from, player, WITHER_STEP.min(dist - WITHER_REACH), feet_y, 2)
+                {
+                    face_forward(&mut self.yaw, next[0] - from[0], next[1] - from[1]);
+                    self.origin[0] = next[0];
+                    self.origin[2] = next[1];
+                }
+                self.attacking = false;
+            } else if clear {
+                face_forward(&mut self.yaw, dx, dz);
+                self.attacking = true;
+                self.swing = self.swing.wrapping_add(1);
+                if self.swing % WITHER_SWING_EVERY == 0 {
+                    hit = true;
+                }
+            } else {
+                self.attacking = false;
+            }
+            settle_land(&mut self.origin, world);
+        }
+        hit
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if self.hearts <= 0 {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        (
+            [x - 0.28, y, z - 0.28],
+            [x + 0.28, y + WITHER_HEIGHT, z + 0.28],
+        )
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bone = [0.22, 0.20, 0.18];
+        let dark = [0.10, 0.09, 0.08];
+        let rib = [0.16, 0.14, 0.13];
+        let mut out = Vec::new();
+        // Tall legs.
+        push_box(&mut out, [x - 0.12, y + 0.55, z], [0.07, 0.55, 0.07], bone);
+        push_box(&mut out, [x + 0.12, y + 0.55, z], [0.07, 0.55, 0.07], bone);
+        // Torso.
+        push_box(&mut out, [x, y + 1.35, z], [0.18, 0.38, 0.12], dark);
+        // Ribs.
+        push_box(&mut out, [x, y + 1.45, z + 0.1], [0.2, 0.22, 0.04], rib);
+        // Arms — forward when swinging.
+        let reach = if self.attacking { 0.28 } else { 0.08 };
+        push_box(
+            &mut out,
+            [x - 0.28, y + 1.45, z + reach],
+            [0.06, 0.42, 0.06],
+            bone,
+        );
+        push_box(
+            &mut out,
+            [x + 0.28, y + 1.45, z + reach],
+            [0.06, 0.42, 0.06],
+            bone,
+        );
+        // Oversized black skull.
+        push_box(&mut out, [x, y + 2.05, z], [0.24, 0.22, 0.22], dark);
+        // Eye sockets.
+        push_box(
+            &mut out,
+            [x - 0.1, y + 2.08, z + 0.2],
+            [0.05, 0.05, 0.03],
+            [0.85, 0.55, 0.12],
+        );
+        push_box(
+            &mut out,
+            [x + 0.1, y + 2.08, z + 0.2],
+            [0.05, 0.05, 0.03],
+            [0.85, 0.55, 0.12],
+        );
+        yaw_mesh(&mut out, self.origin, self.yaw);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5462,6 +5682,36 @@ mod tests {
         assert!(blaze.alive());
         blaze.rouse([2.0, 4.0, 3.0]);
         assert!((blaze.origin()[1] - 5.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_wither_skeleton_swings_in_the_fortress() {
+        let mut wither = WitherSkeleton::new();
+        assert_eq!(
+            (
+                wither.origin()[0].floor() as i32,
+                wither.origin()[2].floor() as i32
+            ),
+            WITHER_SKELETON_PAD
+        );
+        assert!(!wither.vertices().is_empty());
+        let (_, _, min_y, max_y) = span(&wither.vertices());
+        assert!(max_y - min_y > 2.0, "wither skeleton should read tall");
+        let world = air_plot();
+        let home = wither.origin();
+        let mut swung = false;
+        for _ in 0..WITHER_SWING_EVERY {
+            if wither.tick_near(1, [home[0] + 0.4, home[2]], true, &world) {
+                swung = true;
+            }
+        }
+        assert!(swung, "wither skeleton should melee in reach");
+        assert!(!wither.hurt(2));
+        assert!(wither.hurt(4));
+        assert!(!wither.alive());
+        assert!(wither.vertices().is_empty());
+        assert!(wither.rest(10.0));
+        assert!(wither.alive());
     }
 
     #[test]

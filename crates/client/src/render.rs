@@ -1661,6 +1661,12 @@ pub struct State {
     fireballs: crate::fireballs::Fireballs,
     /// Hand over a blaze rod once inventory has room.
     blaze_due: bool,
+    wither: crate::mobs::WitherSkeleton,
+    wither_buf: Option<wgpu::Buffer>,
+    wither_count: u32,
+    /// Hand over wither skull / coal once inventory has room.
+    wither_due: bool,
+
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
     bee_count: u32,
@@ -2816,6 +2822,10 @@ impl State {
             blaze_count: 0,
             fireballs: crate::fireballs::Fireballs::new(),
             blaze_due: false,
+            wither: crate::mobs::WitherSkeleton::new(),
+            wither_buf: None,
+            wither_count: 0,
+            wither_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
             bee_count: 0,
@@ -2899,6 +2909,8 @@ impl State {
         state.rebuild_trader();
         state.rebuild_iron_golem();
         state.rebuild_blaze();
+        state.rebuild_wither();
+
         state.rebuild_bee();
         state.rebuild_fox();
         state.rebuild_goat();
@@ -5029,6 +5041,23 @@ impl State {
         self.blaze_count = vertices.len() as u32;
     }
 
+    fn rebuild_wither(&mut self) {
+        let vertices = self.wither.vertices();
+        if vertices.is_empty() {
+            self.wither_buf = None;
+            self.wither_count = 0;
+            return;
+        }
+        self.wither_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("wither_skeleton"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.wither_count = vertices.len() as u32;
+    }
+
     fn rebuild_bee(&mut self) {
         let vertices = self.bee.vertices();
         if vertices.is_empty() {
@@ -5241,12 +5270,21 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && self.blaze.aimed(eye, forward);
-        let guest_index =
-            if zombie_aimed || night_index.is_some() || breeze_aimed || blaze_aimed {
-                None
-            } else {
-                self.aimed_guest(eye, forward)
-            };
+        let wither_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && self.wither.aimed(eye, forward);
+        let guest_index = if zombie_aimed
+            || night_index.is_some()
+            || breeze_aimed
+            || blaze_aimed
+            || wither_aimed
+        {
+            None
+        } else {
+            self.aimed_guest(eye, forward)
+        };
         let amount = body::strength_hearts(
             body::mace_hearts(falling, smash),
             self.strength_left > 0.0,
@@ -5298,6 +5336,14 @@ impl State {
             }
             dropped
         };
+        let dropped_wither = wither_aimed && {
+            let origin = self.wither.origin();
+            let dropped = self.hurt_mob("wither_skeleton", amount, origin, |s, n| s.wither.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_guest = if let Some(index) = guest_index {
             let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
@@ -5315,9 +5361,14 @@ impl State {
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || wither_aimed
             || guest_index.is_some();
-        let dropped =
-            dropped_zombie || dropped_night || dropped_breeze || dropped_blaze || dropped_guest;
+        let dropped = dropped_zombie
+            || dropped_night
+            || dropped_breeze
+            || dropped_blaze
+            || dropped_wither
+            || dropped_guest;
         let word = if !aimed {
             "swing"
         } else if dropped {
@@ -5356,12 +5407,16 @@ impl State {
         if dropped_blaze {
             self.grant_blaze_rod();
         }
+        if dropped_wither {
+            self.grant_wither_loot();
+        }
         if self.hotbar.slot(slot).is_none() {
             self.gui.push_chat("the mace breaks");
         }
         self.rebuild_zombie();
         self.rebuild_breeze();
         self.rebuild_blaze();
+        self.rebuild_wither();
     }
 
     fn holding_horn(&self) -> bool {
@@ -5900,6 +5955,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_blaze();
+                return true;
+            }
+            let wither = self.wither.origin();
+            let (wmin, wmax) = self.wither.bounds();
+            if point_in_box(tip, wmin, wmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("wither_skeleton", amount, wither, |s, n| s.wither.hurt(n));
+                if dropped {
+                    self.grant_xp_at(wither, true);
+                    self.grant_wither_loot();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_wither();
                 return true;
             }
             if let Some(index) = self.guests.iter().position(|guest| {
@@ -6607,6 +6678,9 @@ impl State {
             self.gui.push_chat("a nether fortress");
             if self.blaze.alive() {
                 self.gui.push_chat("a blaze");
+            }
+            if self.wither.alive() {
+                self.gui.push_chat("a wither skeleton");
             }
         }
         if !self.found_lodestone
@@ -7616,6 +7690,31 @@ impl State {
         self.gui.push_chat("blaze rod");
     }
 
+    /// Hand over a wither skull and coal. A full bar leaves the debt for later.
+    fn grant_wither_loot(&mut self) {
+        let mut owed = false;
+        for (id, tip) in [("wither_skull", "wither skull"), ("coal_ore", "coal")] {
+            if !self.hotbar.room_for(id) && !self.bag.room_for(id) {
+                owed = true;
+                continue;
+            }
+            if !self.hotbar.collect(id) {
+                self.bag.collect(id);
+                self.bag_dirty = true;
+            }
+            self.hotbar_dirty = true;
+            self.gui.push_chat(tip);
+        }
+        if owed {
+            if !self.wither_due {
+                self.gui.push_chat("full");
+            }
+            self.wither_due = true;
+        } else {
+            self.wither_due = false;
+        }
+    }
+
     /// Hand over the slimeball. A full bar leaves the debt for a later tick.
     fn grant_slime(&mut self) {
         if !self.hotbar.room_for("slimeball") && !self.bag.room_for("slimeball") {
@@ -7923,6 +8022,18 @@ impl State {
                             self.grant_blaze_rod();
                         }
                         self.rebuild_blaze();
+                        hit = true;
+                    }
+                    let wither = self.wither.origin();
+                    if crate::splash::in_radius(burst.center, wither) {
+                        let dropped = self.hurt_mob("wither_skeleton", amount, wither, |s, n| {
+                            s.wither.hurt(n)
+                        });
+                        if dropped {
+                            self.grant_xp_at(wither, true);
+                            self.grant_wither_loot();
+                        }
+                        self.rebuild_wither();
                         hit = true;
                     }
                     let guest_hits: Vec<(usize, String, [f32; 3])> = self
@@ -8705,6 +8816,68 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Tall wither skeleton mid-corridor swing in the nether fortress, then quit with a PNG.
+    pub fn arm_wither_skeleton_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (wx, wz) = crate::mobs::WITHER_SKELETON_PAD;
+        let wy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        // Stand the skeleton mid-corridor facing the chamber doorway (east).
+        self.wither
+            .place_at([wx as f32 + 0.5, wy as f32, wz as f32 + 0.5]);
+        let _ = self.wither.tick_near(24, [wx as f32 + 3.0, wz as f32], true, &self.world);
+        let origin = self.wither.origin();
+        self.rebuild_wither();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a wither skeleton");
+        self.gui.push_chat("slash");
+
+        // Camera on the brick walkway east of the skeleton, looking west into the spur.
+        let focus = glam::Vec3::new(origin[0], origin[1] + 1.5, origin[2]);
+        let eye = glam::Vec3::new(
+            origin[0] + 3.4,
+            origin[1] + 1.55 + body::EYE_HEIGHT * 0.15,
+            origin[2] + 0.15,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("mace");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(wx + dx * 8, wz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -10331,7 +10504,9 @@ impl State {
             ("zombie", self.zombie.bounds()),
             ("breeze", self.breeze.bounds()),
             ("blaze", self.blaze.bounds()),
+            ("wither_skeleton", self.wither.bounds()),
             ("copper_golem", self.golem.bounds()),
+
             ("wolf", self.wolf.bounds()),
             ("cat", self.cat.bounds()),
             ("parrot", self.parrot.bounds()),
@@ -10419,6 +10594,9 @@ impl State {
         }
         if self.blaze.aimed(eye, forward) {
             return Some("blaze");
+        }
+        if self.wither.aimed(eye, forward) {
+            return Some("wither_skeleton");
         }
         if self.fox.aimed(eye, forward) {
             return Some("fox");
@@ -26869,6 +27047,9 @@ impl State {
             if self.blaze_due {
                 self.grant_blaze_rod();
             }
+            if self.wither_due {
+                self.grant_wither_loot();
+            }
             if self.horn_due {
                 self.grant_horn();
             }
@@ -26894,6 +27075,26 @@ impl State {
                 self.rebuild_blaze();
             }
             self.rebuild_blaze();
+            {
+                let (wmin, wmax) = self.wither.bounds();
+                let from = [
+                    (wmin[0] + wmax[0]) * 0.5,
+                    wmin[1] + 1.6,
+                    (wmin[2] + wmax[2]) * 0.5,
+                ];
+                let to = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+                let clear = look::clear_between(from, to, &self.world);
+                if self.wither.tick_near(steps, feet, clear, &self.world) {
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                    self.apply_damage(amount);
+                    self.gui.push_chat("slash");
+                }
+                if self.wither.rest(dt) {
+                    self.rebuild_wither();
+                }
+                self.rebuild_wither();
+            }
             if let Some(chore) = self.golem.tick(steps, &self.world) {
                 match chore {
                     crate::mobs::Chore::Press(at) => {
@@ -27752,6 +27953,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, blaze.slice(..));
                     pass.draw(0..self.blaze_count, 0..1);
+                }
+            }
+            if let Some(wither) = &self.wither_buf {
+                if self.wither_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, wither.slice(..));
+                    pass.draw(0..self.wither_count, 0..1);
                 }
             }
             if let Some(bee) = &self.bee_buf {

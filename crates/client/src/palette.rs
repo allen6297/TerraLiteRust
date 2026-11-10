@@ -206,6 +206,8 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "blaze_powder" => [0.98, 0.72, 0.18],
         "awkward_potion" => [0.55, 0.72, 0.82],
         "strength_potion" => [0.72, 0.28, 0.18],
+        "wither_skull" => [0.18, 0.16, 0.14],
+
 
 
         "sugar_cane" => [0.55, 0.78, 0.36],
