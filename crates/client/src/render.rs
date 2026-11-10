@@ -3281,14 +3281,20 @@ impl State {
             "composter" => self.gui.open_compost(hit.block, block.metadata),
             "stonecutter" => self.gui.open_cut(),
             "campfire" => {
-                if self.try_cook_campfire() {
+                if self.try_cook_heat() {
                     true
                 } else {
                     self.gui.open_fire()
                 }
             }
             "fletching_table" => self.gui.open_fletch(),
-            "smoker" => self.gui.open_smoker(),
+            "smoker" => {
+                if self.try_cook_heat() {
+                    true
+                } else {
+                    self.gui.open_smoker()
+                }
+            }
             "blast_furnace" => self.gui.open_blast(),
             "beehive" => self.gui.open_hive(hit.block, block.metadata),
             "cauldron" => self.gui.open_cauldron(hit.block, block.metadata),
@@ -3730,8 +3736,8 @@ impl State {
         self.chest_dirty = false;
     }
 
-    /// Hold raw food and use a looked-at campfire to cook it in one step.
-    fn try_cook_campfire(&mut self) -> bool {
+    /// Hold raw food and use a looked-at campfire or smoker to cook in one step.
+    fn try_cook_heat(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
         };
@@ -3741,12 +3747,11 @@ impl State {
         let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
             return false;
         };
-        if self
+        let heat = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2])
-            .id
-            != "campfire"
-        {
+            .id;
+        if heat != "campfire" && heat != "smoker" {
             return false;
         }
         let word = self.hotbar.cook_raw_now();
@@ -5043,7 +5048,7 @@ impl State {
             || self.try_parrot()
             || self.try_cat()
             || self.try_wolf()
-            || self.try_cook_campfire()
+            || self.try_cook_heat()
             || self.try_eat()
             || self.try_key()
             || self.try_wind()
@@ -6151,6 +6156,15 @@ impl State {
 
     /// Hold cooked food over a campfire after a one-step cook, then quit with a PNG.
     pub fn arm_cook_shot(&mut self, path: std::path::PathBuf) {
+        self.arm_heat_cook_shot(path, "campfire");
+    }
+
+    /// Hold cooked food over a smoker after a one-step cook, then quit with a PNG.
+    pub fn arm_smoker_cook_shot(&mut self, path: std::path::PathBuf) {
+        self.arm_heat_cook_shot(path, "smoker");
+    }
+
+    fn arm_heat_cook_shot(&mut self, path: std::path::PathBuf, heat: &str) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6187,7 +6201,7 @@ impl State {
             x: fx,
             y: fy,
             z: fz,
-            block: Block::new("campfire", 0),
+            block: Block::new(heat, 0),
         });
         apply_changes(&mut self.world, &changes);
         for change in &changes {

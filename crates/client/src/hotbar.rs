@@ -1003,7 +1003,7 @@ impl Hotbar {
         self.finish_cook_raw()
     }
 
-    /// One-step campfire cook: hold raw, use the fire, get cooked food.
+    /// One-step heat cook: hold raw, use a campfire or smoker, get cooked food.
     pub fn cook_raw_now(&mut self) -> &'static str {
         let Some(item) = self.item(self.selected) else {
             self.camp_heat = 0;
