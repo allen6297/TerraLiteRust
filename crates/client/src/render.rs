@@ -11250,8 +11250,16 @@ impl State {
                 crate::camera::STAIRS_XZ[0].floor() as i32,
                 crate::camera::STAIRS_XZ[1].floor() as i32,
             );
+            let shrine = crate::map::cell_of(
+                eye[0],
+                eye[2],
+                zoom,
+                crate::map::SHEET,
+                rebuild_world::SHRINE.0,
+                rebuild_world::SHRINE.1,
+            );
             quads.extend(crate::map::sheet_quads(
-                gui_w, gui_h, &colors, yaw, camp, mine, stairs,
+                gui_w, gui_h, &colors, yaw, camp, mine, stairs, shrine,
             ));
         } else if self.holding_map() && !self.menu.is_open() {
             let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];

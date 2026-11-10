@@ -1,8 +1,8 @@
 //! A held map: a small north-up patch, and a full sheet you open to read.
 //!
 //! The corner chart stays a glance. Right-click opens the sheet: a larger
-//! north-up page, with you in the middle, north labeled, and the camp marked
-//! when it falls on the page.
+//! north-up page, with you in the middle, north labeled, and the camp, mine,
+//! stairs, and southeast shrine marked when they fall on the page.
 
 use rebuild_world::{Block, Cluster};
 
@@ -29,6 +29,7 @@ const FACING: [f32; 3] = [0.90, 0.20, 0.15];
 const CAMP: [f32; 3] = [0.95, 0.45, 0.12];
 const MINE: [f32; 3] = [0.25, 0.55, 0.78];
 const STAIRS: [f32; 3] = [0.95, 0.82, 0.28];
+const SHRINE: [f32; 3] = [0.35, 0.72, 0.38];
 const PAPER: [f32; 3] = [0.16, 0.13, 0.09];
 const INK: [f32; 3] = [0.93, 0.90, 0.82];
 const BACK: [f32; 3] = [0.04, 0.05, 0.06];
@@ -167,7 +168,7 @@ pub fn quads(width: f32, height: f32, colors: &[[f32; 3]], yaw: f32) -> Vec<Quad
     quads
 }
 
-/// A full page. North is the top. `camp`, `mine`, and `stairs` are cells to mark.
+/// A full page. North is the top. Landmarks are cells to mark when on page.
 pub fn sheet_quads(
     width: f32,
     height: f32,
@@ -176,6 +177,7 @@ pub fn sheet_quads(
     camp: Option<(usize, usize)>,
     mine: Option<(usize, usize)>,
     stairs: Option<(usize, usize)>,
+    shrine: Option<(usize, usize)>,
 ) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 || colors.len() != SHEET * SHEET {
         return Vec::new();
@@ -232,6 +234,9 @@ pub fn sheet_quads(
     if let Some(cell) = camp {
         mark_cell(&mut quads, cell, CAMP);
     }
+    if let Some(cell) = shrine {
+        mark_cell(&mut quads, cell, SHRINE);
+    }
     let cx = grid_left + SHEET as f32 * SHEET_CELL * 0.5;
     let cy = grid_top - SHEET as f32 * SHEET_CELL * 0.5;
     quads.push(pixel(
@@ -277,31 +282,44 @@ pub fn sheet_quads(
         1.5,
     );
     let stairs_shown = stairs.is_some_and(|cell| cell != (SHEET / 2, SHEET / 2));
-    let note = map_note(camp.is_some(), mine.is_some(), stairs_shown);
+    let note = map_note(
+        camp.is_some(),
+        mine.is_some(),
+        stairs_shown,
+        shrine.is_some(),
+    );
     crate::gui::draw_text(
         &mut quads,
         width,
         height,
         x0 + 18.0,
         y0 + 8.0,
-        note,
+        &note,
         INK,
         1.0,
     );
     quads
 }
 
-fn map_note(camp: bool, mine: bool, stairs: bool) -> &'static str {
-    match (camp, mine, stairs) {
-        (true, true, true) => "you white   camp orange   mine blue   stairs gold",
-        (true, true, false) => "you white   camp orange   mine blue",
-        (true, false, true) => "you white   camp orange   stairs gold",
-        (true, false, false) => "you white   camp orange",
-        (false, true, true) => "you white   mine blue   stairs gold   camp off page",
-        (false, true, false) => "you white   mine blue   camp off page",
-        (false, false, true) => "you white   stairs gold   camp off page",
-        (false, false, false) => "you white   camp off page",
+fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool) -> String {
+    let mut bits = Vec::with_capacity(6);
+    bits.push("you white");
+    if camp {
+        bits.push("camp orange");
     }
+    if mine {
+        bits.push("mine blue");
+    }
+    if stairs {
+        bits.push("stairs gold");
+    }
+    if shrine {
+        bits.push("shrine green");
+    }
+    if !camp {
+        bits.push("camp off page");
+    }
+    bits.join("   ")
 }
 
 fn pixel(width: f32, height: f32, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 3]) -> Quad {
@@ -389,21 +407,34 @@ mod tests {
         let eye_z = 14.0;
         let camp = cell_of(eye_x, eye_z, 2, SHEET, 39, -25).expect("camp on the wide page");
         let mine = cell_of(eye_x, eye_z, 2, SHEET, -24, 40).expect("mine on the wide page");
+        let shrine = cell_of(eye_x, eye_z, 2, SHEET, 40, 40).expect("shrine on the wide page");
         assert_ne!(camp, mine);
+        assert_ne!(camp, shrine);
         assert!(cell_of(eye_x, eye_z, 0, SHEET, 39, -25).is_none());
         assert!(cell_of(eye_x, eye_z, 0, SHEET, -24, 40).is_none());
-        let sheet = sheet_quads(800.0, 600.0, &colors, 0.0, Some(camp), Some(mine), None);
+        let sheet = sheet_quads(
+            800.0,
+            600.0,
+            &colors,
+            0.0,
+            Some(camp),
+            Some(mine),
+            None,
+            Some(shrine),
+        );
         assert!(sheet.len() > SHEET * SHEET);
         assert_eq!(sheet[0].color, BACK);
         assert_eq!(sheet[1].color, PAPER);
         assert!(sheet[1].min[0] > -0.8 && sheet[1].max[0] < 0.8);
         assert!(sheet.iter().any(|quad| quad.color == CAMP));
         assert!(sheet.iter().any(|quad| quad.color == MINE));
+        assert!(sheet.iter().any(|quad| quad.color == SHRINE));
         let mark = sheet.iter().find(|quad| quad.color == MARK).unwrap();
         let tick = sheet.iter().find(|quad| quad.color == FACING).unwrap();
         assert!(tick.max[0] > mark.max[0], "yaw 0 looks east");
-        assert!(sheet_quads(0.0, 600.0, &colors, 0.0, None, None, None).is_empty());
+        assert!(sheet_quads(0.0, 600.0, &colors, 0.0, None, None, None, None).is_empty());
         assert_eq!(sample_span_len(), SHEET * SHEET);
+        assert!(map_note(true, false, false, true).contains("shrine green"));
     }
 
     fn sample_span_len() -> usize {
