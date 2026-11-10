@@ -8,7 +8,7 @@ use rebuild_world::{Hooks, load_dir};
 fn shipped_mods_still_load_with_the_guide() {
     let mut hooks = Hooks::new();
     let loaded = load_dir(Path::new(r"C:\CODE\TerraLite\mods"), &mut hooks).expect("mods load");
-    assert_eq!(loaded.len(), 3);
+    assert_eq!(loaded.len(), 4);
     let guide = Path::new("k's-guide").join("src").join("mod.rg");
     assert!(
         loaded
@@ -25,9 +25,30 @@ fn shipped_mods_still_load_with_the_guide() {
             .iter()
             .any(|(path, _hooks)| path.ends_with("ember.rg"))
     );
+    assert!(
+        loaded
+            .iter()
+            .any(|(path, _hooks)| path.ends_with("craft-story.rg"))
+    );
     let pack = rebuild_world::Pack::builtin();
     assert!(pack.contains_block("guide:marker"));
     assert!(pack.contains_block("ember:glow_brick"));
+    assert!(pack.contains_block("craft:paver"));
+    assert_eq!(
+        pack.script_block_loot("dirt").as_deref(),
+        Some(&["torch".to_string(), "apple".to_string()][..])
+    );
+    assert_eq!(
+        pack.script_chest_loot("camp_chest").as_deref(),
+        Some(
+            &[
+                "craft:paver".to_string(),
+                "torch".to_string(),
+                "apple".to_string(),
+                "map".to_string()
+            ][..]
+        )
+    );
     assert!(pack.contains_item("ember:ember"));
     assert!(pack.is_script_block_entity("ember:glow_brick"));
     assert!(pack.is_block_entity("ember:glow_brick"));

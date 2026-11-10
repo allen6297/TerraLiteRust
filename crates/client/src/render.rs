@@ -7439,9 +7439,7 @@ impl State {
             self.drops.puff(origin, crate::drops::chip_color(before.id));
             self.rebuild_drops();
             let remains = shape_of(cell.block).is_full_cube();
-            let (dropped, amount) = rebuild_world::harvest_of(before.id);
-            let mut id = dropped.to_string();
-            let mut count = u32::from(amount);
+            let mut loot = rebuild_world::break_loot_of(before.id);
             if self.hooks.listens_break_drop() {
                 let slots = hotbar_slots(&self.hotbar);
                 let view = client_view(&slots, &self.hotbar, self.camera.eye, self.clock);
@@ -7450,13 +7448,9 @@ impl State {
                         .break_drop(&mut self.world, before.id, cell.block.id, &view)
                 {
                     if chosen.is_empty() || chosen == "air" {
-                        id.clear();
-                        count = 0;
+                        loot.clear();
                     } else if Pack::builtin().contains_item(&chosen) {
-                        if chosen != id {
-                            count = 1;
-                        }
-                        id = chosen;
+                        loot = vec![(chosen, 1)];
                     }
                 }
             }
@@ -7502,8 +7496,7 @@ impl State {
                 self.hotbar_dirty = true;
             }
             if before.id == "wheat_crop" {
-                id.clear();
-                count = 0;
+                loot.clear();
                 let cell_at = [cell.x, cell.y, cell.z];
                 if before.metadata >= 3 {
                     self.drops.spawn("wheat", cell_at, remains);
@@ -7534,9 +7527,14 @@ impl State {
                     self.hurt(1);
                 }
             }
-            if !scooped && !eaten && hop_dest.is_none() && !blasted && !id.is_empty() {
-                for _ in 0..count {
-                    self.drops.spawn(&id, [cell.x, cell.y, cell.z], remains);
+            if !scooped && !eaten && hop_dest.is_none() && !blasted && !loot.is_empty() {
+                for (id, count) in &loot {
+                    if id.is_empty() {
+                        continue;
+                    }
+                    for _ in 0..*count {
+                        self.drops.spawn(id, [cell.x, cell.y, cell.z], remains);
+                    }
                 }
                 self.rebuild_drops();
             }
@@ -7841,6 +7839,56 @@ impl State {
         self.gui.select_emi("craft:paver");
         let _ = self.gui.ghost_fill_emi();
         self.gui.push_chat("mod recipe: craft:paver");
+        let _ = self.window.focus_window();
+    }
+
+    /// Dirt break drops + camp chest seeded from loot tables, then quit with a PNG.
+    pub fn arm_loot_hook_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        // Floating proof of loot.block("dirt", "torch+apple").
+        for (id, count) in rebuild_world::break_loot_of("dirt") {
+            for _ in 0..count {
+                self.drops.spawn(&id, [8, 2, 11], true);
+            }
+        }
+        self.rebuild_drops();
+
+        // Chest panel shows the loot.chest("camp_chest", …) override.
+        let slots: Vec<_> = match crate::loot::load_camp_chest() {
+            Ok(table) => table
+                .drops
+                .iter()
+                .enumerate()
+                .map(|(index, id)| rebuild_world::CarriedSlot {
+                    slot: index as u8,
+                    id: id.clone(),
+                    count: 1,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        let _ = self.gui.open_chest(&slots);
+        self.gui.push_chat("loot: dirt + camp");
         let _ = self.window.focus_window();
     }
 

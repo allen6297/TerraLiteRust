@@ -1810,6 +1810,26 @@ fn register(
             .add_script_shaped(result, grid, source)
             .map_err(|err| format!("recipe.shaped: {err}"))?;
     }
+    for (block, list) in &found.block_loots {
+        let drops: Vec<&str> = list
+            .split('+')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        Pack::builtin()
+            .set_block_loot(block, &drops, source)
+            .map_err(|err| format!("loot.block: {err}"))?;
+    }
+    for (table, list) in &found.chest_loots {
+        let drops: Vec<&str> = list
+            .split('+')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        Pack::builtin()
+            .set_chest_loot(table, &drops, source)
+            .map_err(|err| format!("loot.chest: {err}"))?;
+    }
     for (kind, value) in &found.api {
         if kind == "note" {
             println!("rosegold: {value}");

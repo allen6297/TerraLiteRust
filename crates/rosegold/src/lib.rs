@@ -111,7 +111,10 @@
 //! `recipe.shaped(result, "a,,,a,,,a,,")` records a 3 by 3, nine cells separated
 //! by commas, blanks empty. ModAPI `TLRegister` mirrors these as `recipe` /
 //! `shapeless` / `shaped`. Both ids must already exist. The crafting table
-//! shows the result. `entity.register(namespace, path)` adds a mob. It stands
+//! shows the result. `loot.block(block, "a+b")` sets break drops for that block
+//! (every listed id). `loot.chest(table, "a+b")` overrides a datapack chest
+//! table's `drops` list (`camp_chest`, `mine_chest`, …). ModAPI exposes
+//! `blockLoot` / `chestLoot`. `entity.register(namespace, path)` adds a mob. It stands
 //! just east of the oak stairs. `entity.model(id, path)` attaches a Blockbench
 //! `.bbmodel`. `entity.hostile(id, flag)` marks chase/attack AI.
 //! `entity.spawn_egg(id, item)` links a creative item that spawns the mob on use.
@@ -199,6 +202,10 @@ pub struct ScriptLoad {
     pub shapeless: Vec<(String, String)>,
     /// `(result id, nine comma-separated cells)` from `recipe.shaped`.
     pub shaped: Vec<(String, String)>,
+    /// `(block id, "a+b")` from `loot.block`.
+    pub block_loots: Vec<(String, String)>,
+    /// `(table id, "a+b")` from `loot.chest` — overrides datapack `drops`.
+    pub chest_loots: Vec<(String, String)>,
     /// `("note", message)` and `("registry", kind)` from `ModAPI`.
     pub api: Vec<(String, String)>,
     /// `(registry kind, id)` from `TLRegistry.register` when it is not a block or item.
@@ -497,6 +504,8 @@ impl Host {
                                 let mut recipes = Vec::new();
                                 let mut shapeless = Vec::new();
                                 let mut shaped = Vec::new();
+                                let mut block_loots = Vec::new();
+                                let mut chest_loots = Vec::new();
                                 let mut api = Vec::new();
                                 let mut entries = Vec::new();
                                 let mut block_entity_binds = Vec::new();
@@ -518,6 +527,8 @@ impl Host {
                                         "recipe" => recipes.push(pair),
                                         "shapeless" => shapeless.push(pair),
                                         "shaped" => shaped.push(pair),
+                                        "block_loot" => block_loots.push(pair),
+                                        "chest_loot" => chest_loots.push(pair),
                                         "note" | "registry" => api.push((kind, pair.0)),
                                         "entry" => entries.push(pair),
                                         "block_entity" => {
@@ -547,6 +558,8 @@ impl Host {
                                     recipes,
                                     shapeless,
                                     shaped,
+                                    block_loots,
+                                    chest_loots,
                                     api,
                                     entries,
                                     block_entity_binds,

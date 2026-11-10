@@ -286,6 +286,14 @@ struct ScriptRecipe {
     source: String,
 }
 
+/// Break or chest loot from `loot.block` / `loot.chest`.
+struct ScriptLoot {
+    /// Block id or chest table id (`camp_chest`, …).
+    id: String,
+    drops: Vec<String>,
+    source: String,
+}
+
 struct ScriptScreen {
     id: String,
     source: String,
@@ -324,6 +332,10 @@ struct ScriptRegistry {
     blocks: Vec<ScriptBlock>,
     items: Vec<ScriptItem>,
     recipes: Vec<ScriptRecipe>,
+    /// Break drops from `loot.block`.
+    block_loots: Vec<ScriptLoot>,
+    /// Chest `drops` overrides from `loot.chest`.
+    chest_loots: Vec<ScriptLoot>,
     screens: Vec<ScriptScreen>,
     gui: Vec<StoredGui>,
     settings: Vec<StoredSetting>,
@@ -648,6 +660,8 @@ impl Pack {
                 blocks: Vec::new(),
                 items: Vec::new(),
                 recipes: Vec::new(),
+                block_loots: Vec::new(),
+                chest_loots: Vec::new(),
                 screens: Vec::new(),
                 gui: Vec::new(),
                 settings: Vec::new(),
@@ -1463,6 +1477,94 @@ impl Pack {
             source: source.to_string(),
         });
         Ok(())
+    }
+
+    /// Break drops for `block` from `loot.block`. Every listed id must exist.
+    pub fn set_block_loot(
+        &self,
+        block: &str,
+        drops: &[&str],
+        source: &str,
+    ) -> Result<(), String> {
+        self.set_loot_list(true, block, drops, source)
+    }
+
+    /// Override a named chest table's `drops` list (`camp_chest`, …).
+    pub fn set_chest_loot(
+        &self,
+        table: &str,
+        drops: &[&str],
+        source: &str,
+    ) -> Result<(), String> {
+        self.set_loot_list(false, table, drops, source)
+    }
+
+    fn set_loot_list(
+        &self,
+        block: bool,
+        id: &str,
+        drops: &[&str],
+        source: &str,
+    ) -> Result<(), String> {
+        if id.is_empty() || drops.is_empty() || drops.len() > 16 {
+            return Err("loot list needs 1 to 16 ids".into());
+        }
+        if drops.iter().any(|drop| drop.is_empty()) {
+            return Err("loot id is empty".into());
+        }
+        if block && !self.contains_block(id) {
+            return Err(format!("unknown loot block {id}"));
+        }
+        for drop in drops {
+            if !self.contains_item(drop) && self.tool_icon(drop).is_none() {
+                return Err(format!("unknown loot drop {drop}"));
+            }
+        }
+        let entry = ScriptLoot {
+            id: id.to_string(),
+            drops: drops.iter().map(|drop| (*drop).to_string()).collect(),
+            source: source.to_string(),
+        };
+        let mut script = self.script.lock().expect("script registry");
+        let list = if block {
+            &mut script.block_loots
+        } else {
+            &mut script.chest_loots
+        };
+        if let Some(existing) = list.iter_mut().find(|loot| loot.id == id) {
+            if existing.drops == entry.drops
+                && (source.is_empty() || existing.source == source)
+            {
+                return Ok(());
+            }
+            if !source.is_empty() && existing.source == source {
+                *existing = entry;
+                return Ok(());
+            }
+            return Err(format!("duplicate loot {id}"));
+        }
+        list.push(entry);
+        Ok(())
+    }
+
+    /// Mod-registered break drops for `block`, when present.
+    pub fn script_block_loot(&self, block: &str) -> Option<Vec<String>> {
+        let script = self.script.lock().expect("script registry");
+        script
+            .block_loots
+            .iter()
+            .find(|loot| loot.id == block)
+            .map(|loot| loot.drops.clone())
+    }
+
+    /// Mod override for a chest table's `drops` list.
+    pub fn script_chest_loot(&self, table: &str) -> Option<Vec<String>> {
+        let script = self.script.lock().expect("script registry");
+        script
+            .chest_loots
+            .iter()
+            .find(|loot| loot.id == table)
+            .map(|loot| loot.drops.clone())
     }
 
     pub fn script_recipes(&self) -> Vec<(String, String)> {
@@ -3772,6 +3874,8 @@ impl Pack {
                 blocks: Vec::new(),
                 items: Vec::new(),
                 recipes: Vec::new(),
+                block_loots: Vec::new(),
+                chest_loots: Vec::new(),
                 screens: Vec::new(),
                 gui: Vec::new(),
                 settings: Vec::new(),
@@ -4055,6 +4159,48 @@ pub fn harvest_of(id: &str) -> (&str, u8) {
     } else {
         (id, 1)
     }
+}
+
+/// Every item a break should spawn. Script `loot.block` wins, then a datapack
+/// `loot/blocks/<id>.json` `drops` list, else [`harvest_of`].
+pub fn break_loot_of(id: &str) -> Vec<(String, u8)> {
+    let pack = Pack::builtin();
+    if let Some(drops) = pack.script_block_loot(id) {
+        return drops.into_iter().map(|drop| (drop, 1)).collect();
+    }
+    if let Some(drops) = load_block_loot_file(id) {
+        return drops.into_iter().map(|drop| (drop, 1)).collect();
+    }
+    let (drop, count) = harvest_of(id);
+    vec![(drop.to_string(), count)]
+}
+
+fn load_block_loot_file(id: &str) -> Option<Vec<String>> {
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
+        return None;
+    }
+    let path = data_pack_root()
+        .join("data")
+        .join("terralite")
+        .join("loot")
+        .join("blocks")
+        .join(format!("{id}.json"));
+    let text = fs::read_to_string(path).ok()?;
+    let root: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let list = root.get("drops")?.as_array()?;
+    if list.is_empty() || list.len() > 16 {
+        return None;
+    }
+    let pack = Pack::builtin();
+    let mut drops = Vec::with_capacity(list.len());
+    for entry in list {
+        let id = entry.as_str()?;
+        if !pack.contains_item(id) && pack.tool_icon(id).is_none() {
+            return None;
+        }
+        drops.push(id.to_string());
+    }
+    Some(drops)
 }
 
 /// A bitten cake, one sixteenth pair narrower per slice already eaten.
@@ -7261,6 +7407,19 @@ mod tests {
         assert_eq!(pack.food_of("melon_slice"), Some(2));
         assert_eq!(harvest_of("melon"), ("melon_slice", 4));
         assert_eq!(harvest_of("stone"), ("stone", 1));
+        // Datapack loot/blocks/grass.json lists dirt + wheat_seeds.
+        let grass = break_loot_of("grass");
+        assert_eq!(
+            grass,
+            vec![("dirt".to_string(), 1), ("wheat_seeds".to_string(), 1)]
+        );
+        assert_eq!(break_loot_of("stone"), vec![("stone".to_string(), 1)]);
+        pack.set_block_loot("dirt", &["torch", "apple"], "loot-test")
+            .unwrap();
+        assert_eq!(
+            break_loot_of("dirt"),
+            vec![("torch".to_string(), 1), ("apple".to_string(), 1)]
+        );
         assert_eq!(pack.tool_icon("melon_slice"), Some("melon"));
         assert_eq!(pack.food_of("stone"), None);
         assert_eq!(pack.tool_icon("apple"), Some("grass"));

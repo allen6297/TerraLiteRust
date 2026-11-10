@@ -1,12 +1,14 @@
-//! Loot tables from the data pack.
+//! Loot tables from the data pack (and optional RoseGold overrides).
 //!
 //! `data/terralite/loot/copper_chest.json` is what a trial key finds in a
 //! copper chest. `data/terralite/loot/camp_chest.json` is what the first open
 //! of the camp chest finds. `data/terralite/loot/shrine_chest.json` is the
 //! southeast shrine. `data/terralite/loot/mine_chest.json` is the west mine
-//! mouth. `drops` is the ordinary list. `omen` is the list after an ominous
-//! bottle. The chest's coordinates pick one entry. Repeating an id makes that
-//! drop more common.
+//! mouth. `data/terralite/loot/blocks/<id>.json` overrides break drops for that
+//! block (`drops` only). `loot.chest` / ModAPI `chestLoot` replaces a table's
+//! `drops` list. `drops` is the ordinary list. `omen` is the list after an
+//! ominous bottle. The chest's coordinates pick one entry. Repeating an id
+//! makes that drop more common.
 
 use std::fs;
 use std::path::PathBuf;
@@ -28,9 +30,7 @@ pub fn copper_chest_file() -> PathBuf {
 
 /// The copper-chest table from the data pack.
 pub fn load_copper_chest() -> Result<Table, String> {
-    let path = copper_chest_file();
-    let text = fs::read_to_string(&path).map_err(|_| format!("unreadable {}", path.display()))?;
-    parse_table(&text)
+    load_chest("copper_chest", &copper_chest_file())
 }
 
 pub fn camp_chest_file() -> PathBuf {
@@ -43,7 +43,7 @@ pub fn camp_chest_file() -> PathBuf {
 
 /// The camp-chest table from the data pack.
 pub fn load_camp_chest() -> Result<Table, String> {
-    load_file(&camp_chest_file())
+    load_chest("camp_chest", &camp_chest_file())
 }
 
 pub fn shrine_chest_file() -> PathBuf {
@@ -56,7 +56,7 @@ pub fn shrine_chest_file() -> PathBuf {
 
 /// The shrine-chest table from the data pack.
 pub fn load_shrine_chest() -> Result<Table, String> {
-    load_file(&shrine_chest_file())
+    load_chest("shrine_chest", &shrine_chest_file())
 }
 
 pub fn mine_chest_file() -> PathBuf {
@@ -69,16 +69,20 @@ pub fn mine_chest_file() -> PathBuf {
 
 /// The mine-chest table from the data pack.
 pub fn load_mine_chest() -> Result<Table, String> {
-    load_file(&mine_chest_file())
+    load_chest("mine_chest", &mine_chest_file())
 }
 
-fn load_file(path: &std::path::Path) -> Result<Table, String> {
+fn load_chest(table: &str, path: &std::path::Path) -> Result<Table, String> {
     let text = fs::read_to_string(path).map_err(|_| format!("unreadable {}", path.display()))?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("loot.json");
-    parse_named(&text, name)
+    let mut loaded = parse_named(&text, name)?;
+    if let Some(drops) = rebuild_world::Pack::builtin().script_chest_loot(table) {
+        loaded.drops = drops;
+    }
+    Ok(loaded)
 }
 
 pub fn parse_table(text: &str) -> Result<Table, String> {
@@ -221,6 +225,24 @@ mod tests {
         let (x, z) = rebuild_world::SHRINE_CHEST;
         assert_eq!(pick(&table, x, z, false), pick(&table, x, z, false));
         assert_eq!(pick(&table, x, z, true), pick(&table, x, z, true));
+    }
+
+    #[test]
+    fn a_script_chest_loot_overrides_datapack_drops() {
+        let pack = rebuild_world::Pack::builtin();
+        pack.set_chest_loot("demo_chest", &["torch", "map"], "loot-test")
+            .unwrap();
+        assert_eq!(
+            pack.script_chest_loot("demo_chest").as_deref(),
+            Some(&["torch".to_string(), "map".to_string()][..])
+        );
+        // Same source may rewrite the list.
+        pack.set_chest_loot("demo_chest", &["apple"], "loot-test")
+            .unwrap();
+        assert_eq!(
+            pack.script_chest_loot("demo_chest").as_deref(),
+            Some(&["apple".to_string()][..])
+        );
     }
 
     #[test]
