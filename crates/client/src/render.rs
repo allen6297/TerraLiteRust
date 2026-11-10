@@ -1048,6 +1048,8 @@ pub struct State {
     found_wolf: bool,
     /// Once: walked up to the pad cat.
     found_cat: bool,
+    /// Once: walked up to the pad parrot.
+    found_parrot: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -2030,6 +2032,7 @@ impl State {
             found_fireflies: false,
             found_wolf: false,
             found_cat: false,
+            found_parrot: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3755,6 +3758,10 @@ impl State {
             self.found_cat = true;
             self.gui.push_chat("a cat");
         }
+        if !self.found_parrot && near(crate::mobs::PARROT_PAD.0, crate::mobs::PARROT_PAD.1) {
+            self.found_parrot = true;
+            self.gui.push_chat("a parrot");
+        }
     }
 
     /// Once: hold raw, look at a campfire or smoker — tip to use it.
@@ -5018,16 +5025,32 @@ impl State {
         true
     }
 
-    /// Feed the parrot a hay bale, or perch a tamed one, when the look ray hits it.
+    /// Feed the parrot a hay bale, or empty-hand perch/hop-off a tamed one.
     fn try_parrot(&mut self) -> bool {
         let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
         let forward = self.camera.forward();
         let forward = [forward.x, forward.y, forward.z];
-        if !self.parrot.aimed(eye, forward) {
+        let held = self.hotbar.slot(self.hotbar.selected());
+        // Perched birds sit on the shoulder — empty hand hops off without a hard aim.
+        let aimed = self.parrot.aimed(eye, forward)
+            || (self.parrot.shoulder() && held.is_none() && self.looking_near_parrot());
+        if !aimed {
             return false;
         }
         if self.parrot.tamed() {
+            if held.is_some() {
+                return false;
+            }
             self.parrot.perch();
+            if self.parrot.shoulder() {
+                let feet = [
+                    self.camera.eye.x,
+                    self.camera.eye.y - body::EYE_HEIGHT,
+                    self.camera.eye.z,
+                ];
+                let (yaw, _) = self.camera.yaw_pitch();
+                self.parrot.ride_shoulder(feet, yaw);
+            }
             self.rebuild_parrot();
             self.gui.push_chat(if self.parrot.shoulder() {
                 "shoulder"
@@ -5036,7 +5059,7 @@ impl State {
             });
             return true;
         }
-        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+        let Some(id) = held else {
             return false;
         };
         if !crate::mobs::parrot_food(id) {
@@ -5048,6 +5071,20 @@ impl State {
         self.rebuild_parrot();
         self.gui.push_chat("tamed");
         true
+    }
+
+    /// Soft aim cone for hopping a perched parrot off the shoulder.
+    fn looking_near_parrot(&self) -> bool {
+        let eye = self.camera.eye;
+        let forward = self.camera.forward();
+        let at = glam::Vec3::from(self.parrot.origin());
+        let to = at - eye;
+        let along = to.dot(forward);
+        if !(0.0..=4.0).contains(&along) {
+            return false;
+        }
+        let closest = eye + forward * along;
+        (closest - at).length_squared() < 1.2
     }
 
     /// Repeat a note or horn when the tamed parrot is close enough to hear it.
@@ -8153,6 +8190,78 @@ impl State {
         self.posed_eye = eye;
         self.posed_yaw = yaw;
         self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Tamed parrot perched on the shoulder (third person), then quit with a PNG.
+    pub fn arm_parrot_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 8..=14 {
+            for x in 2..=8 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 1..=3 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        // Stand on the pad facing +Z so the right-shoulder bird reads clearly.
+        // Keep the eye on the body; F5 third-person pulls the view back for the PNG.
+        let feet = glam::Vec3::new(5.5, 1.0, 10.5);
+        let eye = feet + glam::Vec3::new(0.0, body::EYE_HEIGHT, 0.0);
+        let player_yaw = std::f32::consts::FRAC_PI_2; // forward +Z
+        self.camera.restore(eye, player_yaw, -0.12);
+        self.parrot.place_at([4.5, 1.0, 11.0]);
+        let _ = self.parrot.feed();
+        let _ = self.parrot.perch();
+        self.parrot
+            .ride_shoulder([feet.x, feet.y, feet.z], player_yaw);
+        self.rebuild_parrot();
+        self.found_parrot = true;
+        self.gui.push_chat("shoulder");
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.third_person = true;
+        self.gui.push_chat("third person");
+
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = player_yaw;
+        self.cook_shot_pitch = -0.12;
+        self.posed_eye = eye;
+        self.posed_yaw = player_yaw;
+        self.posed_pitch = -0.12;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
         let _ = self.window.focus_window();
@@ -13538,7 +13647,8 @@ impl State {
                 self.camera.eye.y - body::EYE_HEIGHT,
                 self.camera.eye.z,
             ];
-            if let Some(sound) = self.parrot.tick(steps, body, &self.world) {
+            let (look_yaw, _) = self.camera.yaw_pitch();
+            if let Some(sound) = self.parrot.tick(steps, body, look_yaw, &self.world) {
                 let spot = self.parrot.origin();
                 match sound {
                     crate::mobs::Mimic::Note(pitch) => {

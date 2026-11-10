@@ -1833,6 +1833,8 @@ pub enum Mimic {
 }
 
 const PARROT_HOME: [f32; 3] = [4.0, 1.0, 11.0];
+/// Pad home for tips and shots.
+pub const PARROT_PAD: (i32, i32) = (4, 11);
 /// Entity ticks after a note or horn before the parrot repeats it.
 pub const ECHO_AFTER: u32 = 15;
 
@@ -1863,6 +1865,12 @@ impl Parrot {
         self.origin
     }
 
+    /// Put the body somewhere for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.loose = 0;
+    }
+
     pub fn tamed(&self) -> bool {
         self.tamed
     }
@@ -1881,14 +1889,30 @@ impl Parrot {
         true
     }
 
-    /// Perch on a shoulder, or hop off. False when the parrot is still wild.
-    /// True when it is perched.
+    /// Empty-hand companion toggle: perch on the shoulder, or hop off.
+    /// False when the parrot is still wild. True when it is perched.
     pub fn perch(&mut self) -> bool {
         if !self.tamed {
             return false;
         }
         self.shoulder = !self.shoulder;
         self.shoulder
+    }
+
+    /// Stick to the player's right shoulder, facing their look.
+    pub fn ride_shoulder(&mut self, feet: [f32; 3], yaw: f32) {
+        let (sy, cy) = yaw.sin_cos();
+        // Same axes as `Camera::walk_axes`: forward (cy, sy), right (-sy, cy).
+        let right_x = -sy;
+        let right_z = cy;
+        let forward_x = cy;
+        let forward_z = sy;
+        self.origin = [
+            feet[0] + right_x * 0.38 + forward_x * 0.12,
+            feet[1] + 1.38,
+            feet[2] + right_z * 0.38 + forward_z * 0.12,
+        ];
+        self.yaw = yaw;
     }
 
     /// Remember a sound to repeat. A wild bird, or one already echoing, ignores it.
@@ -1940,8 +1964,15 @@ impl Parrot {
 
     /// Wander, follow, or ride a shoulder. A full block sends the step around it.
     /// Past twelve blocks a free parrot appears beside you.
+    /// `player` is feet; `yaw` turns the perched bird with the look.
     /// `Some` when an echo is due.
-    pub fn tick(&mut self, count: u32, player: [f32; 3], world: &Cluster) -> Option<Mimic> {
+    pub fn tick(
+        &mut self,
+        count: u32,
+        player: [f32; 3],
+        yaw: f32,
+        world: &Cluster,
+    ) -> Option<Mimic> {
         let mut heard = None;
         let feet = [player[0], player[2]];
         for _ in 0..count {
@@ -1957,7 +1988,7 @@ impl Parrot {
                 continue;
             }
             if self.shoulder {
-                self.origin = [player[0] + 0.4, player[1] + 1.35, player[2]];
+                self.ride_shoulder(player, yaw);
                 continue;
             }
             if !self.tamed {
@@ -1982,9 +2013,6 @@ impl Parrot {
     }
 
     pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
-        if self.shoulder {
-            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
-        }
         let [x, y, z] = self.origin;
         ([x - 0.18, y, z - 0.18], [x + 0.18, y + 0.5, z + 0.18])
     }
@@ -1992,24 +2020,41 @@ impl Parrot {
     pub fn vertices(&self) -> Vec<Vertex> {
         let [x, y, z] = self.origin;
         let mut out = Vec::new();
+        // Slightly smaller when perched so the shoulder read stays tidy.
+        let scale = if self.shoulder { 0.85 } else { 1.0 };
         push_box(
             &mut out,
-            [x, y + 0.22, z],
-            [0.12, 0.1, 0.1],
+            [x, y + 0.22 * scale, z],
+            [0.12 * scale, 0.1 * scale, 0.1 * scale],
             [0.16, 0.72, 0.28],
         );
         push_box(
             &mut out,
-            [x + 0.1, y + 0.34, z],
-            [0.07, 0.07, 0.07],
+            [x + 0.1 * scale, y + 0.34 * scale, z],
+            [0.07 * scale, 0.07 * scale, 0.07 * scale],
             [0.86, 0.2, 0.16],
         );
         push_box(
             &mut out,
-            [x + 0.16, y + 0.32, z],
-            [0.04, 0.03, 0.03],
+            [x + 0.16 * scale, y + 0.32 * scale, z],
+            [0.04 * scale, 0.03 * scale, 0.03 * scale],
             [0.95, 0.82, 0.2],
         );
+        // Wing flashes when perched so the shoulder bird reads against the body.
+        if self.shoulder {
+            push_box(
+                &mut out,
+                [x, y + 0.26 * scale, z + 0.12 * scale],
+                [0.03, 0.06 * scale, 0.08 * scale],
+                [0.12, 0.55, 0.22],
+            );
+            push_box(
+                &mut out,
+                [x, y + 0.26 * scale, z - 0.12 * scale],
+                [0.03, 0.06 * scale, 0.08 * scale],
+                [0.12, 0.55, 0.22],
+            );
+        }
         yaw_mesh(&mut out, self.origin, self.yaw);
         out
     }
@@ -4463,27 +4508,28 @@ mod tests {
         assert!((home[0] - 4.0).abs() < 0.1);
         assert!(parrot.vertices().iter().any(|vertex| vertex.color[1] > 0.6));
         parrot.hear(Mimic::Note(3));
-        assert!(parrot.tick(ECHO_AFTER, [0.0, 1.0, 0.0], &ground).is_none());
+        assert!(parrot.tick(ECHO_AFTER, [0.0, 1.0, 0.0], 0.0, &ground).is_none());
         assert!(parrot.feed());
         parrot.hear(Mimic::Note(3));
         parrot.hear(Mimic::Horn);
         assert_eq!(
-            parrot.tick(ECHO_AFTER, [home[0] + 8.0, 1.0, home[2]], &ground),
+            parrot.tick(ECHO_AFTER, [home[0] + 8.0, 1.0, home[2]], 0.0, &ground),
             Some(Mimic::Note(3))
         );
         assert!(
             parrot
-                .tick(1, [home[0] + 8.0, 1.0, home[2]], &ground)
+                .tick(1, [home[0] + 8.0, 1.0, home[2]], 0.0, &ground)
                 .is_none()
         );
         assert!(parrot.origin()[0] > home[0]);
         assert!(parrot.perch());
         assert!(parrot.shoulder());
-        assert!(parrot.tick(1, [2.0, 1.0, 3.0], &ground).is_none());
-        assert_eq!(parrot.origin(), [2.4, 2.35, 3.0]);
+        assert!(parrot.tick(1, [2.0, 1.0, 3.0], 0.0, &ground).is_none());
+        // yaw 0 → forward +X, right +Z
+        assert_eq!(parrot.origin(), [2.12, 2.38, 3.38]);
         parrot.hear(Mimic::Horn);
         assert_eq!(
-            parrot.tick(ECHO_AFTER, [2.0, 1.0, 3.0], &ground),
+            parrot.tick(ECHO_AFTER, [2.0, 1.0, 3.0], 0.0, &ground),
             Some(Mimic::Horn)
         );
     }
@@ -4890,7 +4936,7 @@ mod tests {
             wolf.tick(1, [18.0, 8.0], None, &world);
             cat.tick(1, [22.0, 10.0], None, &world);
             fox.tick(1, [16.0, 6.0], None, &world);
-            parrot.tick(1, [14.0, 1.0, 11.0], &world);
+            parrot.tick(1, [14.0, 1.0, 11.0], 0.0, &world);
             let spots = [wolf.origin(), cat.origin(), fox.origin(), parrot.origin()];
             for i in 0..4 {
                 let at = spots[i];
@@ -4985,13 +5031,16 @@ mod tests {
         let mut parrot = Parrot::new();
         assert!(parrot.feed());
         let nest = parrot.origin();
-        parrot.tick(1, [nest[0] + 20.0, nest[1], nest[2]], &ground);
+        parrot.tick(1, [nest[0] + 20.0, nest[1], nest[2]], 0.0, &ground);
         assert!((parrot.origin()[0] - (nest[0] + 20.0)).abs() < 3.0);
         assert!(parrot.perch());
-        parrot.tick(1, [nest[0] + 30.0, nest[1], nest[2]], &ground);
-        assert!((parrot.origin()[0] - (nest[0] + 30.4)).abs() < 0.01);
+        parrot.tick(1, [nest[0] + 30.0, nest[1], nest[2]], 0.0, &ground);
+        // yaw 0 → forward +X, right +Z → +0.12 X, +0.38 Z, +1.38 Y
+        assert!((parrot.origin()[0] - (nest[0] + 30.12)).abs() < 0.01);
+        assert!((parrot.origin()[1] - (nest[1] + 1.38)).abs() < 0.01);
+        assert!((parrot.origin()[2] - (nest[2] + 0.38)).abs() < 0.01);
         let perched = parrot.origin();
-        parrot.tick(4, [nest[0] + 30.0, nest[1], nest[2]], &ground);
+        parrot.tick(4, [nest[0] + 30.0, nest[1], nest[2]], 0.0, &ground);
         assert_eq!(parrot.origin(), perched);
     }
 
