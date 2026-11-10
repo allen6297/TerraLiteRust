@@ -628,7 +628,9 @@ mod tests {
                 "eye_of_ender".to_string(),
                 "fence".to_string(),
                 "fence_gate".to_string(),
+                "fire_charge".to_string(),
                 "fishing_rod".to_string(),
+
                 "fletching_table".to_string(),
                 "flower".to_string(),
                 "flower_pot".to_string(),
@@ -1056,6 +1058,11 @@ mod tests {
         assert_eq!(
             book.match_grid(&["blaze_rod".into()]).as_deref(),
             Some("blaze_powder")
+        );
+        assert_eq!(
+            book.match_grid(&["blaze_powder".into(), "coal_ore".into()])
+                .as_deref(),
+            Some("fire_charge")
         );
         assert_eq!(
             book.match_grid(&["painting".into(), "chain".into()])

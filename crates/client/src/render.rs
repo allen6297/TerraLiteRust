@@ -5454,7 +5454,8 @@ impl State {
             return true;
         }
         let slot = self.hotbar.selected();
-        if self.hotbar.slot(slot) == Some("fire_charge") {
+        let charge = self.hotbar.slot(slot) == Some("fire_charge");
+        if charge {
             // Fire charges are single-use.
             self.hotbar.consume_at(slot);
         } else if !self.hotbar.wear_use(slot) {
@@ -5462,6 +5463,9 @@ impl State {
             self.hotbar.consume_at(slot);
         }
         self.hotbar_dirty = true;
+        if charge {
+            self.gui.push_chat("fire charge");
+        }
         self.light_ruined_portal();
         true
     }
@@ -13780,6 +13784,86 @@ impl State {
         self.wanted_focus = chunk_of(self.camera.eye);
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("flint_and_steel");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+                self.chunk_bake.touch(
+                    rebuild_world::NETHER_PAD.0 + dx * 8,
+                    rebuild_world::NETHER_PAD.1 + dz * 8,
+                );
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Lit ruined portal with a crafted fire charge in hand, then quit with a PNG.
+    pub fn arm_fire_charge_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -2));
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.38);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.light_ruined_portal();
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("fire charge");
+        self.gui.push_chat("portal lit");
+
+        let (cx, cz) = rebuild_world::RUINED_PORTAL;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "obsidian"
+                || self.world.block_at(cx, y, cz).id == "crying_obsidian"
+            {
+                cy = y;
+                break;
+            }
+        }
+        let stand_x = cx + 5;
+        let stand_z = cz + 3;
+        let mut stand_y = cy;
+        for y in (0..80).rev() {
+            let id = self.world.block_at(stand_x, y, stand_z).id;
+            if id != "air" && id != "nether_portal" {
+                stand_y = y + 1;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 1.5, cy as f32 + 2.0, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            stand_x as f32 + 0.5,
+            stand_y as f32 + body::EYE_HEIGHT,
+            stand_z as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("blaze_powder");
+        let _ = self.hotbar.collect("coal_ore");
+        let _ = self.hotbar.collect("fire_charge");
+        // Digit 3 → slot index 2 (the crafted charge).
+        let _ = self.hotbar.select_digit(3);
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {

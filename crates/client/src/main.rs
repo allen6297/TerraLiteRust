@@ -297,8 +297,11 @@ struct Args {
     shot_blaze_powder: Option<std::path::PathBuf>,
     /// Strength potion melee buff plate, then quit.
     shot_strength: Option<std::path::PathBuf>,
+    /// Crafted fire charge lighting the ruined portal, then quit.
+    shot_fire_charge: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
     shot_keybinds: Option<std::path::PathBuf>,
+
 
 
     /// Axolotl companion swim, then quit.
@@ -577,6 +580,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_blaze: args.shot_blaze,
         shot_blaze_powder: args.shot_blaze_powder,
         shot_strength: args.shot_strength,
+        shot_fire_charge: args.shot_fire_charge,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
         shot_frog: args.shot_frog,
@@ -740,6 +744,7 @@ struct App {
     shot_blaze: Option<std::path::PathBuf>,
     shot_blaze_powder: Option<std::path::PathBuf>,
     shot_strength: Option<std::path::PathBuf>,
+    shot_fire_charge: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
     shot_frog: Option<std::path::PathBuf>,
@@ -747,6 +752,7 @@ struct App {
     shot_lantern: Option<std::path::PathBuf>,
     shot_sway: Option<std::path::PathBuf>,
     shot_rustle: Option<std::path::PathBuf>,
+
 
 
     shot_hiss: Option<std::path::PathBuf>,
@@ -1103,6 +1109,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_strength.take() {
                     state.arm_strength_potion_shot(path);
+                }
+                if let Some(path) = self.shot_fire_charge.take() {
+                    state.arm_fire_charge_shot(path);
                 }
                 if let Some(path) = self.shot_keybinds.take() {
                     state.arm_keybinds_shot(path);
@@ -1485,6 +1494,7 @@ where
         shot_blaze: None,
         shot_blaze_powder: None,
         shot_strength: None,
+        shot_fire_charge: None,
         shot_keybinds: None,
         shot_axolotl: None,
         shot_frog: None,
@@ -2101,6 +2111,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-strength".to_string())?;
                 parsed.shot_strength = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-fire-charge" | "--shot-charge" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-fire-charge".to_string())?;
+                parsed.shot_fire_charge = Some(std::path::PathBuf::from(value));
             }
             "--shot-keybinds" => {
                 let value = iter
