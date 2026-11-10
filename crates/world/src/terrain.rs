@@ -184,6 +184,9 @@ pub const CAMP_COMPOST: (i32, i32) = (CAMP_FIRE.0 - 2, CAMP_FIRE.1 - 2);
 /// Beehive northwest of the fire (north of the smoker).
 pub const CAMP_HIVE: (i32, i32) = (CAMP_FIRE.0 - 2, CAMP_FIRE.1 + 2);
 
+/// Cauldron southeast of the fire (south of the jukebox).
+pub const CAMP_CAULDRON: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 - 2);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.
@@ -248,6 +251,8 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
     blocks.push((local_x - 1, floor, local_z - 2, Block::new("flower", 0)));
     // Northwest of the fire: fill flowers for honey.
     blocks.push((local_x - 2, floor, local_z + 2, Block::new("beehive", 0)));
+    // Southeast of the fire: pour or scoop water.
+    blocks.push((local_x + 2, floor, local_z - 2, Block::new("cauldron", 0)));
 }
 
 /// The open pit of the mine mouth, west and south of the demo pad.
@@ -822,6 +827,11 @@ mod tests {
         assert_eq!(
             (2 * 16 + i32::from(x - 2), -2 * 16 + i32::from(z + 2)),
             CAMP_HIVE
+        );
+        assert_eq!(camp.block(x + 2, y, z - 2).id, "cauldron");
+        assert_eq!(
+            (2 * 16 + i32::from(x + 2), -2 * 16 + i32::from(z - 2)),
+            CAMP_CAULDRON
         );
         let elsewhere = generate_chunk(3, 0);
         for local_z in 0..16u8 {
