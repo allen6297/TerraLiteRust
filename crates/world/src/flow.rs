@@ -564,11 +564,18 @@ fn generator_charge_target(
     best_battery.or(empty_wire)
 }
 
+/// True when any face neighbor is a campfire (optional fuel boost).
+fn campfire_beside(world: &Cluster, x: i32, y: i32, z: i32) -> bool {
+    POWER_NEIGHBORS.iter().any(|[dx, dy, dz]| {
+        world.block_at(x + dx, y + dy, z + dz).id == "campfire"
+    })
+}
+
 /// Plan ember generator charges near `focus`.
 ///
 /// Each running generator slowly adds one ember unit to the emptiest connected
-/// battery (or fills one empty wire). Free tick for demo — campfire adjacency
-/// is optional flavor handled by the client tip/mesh, not required here.
+/// battery (or fills one empty wire). Free tick for demo; a neighboring
+/// campfire boosts the pulse by one extra charge unit.
 pub fn plan_ember_charges(
     world: &Cluster,
     focus: [i32; 3],
@@ -623,9 +630,10 @@ pub fn plan_ember_charges(
         if !claimed.insert((tx, ty, tz)) {
             continue;
         }
+        let boost = if campfire_beside(world, x, y, z) { 2 } else { 1 };
         let after = if is_battery(block.id) {
             let level = battery_level(block);
-            battery_at(level.saturating_add(1).min(BATTERY_MAX))
+            battery_at(level.saturating_add(boost).min(BATTERY_MAX))
         } else if is_wire(block.id) {
             block.with_fill(FILL_EMBER)
         } else {
@@ -1436,6 +1444,28 @@ mod tests {
         );
         assert_eq!(apply_ember_charges(&mut cluster, [2, 1, 1], 8, 2), 1);
         assert_eq!(battery_level(cluster.block_at(3, 1, 1)), 1);
+    }
+
+    #[test]
+    fn campfire_beside_generator_boosts_charge() {
+        use crate::chunk::{battery_at, battery_level, generator_at};
+        let planned = plan_ember_charges(
+            &world(&[
+                (1, 1, 1, generator_at(true)),
+                (1, 1, 2, Block::new("campfire", 0)),
+                (2, 1, 1, Block::new("wire", 0)),
+                (3, 1, 1, battery_at(1)),
+            ]),
+            [2, 1, 1],
+            8,
+            2,
+        );
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 3 && battery_level(c.block) == 3),
+            "fueled generator adds two units"
+        );
     }
 
     #[test]

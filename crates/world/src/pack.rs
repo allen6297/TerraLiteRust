@@ -1970,7 +1970,7 @@ impl Pack {
         if block.id == "generator" && crate::chunk::generator_on(block.metadata) {
             return Some(Light {
                 color: [1.0, 0.4, 0.08],
-                level: 11,
+                level: 12,
             });
         }
         if let Some(light) = self.script_light(block.id) {

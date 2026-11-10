@@ -1603,14 +1603,30 @@ fn mesh_partial_shapes(
                             mesh_faces(block, shape, cell, sample, light, sun, mesh);
                         }
                     }
-                    // Running generator shows a magma core (ember forge).
+                    // Running generator shows a magma core; campfire fuel runs hotter.
                     if generator_on(block.metadata) {
+                        let fueled = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+                            .into_iter()
+                            .any(|[dx, dy, dz]| {
+                                sample(cell[0] + dx, cell[1] + dy, cell[2] + dz).id == "campfire"
+                            });
                         let fill = Block::new("magma", 0);
-                        let fill_shape = Shape::from_boxes(&[CellBox {
-                            min: [5, 5, 5],
-                            max: [11, 11, 11],
-                        }]);
+                        let (lo, hi) = if fueled { (4u8, 12u8) } else { (5u8, 11u8) };
+                        let core_boxes = vec![CellBox {
+                            min: [lo, lo, lo],
+                            max: [hi, hi, hi],
+                        }];
+                        let fill_shape = Shape::from_boxes(&core_boxes);
                         mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                        if fueled {
+                            // Exhaust plume above a fueled generator.
+                            let plume_boxes = vec![CellBox {
+                                min: [7, 12, 7],
+                                max: [9, 16, 9],
+                            }];
+                            let plume = Shape::from_boxes(&plume_boxes);
+                            mesh_cell(fill, plume, cell, sample, light, sun, mesh);
+                        }
                     }
                     continue;
                 }
