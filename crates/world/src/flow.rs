@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use crate::changes::CellChange;
-use crate::chunk::{FILL_EMBER, FILL_NONE, compound_host};
+use crate::chunk::{FILL_EMBER, FILL_NONE, compound_accepts};
 use crate::cluster::Cluster;
 
 /// Water: down first, then horizontal, then up.
@@ -67,7 +67,7 @@ pub fn plan_compound_seeps(
                 if sources.len() >= SOURCE_CAP {
                     return;
                 }
-                if !compound_host(block.id) || block.fill == FILL_NONE {
+                if !compound_accepts(block.id, block.fill) {
                     return;
                 }
                 if (x - focus[0]).abs() > radius
@@ -107,7 +107,7 @@ pub fn plan_compound_seeps(
                 continue;
             }
             let dest = world.block_at(nx, ny, nz);
-            if !compound_host(dest.id) || dest.fill != FILL_NONE {
+            if dest.fill != FILL_NONE || !compound_accepts(dest.id, fill) {
                 continue;
             }
             out.push(CellChange {
@@ -228,5 +228,35 @@ mod tests {
         let planned = plan_compound_seeps(&cluster, [2, 2, 2], 8, 1);
         assert_eq!(planned.len(), 1);
         assert_eq!((planned[0].x, planned[0].y, planned[0].z), (3, 2, 2));
+    }
+
+    #[test]
+    fn water_flows_along_pipes_but_not_wires() {
+        let mut cluster = world(&[
+            (1, 1, 1, Block::new("copper_grate", 0).with_fill(FILL_WATER)),
+            (2, 1, 1, Block::new("pipe", 0)),
+            (3, 1, 1, Block::new("pipe", 0)),
+            (2, 1, 2, Block::new("wire", 0)),
+        ]);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 1], 8, 1), 1);
+        assert_eq!(cluster.block_at(2, 1, 1).fill, FILL_WATER);
+        assert_eq!(cluster.block_at(2, 1, 2).fill, FILL_NONE);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 1], 8, 1), 1);
+        assert_eq!(cluster.block_at(3, 1, 1).fill, FILL_WATER);
+    }
+
+    #[test]
+    fn ember_flows_along_wires_but_not_pipes() {
+        let mut cluster = world(&[
+            (1, 1, 1, Block::new("glass", 0).with_fill(FILL_EMBER)),
+            (2, 1, 1, Block::new("wire", 0)),
+            (3, 1, 1, Block::new("wire", 0)),
+            (2, 1, 2, Block::new("pipe", 0)),
+        ]);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 1], 8, 1), 1);
+        assert_eq!(cluster.block_at(2, 1, 1).fill, FILL_EMBER);
+        assert_eq!(cluster.block_at(2, 1, 2).fill, FILL_NONE);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 1], 8, 1), 1);
+        assert_eq!(cluster.block_at(3, 1, 1).fill, FILL_EMBER);
     }
 }

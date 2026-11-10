@@ -12,9 +12,10 @@ use std::time::{Duration, Instant};
 use bytemuck::bytes_of;
 use rebuild_world::{
     BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
-    PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, compound_host, encode_bag,
-    encode_break, encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind,
-    apply_compound_seeps, fill_name, held_light_of, load_dir, plan_compound_seeps, shape_of,
+    PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, apply_compound_seeps,
+    compound_accepts, compound_host, encode_bag, encode_break, encode_chat, encode_chest,
+    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of, load_dir,
+    plan_compound_seeps, shape_of,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -4874,7 +4875,7 @@ impl State {
         let host = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        if !compound_host(host.id) || host.fill != FILL_NONE {
+        if host.fill != FILL_NONE || !compound_accepts(host.id, fill) {
             // Let water_bucket fall through to pour a full water cell.
             return false;
         }
@@ -6667,6 +6668,7 @@ impl State {
             .unwrap_or("");
         let ember = name.contains("ember");
         let flow = name.contains("flow");
+        let pipes = name.contains("pipe") || name.contains("wire");
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6678,9 +6680,9 @@ impl State {
         self.guests.clear();
         self.rebuild_zombie();
         self.rebuild_guests();
-        // Ember shot at night so fill light reads; water stays day.
+        // Ember / wire shots at night so fill light reads; water stays day.
         self.clock
-            .set_time_of_day(if ember { 0.88 } else { 0.42 });
+            .set_time_of_day(if ember || pipes { 0.88 } else { 0.42 });
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
@@ -6707,7 +6709,37 @@ impl State {
                 }
             }
         }
-        if flow {
+        if pipes {
+            // Water along pipes (north row) and ember along wires (south row).
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+            });
+            for step in 1..=4 {
+                changes.push(CellChange {
+                    x: gx + step,
+                    y: gy,
+                    z: gz,
+                    block: Block::new("pipe", 0),
+                });
+            }
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz + 2,
+                block: Block::new("glass", 0).with_fill(FILL_EMBER),
+            });
+            for step in 1..=4 {
+                changes.push(CellChange {
+                    x: gx + step,
+                    y: gy,
+                    z: gz + 2,
+                    block: Block::new("wire", 0),
+                });
+            }
+        } else if flow {
             // Pipe of fences: source fill at the west end, empty hosts east.
             let fill = if ember { FILL_EMBER } else { FILL_WATER };
             changes.push(CellChange {
@@ -6758,7 +6790,12 @@ impl State {
             });
         }
         apply_changes(&mut self.world, &changes);
-        if flow {
+        if pipes {
+            for _ in 0..3 {
+                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
+                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz + 2], 8, 1);
+            }
+        } else if flow {
             // Advance a few seeps so the PNG shows mid-pipe flow.
             for _ in 0..3 {
                 let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
@@ -6768,7 +6805,19 @@ impl State {
             self.chunk_bake.touch(change.x, change.z);
         }
         self.chunk_bake.touch(gx + 4, gz);
-        let (eye, focus) = if flow {
+        self.chunk_bake.touch(gx + 4, gz + 2);
+        let (eye, focus) = if pipes {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 2.0 + body::EYE_HEIGHT,
+                    gz as f32 - 2.4,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 1.0),
+            )
+        } else if flow {
             let held = if ember { "ember_charge" } else { "water_bucket" };
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack(held);

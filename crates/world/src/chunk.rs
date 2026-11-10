@@ -61,11 +61,13 @@ impl Block {
 /// Hosts that can hold water or ember without replacing the solid.
 ///
 /// Porous / non-cube solids in the feel of Minecraft waterlogging — not only
-/// the demo copper grate.
+/// the demo copper grate. Dedicated `pipe` / `wire` conduits are included.
 pub fn compound_host(id: &str) -> bool {
     matches!(
         id,
         "copper_grate"
+            | "pipe"
+            | "wire"
             | "fence"
             | "fence_gate"
             | "slab"
@@ -100,6 +102,41 @@ pub fn compound_host(id: &str) -> bool {
             | "plate"
             | "banner"
     )
+}
+
+/// True when `id` is a fluid pipe conduit (water only).
+pub fn is_pipe(id: &str) -> bool {
+    id == "pipe"
+}
+
+/// True when `id` is an energy wire conduit (ember only).
+pub fn is_wire(id: &str) -> bool {
+    id == "wire"
+}
+
+/// Whether a compound host may carry this fill kind.
+///
+/// Pipes take water; wires take ember; other hosts take either.
+pub fn compound_accepts(id: &str, fill: u8) -> bool {
+    if !compound_host(id) || fill == FILL_NONE {
+        return false;
+    }
+    match id {
+        "pipe" => fill == FILL_WATER,
+        "wire" => fill == FILL_EMBER,
+        _ => fill == FILL_WATER || fill == FILL_EMBER,
+    }
+}
+
+/// Neighbor link for pipe/wire mesh arms.
+///
+/// Pipes join pipes and non-wire hosts; wires join wires and non-pipe hosts.
+pub fn conduit_links(a: &str, b: &str) -> bool {
+    match a {
+        "pipe" => b == "pipe" || (compound_host(b) && b != "wire"),
+        "wire" => b == "wire" || (compound_host(b) && b != "pipe"),
+        _ => false,
+    }
 }
 
 /// Pack fill byte for a named compound kind.

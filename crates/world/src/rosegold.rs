@@ -2036,6 +2036,11 @@ fn answer(
             let Some(fill) = fill else {
                 return Ok(Answer::Bool(false));
             };
+            if fill != crate::chunk::FILL_NONE
+                && !crate::chunk::compound_accepts(current.id, fill)
+            {
+                return Ok(Answer::Bool(false));
+            }
             if current.fill == fill {
                 return Ok(Answer::Bool(true));
             }

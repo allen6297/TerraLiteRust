@@ -40,8 +40,8 @@
 use std::collections::{HashMap, HashSet};
 
 use rebuild_world::{
-    Block, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack, Plane,
-    Shape, shape_of,
+    Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
+    Plane, Shape, compound_accepts, conduit_links, shape_of,
 };
 
 use crate::daylight;
@@ -1547,15 +1547,23 @@ fn mesh_partial_shapes(
         for z in 0..16u8 {
             for x in 0..16u8 {
                 let block = chunk.block(x, y, z);
-                let shape = shape_of(block);
-                if shape.is_empty() && !block.has_fill() {
-                    continue;
-                }
                 let cell = [
                     chunk.x() * 16 + i32::from(x),
                     i32::from(y),
                     chunk.z() * 16 + i32::from(z),
                 ];
+                if block.id == "pipe" || block.id == "wire" {
+                    mesh_conduit(block, cell, sample, light, sun, mesh);
+                    if let Some((fill, boxes)) = conduit_fill_boxes(block) {
+                        let fill_shape = Shape::from_boxes(boxes);
+                        mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                    }
+                    continue;
+                }
+                let shape = shape_of(block);
+                if shape.is_empty() && !block.has_fill() {
+                    continue;
+                }
                 if !shape.is_empty() {
                     if !shape.is_full_cube() {
                         mesh_cell(block, shape, cell, sample, light, sun, mesh);
@@ -1581,6 +1589,88 @@ fn compound_fill_proxy(block: Block) -> Option<Block> {
     match block.fill {
         FILL_WATER => Some(Block::new("water", 0)),
         FILL_EMBER => Some(Block::new("magma", 0)),
+        _ => None,
+    }
+}
+
+/// Pipe / wire shell with arms only toward linked neighbors.
+fn mesh_conduit(
+    block: Block,
+    cell: [i32; 3],
+    sample: &impl Fn(i32, i32, i32) -> Block,
+    light: &LightField,
+    sun: [f32; 3],
+    mesh: &mut Mesh,
+) {
+    let thick = block.id == "pipe";
+    let (core_lo, core_hi, arm) = if thick {
+        (5u8, 11u8, 2u8)
+    } else {
+        (7, 9, 1)
+    };
+    let mid_lo = 8 - arm;
+    let mid_hi = 8 + arm;
+    let mut boxes = Vec::with_capacity(7);
+    boxes.push(CellBox {
+        min: [core_lo, core_lo, core_lo],
+        max: [core_hi, core_hi, core_hi],
+    });
+    let dirs = [
+        ([1, 0, 0], CellBox {
+            min: [core_hi, mid_lo, mid_lo],
+            max: [16, mid_hi, mid_hi],
+        }),
+        ([-1, 0, 0], CellBox {
+            min: [0, mid_lo, mid_lo],
+            max: [core_lo, mid_hi, mid_hi],
+        }),
+        ([0, 1, 0], CellBox {
+            min: [mid_lo, core_hi, mid_lo],
+            max: [mid_hi, 16, mid_hi],
+        }),
+        ([0, -1, 0], CellBox {
+            min: [mid_lo, 0, mid_lo],
+            max: [mid_hi, core_lo, mid_hi],
+        }),
+        ([0, 0, 1], CellBox {
+            min: [mid_lo, mid_lo, core_hi],
+            max: [mid_hi, mid_hi, 16],
+        }),
+        ([0, 0, -1], CellBox {
+            min: [mid_lo, mid_lo, 0],
+            max: [mid_hi, mid_hi, core_lo],
+        }),
+    ];
+    for ([dx, dy, dz], arm_box) in dirs {
+        let neighbor = sample(cell[0] + dx, cell[1] + dy, cell[2] + dz);
+        if conduit_links(block.id, neighbor.id) {
+            boxes.push(arm_box);
+        }
+    }
+    let shape = Shape::from_boxes(&boxes);
+    mesh_cell(block, shape, cell, sample, light, sun, mesh);
+}
+
+/// Thin fill core inside a pipe (water) or wire (ember).
+fn conduit_fill_boxes(block: Block) -> Option<(Block, &'static [CellBox])> {
+    if !compound_accepts(block.id, block.fill) {
+        return None;
+    }
+    match (block.id, block.fill) {
+        ("pipe", FILL_WATER) => {
+            const WATER: [CellBox; 1] = [CellBox {
+                min: [6, 6, 6],
+                max: [10, 10, 10],
+            }];
+            Some((Block::new("water", 0), &WATER))
+        }
+        ("wire", FILL_EMBER) => {
+            const EMBER: [CellBox; 1] = [CellBox {
+                min: [7, 7, 7],
+                max: [9, 9, 9],
+            }];
+            Some((Block::new("magma", 0), &EMBER))
+        }
         _ => None,
     }
 }

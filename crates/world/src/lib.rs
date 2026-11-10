@@ -50,7 +50,8 @@ pub use changes::{
     write_player,
 };
 pub use chunk::{
-    Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, compound_host, fill_kind, fill_name,
+    Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, compound_accepts, compound_host,
+    conduit_links, fill_kind, fill_name, is_pipe, is_wire,
 };
 pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};

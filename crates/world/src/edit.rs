@@ -156,11 +156,13 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
     let current = world.block_at(x, y, z);
     let swing = swings(current.id) && current.id == block.id && current.metadata != block.metadata;
     // Same host: empty↔fill only (drain or place; no kind swap without drain).
+    // Pipes take water; wires take ember; other hosts take either.
     let fill_update = compound_host(current.id)
         && current.id == block.id
         && current.metadata == block.metadata
         && current.fill != block.fill
-        && (current.fill == 0 || block.fill == 0);
+        && (current.fill == 0 || block.fill == 0)
+        && (block.fill == 0 || crate::chunk::compound_accepts(current.id, block.fill));
     if !current.is_air() && !swing && !fill_update {
         return false;
     }
@@ -326,7 +328,7 @@ mod tests {
 
     #[test]
     fn fence_glass_and_leaves_take_compound_fills() {
-        use crate::chunk::compound_host;
+        use crate::chunk::{compound_accepts, compound_host};
         for id in ["fence", "glass", "leaves", "oak_stairs", "trapdoor", "ladder"] {
             assert!(compound_host(id), "{id} should host fills");
             let chunk = Chunk::from_blocks(0, 0, [(2, 1, 2, Block::new(id, 0))]).unwrap();
@@ -353,6 +355,36 @@ mod tests {
         }
         assert!(!compound_host("stone"));
         assert!(!compound_host("cobblestone"));
+        assert!(compound_host("pipe") && compound_accepts("pipe", FILL_WATER));
+        assert!(!compound_accepts("pipe", FILL_EMBER));
+        assert!(compound_host("wire") && compound_accepts("wire", FILL_EMBER));
+        assert!(!compound_accepts("wire", FILL_WATER));
+        let pipe = Chunk::from_blocks(0, 0, [(2, 1, 2, Block::new("pipe", 0))]).unwrap();
+        let mut wet = Cluster::try_from_chunks(0, 0, [pipe.clone()]).unwrap();
+        assert!(apply(
+            &mut wet,
+            Edit::Place {
+                x: 2,
+                y: 1,
+                z: 2,
+                block: Block::new("pipe", 0).with_fill(FILL_WATER),
+                player: far_player(),
+            }
+        ));
+        let mut rejected = Cluster::try_from_chunks(0, 0, [pipe]).unwrap();
+        assert!(
+            !apply(
+                &mut rejected,
+                Edit::Place {
+                    x: 2,
+                    y: 1,
+                    z: 2,
+                    block: Block::new("pipe", 0).with_fill(FILL_EMBER),
+                    player: far_player(),
+                }
+            ),
+            "pipe rejects ember fill"
+        );
     }
 
     #[test]

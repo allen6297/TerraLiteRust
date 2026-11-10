@@ -8,7 +8,8 @@
 
 use glam::Vec3;
 use rebuild_world::{
-    Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_host, for_each_collider, shape_of,
+    Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts, compound_host,
+    for_each_collider, shape_of,
 };
 
 use crate::look;
@@ -68,14 +69,14 @@ fn outline_color(held: Option<&str>, host_id: &str, fill: u8) -> [f32; 3] {
     let Some(kind) = pack.compound_fill_of(held) else {
         return WHITE;
     };
-    if !compound_host(host_id) {
-        return WHITE;
-    }
     let want = match kind {
         "water" => FILL_WATER,
         "ember" => FILL_EMBER,
         _ => return WHITE,
     };
+    if !compound_accepts(host_id, want) {
+        return WHITE;
+    }
     if fill == FILL_NONE || fill == want {
         match want {
             FILL_WATER => CYAN,
@@ -254,6 +255,10 @@ mod tests {
             outline_color(Some("drain_sponge"), "glass", FILL_EMBER),
             LIME
         );
+        assert_eq!(outline_color(Some("water_bucket"), "pipe", FILL_NONE), CYAN);
+        assert_eq!(outline_color(Some("ember_charge"), "pipe", FILL_NONE), WHITE);
+        assert_eq!(outline_color(Some("ember_charge"), "wire", FILL_NONE), AMBER);
+        assert_eq!(outline_color(Some("water_bucket"), "wire", FILL_NONE), WHITE);
     }
 
     #[test]
