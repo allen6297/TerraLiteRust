@@ -461,7 +461,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn dawn_chorus_peaks_after_sunrise_and_is_quiet_at_noon() {
         assert_eq!(dawn_chorus(0.0), 0.0);
         assert_eq!(dawn_chorus(0.5), 0.0);
