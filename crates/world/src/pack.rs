@@ -1592,6 +1592,38 @@ impl Pack {
         true
     }
 
+    /// Set a script settings row to an exact value. False when missing or refused.
+    pub fn set_setting_value(&self, name: &str, value: &str) -> bool {
+        let mut script = self.script.lock().expect("script registry");
+        let Some(row) = script
+            .settings
+            .iter_mut()
+            .find(|row| row.option.name == name)
+        else {
+            return false;
+        };
+        if !row.option.choices.is_empty() {
+            if !row.option.choices.iter().any(|word| word == value) {
+                return false;
+            }
+            if row.option.value == value {
+                return false;
+            }
+            row.option.value = value.to_string();
+            return true;
+        }
+        match value {
+            "on" | "off" if row.option.value == "on" || row.option.value == "off" => {
+                if row.option.value == value {
+                    return false;
+                }
+                row.option.value = value.to_string();
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn gui_screens(&self) -> Vec<rebuild_rosegold::GuiScreen> {
         self.script
             .lock()

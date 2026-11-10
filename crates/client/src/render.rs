@@ -816,6 +816,9 @@ pub struct State {
     /// One-shot window capture aimed at the zombie, then quit.
     shot_path: Option<std::path::PathBuf>,
     shot_frames: u32,
+    /// One-shot capture of the Godot-style settings screen, then quit.
+    settings_shot_path: Option<std::path::PathBuf>,
+    settings_shot_frames: u32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1625,6 +1628,8 @@ impl State {
             quit: false,
             shot_path: None,
             shot_frames: 0,
+            settings_shot_path: None,
+            settings_shot_frames: 0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -4866,6 +4871,15 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the Godot-style settings screen and capture a window PNG.
+    pub fn arm_settings_shot(&mut self, path: std::path::PathBuf) {
+        self.settings_shot_path = Some(path);
+        self.settings_shot_frames = 0;
+        self.playing = false;
+        self.menu.show_settings();
+        let _ = self.window.focus_window();
+    }
+
     fn poll_zombie_shot(&mut self) {
         let Some(path) = self.shot_path.clone() else {
             return;
@@ -4885,6 +4899,32 @@ impl State {
                 eprintln!("shot failed: {err}");
                 if self.shot_frames > 200 {
                     self.shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    fn poll_settings_shot(&mut self) {
+        let Some(path) = self.settings_shot_path.clone() else {
+            return;
+        };
+        self.settings_shot_frames = self.settings_shot_frames.saturating_add(1);
+        // Wait for a few egui frames so the dock + inspector paint.
+        if self.settings_shot_frames < 45 {
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("settings shot wrote {}", path.display());
+                self.settings_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("settings shot failed: {err}");
+                if self.settings_shot_frames > 120 {
+                    self.settings_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -8413,6 +8453,7 @@ impl State {
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
         self.poll_zombie_shot();
+        self.poll_settings_shot();
     }
 }
 

@@ -3948,6 +3948,29 @@ pub enum MenuAction {
     Setting,
 }
 
+/// How an egui settings row draws its control (toggle vs discrete slider).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingsControl {
+    Toggle {
+        on: bool,
+        on_label: &'static str,
+        off_label: &'static str,
+    },
+    Slider {
+        index: usize,
+        choices: Vec<String>,
+    },
+}
+
+/// One left-dock category in the Godot-style settings screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingsCategory {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub options: Vec<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuPage {
     Main,
@@ -3981,6 +4004,10 @@ pub struct Menu {
     join_note: String,
     /// The script row just flipped, if this press did that.
     changed: Option<String>,
+    /// Selected left-dock category on the settings screen.
+    settings_category: usize,
+    /// Inspector filter text (Godot-style search).
+    settings_query: String,
 }
 
 impl Menu {
@@ -4004,6 +4031,8 @@ impl Menu {
             worlds: crate::net::list_worlds(),
             join_note: String::new(),
             changed: None,
+            settings_category: 0,
+            settings_query: String::new(),
         }
     }
 
@@ -4028,6 +4057,8 @@ impl Menu {
             worlds: vec![crate::net::DEFAULT_WORLD.to_string()],
             join_note: String::new(),
             changed: None,
+            settings_category: 0,
+            settings_query: String::new(),
         }
     }
 
@@ -4051,6 +4082,77 @@ impl Menu {
 
     pub fn muted(&self) -> bool {
         self.muted
+    }
+
+    pub fn size_locked(&self) -> bool {
+        self.size_locked
+    }
+
+    pub fn settings_category(&self) -> usize {
+        self.settings_category
+    }
+
+    pub fn set_settings_category(&mut self, index: usize) {
+        self.settings_category = index;
+    }
+
+    pub fn settings_query(&self) -> &str {
+        &self.settings_query
+    }
+
+    pub fn set_settings_query(&mut self, query: &str) {
+        self.settings_query = query.to_string();
+    }
+
+    /// Row index in [`Menu::menu_rows`] for a settings option label.
+    pub fn settings_row_index(&self, label: &str) -> Option<usize> {
+        self.settings_rows()
+            .iter()
+            .position(|row| row == label)
+    }
+
+    /// Left-dock categories: built-in World / Video / Audio, then mod groups.
+    pub fn settings_categories(&self) -> Vec<SettingsCategory> {
+        let mut cats = vec![
+            SettingsCategory {
+                id: "world".into(),
+                title: "World".into(),
+                detail: "size and sun path".into(),
+                options: vec!["world".into(), "hemisphere".into()],
+            },
+            SettingsCategory {
+                id: "video".into(),
+                title: "Video".into(),
+                detail: "bob and shadows".into(),
+                options: vec!["view_bob".into(), "trace".into()],
+            },
+            SettingsCategory {
+                id: "audio".into(),
+                title: "Audio".into(),
+                detail: "master sound".into(),
+                options: vec!["volume".into()],
+            },
+        ];
+        let options = rebuild_world::Pack::builtin().settings();
+        let mut seen = Vec::new();
+        for option in &options {
+            if seen.iter().any(|id| id == &option.category) {
+                continue;
+            }
+            seen.push(option.category.clone());
+            let rows: Vec<String> = options
+                .iter()
+                .filter(|row| row.category == option.category)
+                .map(|row| row.name.clone())
+                .collect();
+            cats.push(SettingsCategory {
+                id: option.category.clone(),
+                title: title_case_label(&option.category),
+                detail: option.category_text.clone(),
+                options: rows,
+            });
+        }
+        cats
     }
 
     pub fn hemisphere(&self) -> crate::daylight::Hemisphere {
@@ -4079,9 +4181,289 @@ impl Menu {
         self.page != MenuPage::Closed
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_settings(&self) -> bool {
         self.page == MenuPage::Settings
+    }
+
+    /// True when `label` is a mod SettingsAPI category heading, not an option.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_settings_heading(&self, label: &str) -> bool {
+        self.category_heading(label)
+    }
+
+    /// Short muted line under a settings option (no current value).
+    pub fn settings_hint(&self, label: &str) -> String {
+        match label {
+            "world" if self.size_locked => format!(
+                "server lock, {} by {} chunks",
+                self.size.side(),
+                self.size.side()
+            ),
+            "world" => format!("{} by {} chunks", self.size.side(), self.size.side()),
+            "hemisphere" => "sun path across the sky".to_string(),
+            "volume" => "master sound".to_string(),
+            "view_bob" => "walk motion".to_string(),
+            "trace" => "sun shadows".to_string(),
+            "back" => "return to the menu".to_string(),
+            _ => rebuild_world::Pack::builtin()
+                .settings()
+                .into_iter()
+                .find(|option| option.name == label)
+                .map(|option| option.description)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Current cycleable value shown on the settings value chip.
+    pub fn settings_value(&self, label: &str) -> String {
+        match label {
+            "world" => self.size.label().to_string(),
+            "hemisphere" => self.hemisphere.label().to_string(),
+            "volume" if self.muted => "muted".to_string(),
+            "volume" => "on".to_string(),
+            "view_bob" => self.bob.label().to_string(),
+            "trace" if self.trace => "soft".to_string(),
+            "trace" => "raster".to_string(),
+            _ => rebuild_world::Pack::builtin()
+                .settings()
+                .into_iter()
+                .find(|option| option.name == label)
+                .map(|option| option.value)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// How the egui settings row should draw this option.
+    pub fn settings_control(&self, label: &str) -> SettingsControl {
+        match label {
+            "volume" => SettingsControl::Toggle {
+                on: !self.muted,
+                on_label: "on",
+                off_label: "muted",
+            },
+            "trace" => SettingsControl::Toggle {
+                on: self.trace,
+                on_label: "soft",
+                off_label: "raster",
+            },
+            "hemisphere" => SettingsControl::Toggle {
+                on: matches!(self.hemisphere, crate::daylight::Hemisphere::North),
+                on_label: "north",
+                off_label: "south",
+            },
+            "world" => SettingsControl::Slider {
+                index: match self.size {
+                    rebuild_world::WorldSize::Small => 0,
+                    rebuild_world::WorldSize::Medium => 1,
+                    rebuild_world::WorldSize::Large => 2,
+                    rebuild_world::WorldSize::Mega => 3,
+                },
+                choices: vec![
+                    "small".into(),
+                    "medium".into(),
+                    "large".into(),
+                    "mega".into(),
+                ],
+            },
+            "view_bob" => SettingsControl::Slider {
+                index: match self.bob {
+                    crate::camera::Bob::Off => 0,
+                    crate::camera::Bob::Low => 1,
+                    crate::camera::Bob::Full => 2,
+                },
+                choices: vec!["off".into(), "low".into(), "full".into()],
+            },
+            _ => {
+                let Some(option) = rebuild_world::Pack::builtin()
+                    .settings()
+                    .into_iter()
+                    .find(|option| option.name == label)
+                else {
+                    return SettingsControl::Toggle {
+                        on: false,
+                        on_label: "on",
+                        off_label: "off",
+                    };
+                };
+                if !option.choices.is_empty() {
+                    let index = option
+                        .choices
+                        .iter()
+                        .position(|word| word == &option.value)
+                        .unwrap_or(0);
+                    SettingsControl::Slider {
+                        index,
+                        choices: option.choices,
+                    }
+                } else if option.value == "on" || option.value == "off" {
+                    SettingsControl::Toggle {
+                        on: option.value == "on",
+                        on_label: "on",
+                        off_label: "off",
+                    }
+                } else {
+                    SettingsControl::Slider {
+                        index: 0,
+                        choices: vec![option.value],
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply a toggle from the egui settings switch.
+    pub fn set_settings_toggle(&mut self, index: usize, on: bool) -> MenuAction {
+        self.selected = index;
+        let label = self.rows().get(self.selected).cloned().unwrap_or_default();
+        match label.as_str() {
+            "volume" => {
+                let want_muted = !on;
+                if self.muted == want_muted {
+                    return MenuAction::None;
+                }
+                self.muted = want_muted;
+                MenuAction::Volume
+            }
+            "trace" => {
+                if self.trace == on {
+                    return MenuAction::None;
+                }
+                self.trace = on;
+                MenuAction::None
+            }
+            "hemisphere" => {
+                let next = if on {
+                    crate::daylight::Hemisphere::North
+                } else {
+                    crate::daylight::Hemisphere::South
+                };
+                if self.hemisphere == next {
+                    return MenuAction::None;
+                }
+                self.hemisphere = next;
+                MenuAction::None
+            }
+            _ => {
+                let value = if on { "on" } else { "off" };
+                if rebuild_world::Pack::builtin().set_setting_value(&label, value) {
+                    self.changed = Some(label);
+                    MenuAction::Setting
+                } else {
+                    MenuAction::None
+                }
+            }
+        }
+    }
+
+    /// Apply a discrete slider / choice index from the egui settings row.
+    pub fn set_settings_choice(&mut self, index: usize, choice: usize) -> MenuAction {
+        self.selected = index;
+        let label = self.rows().get(self.selected).cloned().unwrap_or_default();
+        match label.as_str() {
+            "world" => {
+                let next = match choice {
+                    1 => rebuild_world::WorldSize::Medium,
+                    2 => rebuild_world::WorldSize::Large,
+                    3 => rebuild_world::WorldSize::Mega,
+                    _ => rebuild_world::WorldSize::Small,
+                };
+                if self.size == next {
+                    return MenuAction::None;
+                }
+                self.size = next;
+                MenuAction::Resize
+            }
+            "view_bob" => {
+                let next = match choice {
+                    1 => crate::camera::Bob::Low,
+                    2 => crate::camera::Bob::Full,
+                    _ => crate::camera::Bob::Off,
+                };
+                if self.bob == next {
+                    return MenuAction::None;
+                }
+                self.bob = next;
+                MenuAction::None
+            }
+            _ => {
+                let Some(value) = rebuild_world::Pack::builtin()
+                    .settings()
+                    .into_iter()
+                    .find(|option| option.name == label)
+                    .and_then(|option| option.choices.get(choice).cloned())
+                else {
+                    return MenuAction::None;
+                };
+                if rebuild_world::Pack::builtin().set_setting_value(&label, &value) {
+                    self.changed = Some(label);
+                    MenuAction::Setting
+                } else {
+                    MenuAction::None
+                }
+            }
+        }
+    }
+
+    /// Step a settings row forward or back (← → and the value chips).
+    pub fn step_setting(&mut self, index: usize, forward: bool) -> MenuAction {
+        self.selected = index;
+        if forward {
+            return self.activate();
+        }
+        let label = self.rows().get(self.selected).cloned().unwrap_or_default();
+        match self.page {
+            MenuPage::Settings if label == "world" => {
+                // Four sizes: one step back is three steps forward.
+                self.size = self.size.cycle().cycle().cycle();
+                MenuAction::Resize
+            }
+            MenuPage::Settings if label == "hemisphere" => {
+                self.hemisphere = self.hemisphere.cycle();
+                MenuAction::None
+            }
+            MenuPage::Settings if label == "volume" => {
+                self.muted = !self.muted;
+                MenuAction::Volume
+            }
+            MenuPage::Settings if label == "view_bob" => {
+                // Three bob modes: back is two steps forward.
+                self.bob = self.bob.cycle().cycle();
+                MenuAction::None
+            }
+            MenuPage::Settings if label == "trace" => {
+                self.trace = !self.trace;
+                MenuAction::None
+            }
+            MenuPage::Settings if self.category_heading(&label) => MenuAction::None,
+            MenuPage::Settings => {
+                let steps = rebuild_world::Pack::builtin()
+                    .settings()
+                    .into_iter()
+                    .find(|option| option.name == label)
+                    .map(|option| {
+                        if option.choices.is_empty() {
+                            1usize
+                        } else {
+                            option.choices.len().saturating_sub(1).max(1)
+                        }
+                    })
+                    .unwrap_or(0);
+                if steps == 0 {
+                    return MenuAction::None;
+                }
+                let mut ok = false;
+                for _ in 0..steps {
+                    ok = rebuild_world::Pack::builtin().toggle_setting(&label) || ok;
+                }
+                if ok {
+                    self.changed = Some(label);
+                    MenuAction::Setting
+                } else {
+                    MenuAction::None
+                }
+            }
+            _ => MenuAction::None,
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -4201,7 +4583,7 @@ impl Menu {
         }
     }
 
-    /// Arrows move the row. Enter or Space runs it.
+    /// Arrows move the row. ← → cycle a settings value. Enter or Space runs it.
     pub fn on_press(&mut self, code: KeyCode) -> MenuAction {
         if self.page == MenuPage::Closed {
             return MenuAction::None;
@@ -4219,6 +4601,15 @@ impl Menu {
                 self.selected = (self.selected + 1) % count;
             }
             return MenuAction::None;
+        }
+        if self.page == MenuPage::Settings
+            && (code == KeyCode::ArrowLeft || code == KeyCode::ArrowRight)
+        {
+            let label = self.rows().get(self.selected).cloned().unwrap_or_default();
+            if label == "back" || self.category_heading(&label) {
+                return MenuAction::None;
+            }
+            return self.step_setting(self.selected, code == KeyCode::ArrowRight);
         }
         if code == KeyCode::Enter || code == KeyCode::NumpadEnter || code == KeyCode::Space {
             return self.activate();
@@ -4392,16 +4783,12 @@ impl Menu {
     }
 
     fn setting_line(&self, label: &str) -> String {
+        // Description + value only — category text lives on the heading row.
         rebuild_world::Pack::builtin()
             .settings()
             .into_iter()
             .find(|option| option.name == label)
-            .map(|option| {
-                format!(
-                    "{}, {}, {}",
-                    option.category_text, option.description, option.value
-                )
-            })
+            .map(|option| format!("{}, {}", option.description, option.value))
             .unwrap_or_default()
     }
 
@@ -4409,6 +4796,13 @@ impl Menu {
         self.settings_return = back;
         self.page = MenuPage::Settings;
         self.selected = 0;
+        self.settings_category = 0;
+        self.settings_query.clear();
+    }
+
+    /// Open settings from the title menu (proof shots / automation).
+    pub fn show_settings(&mut self) {
+        self.open_settings(MenuPage::Main);
     }
 
     fn make_world(&mut self) {
@@ -9153,7 +9547,9 @@ fn main(): Int {
         while menu.rows().get(menu.selected).map(String::as_str) != Some("lamp") {
             assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
         }
-        assert_eq!(menu.detail(), "how it feels, soft glow, on");
+        assert_eq!(menu.detail(), "soft glow, on");
+        assert_eq!(menu.settings_value("lamp"), "on");
+        assert_eq!(menu.settings_hint("lamp"), "soft glow");
         assert!(
             menu.quads(1280.0, 720.0)
                 .iter()
@@ -9162,9 +9558,9 @@ fn main(): Int {
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
         assert_eq!(menu.take_changed().as_deref(), Some("lamp"));
         assert!(menu.is_settings());
-        assert_eq!(menu.detail(), "how it feels, soft glow, off");
+        assert_eq!(menu.detail(), "soft glow, off");
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
-        assert_eq!(menu.detail(), "how it feels, soft glow, on");
+        assert_eq!(menu.detail(), "soft glow, on");
     }
 
     #[test]
@@ -9281,16 +9677,21 @@ fn main(): Int {
         while menu.rows().get(menu.selected).map(String::as_str) != Some("pace") {
             assert_eq!(menu.on_press(KeyCode::ArrowDown), MenuAction::None);
         }
-        assert_eq!(menu.detail(), "how it feels, walk speed, mid");
+        assert_eq!(menu.detail(), "walk speed, mid");
+        assert_eq!(menu.settings_value("pace"), "mid");
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
-        assert_eq!(menu.detail(), "how it feels, walk speed, high");
+        assert_eq!(menu.detail(), "walk speed, high");
         let mut world = rebuild_world::synthetic_cluster();
         let said = hooks.setting_changed(&mut world, "pace", &rebuild_world::ScriptView::bare());
         assert_eq!(said, vec!["pace high".to_string()]);
+        assert_eq!(menu.on_press(KeyCode::ArrowLeft), MenuAction::Setting);
+        assert_eq!(menu.detail(), "walk speed, mid");
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
-        assert_eq!(menu.detail(), "how it feels, walk speed, low");
+        assert_eq!(menu.detail(), "walk speed, high");
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
-        assert_eq!(menu.detail(), "how it feels, walk speed, mid");
+        assert_eq!(menu.detail(), "walk speed, low");
+        assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
+        assert_eq!(menu.detail(), "walk speed, mid");
     }
 
     #[test]

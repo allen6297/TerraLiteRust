@@ -107,6 +107,8 @@ struct Args {
     port: u16,
     /// After Play, look at the zombie and write one window PNG, then quit.
     shot: Option<std::path::PathBuf>,
+    /// Open settings and write one window PNG, then quit.
+    shot_settings: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -174,6 +176,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         local: source == "local",
         port: args.port,
         shot: args.shot,
+        shot_settings: args.shot_settings,
         state: None,
         last_frame: Instant::now(),
     };
@@ -190,6 +193,7 @@ struct App {
     local: bool,
     port: u16,
     shot: Option<std::path::PathBuf>,
+    shot_settings: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -229,6 +233,9 @@ impl ApplicationHandler for App {
             Ok(mut state) => {
                 if let Some(path) = self.shot.take() {
                     state.arm_zombie_shot(path);
+                }
+                if let Some(path) = self.shot_settings.take() {
+                    state.arm_settings_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -369,6 +376,7 @@ where
     let mut parsed = Args {
         port: DEFAULT_PORT,
         shot: None,
+        shot_settings: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -386,6 +394,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot".to_string())?;
                 parsed.shot = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-settings" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-settings".to_string())?;
+                parsed.shot_settings = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

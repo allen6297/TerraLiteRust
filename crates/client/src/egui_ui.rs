@@ -23,7 +23,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::body::Armor;
-use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab};
+use crate::gui::{self, Gui, Menu, MenuAction, PlayerInvTab, SettingsControl};
 use crate::hotbar::{self, Hotbar};
 use crate::item_icon;
 use crate::player;
@@ -367,6 +367,9 @@ fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
 }
 
 fn draw_menu(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
+    if menu.is_settings() {
+        return draw_settings(ui, menu);
+    }
     let mut action = MenuAction::None;
     let title = menu.page_title();
     let rows = menu.menu_rows();
@@ -396,6 +399,381 @@ fn draw_menu(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
             });
         });
     action
+}
+
+/// Settings chrome: Godot-style left category dock + right inspector.
+fn draw_settings(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
+    let mut action = MenuAction::None;
+    let categories = menu.settings_categories();
+    if categories.is_empty() {
+        return MenuAction::None;
+    }
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show(ui, |ui| {
+            let avail = ui.available_size();
+            let panel_w = (avail.x * 0.86).clamp(560.0, 920.0);
+            let panel_h = (avail.y * 0.78).clamp(360.0, 620.0);
+            let top_pad = ((avail.y - panel_h) * 0.35).clamp(6.0, avail.y * 0.1);
+            ui.vertical_centered(|ui| {
+                ui.add_space(top_pad);
+                show_panel(ui, panel_w, |ui| {
+                    ui.set_min_height(panel_h);
+                    ui.horizontal(|ui| {
+                        title_label(ui, "SETTINGS");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // Compact Back — menu_button would stretch full width here.
+                            let back = egui::Button::new(RichText::new("Back").size(14.0).color(INK))
+                                .fill(BUTTON)
+                                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                .corner_radius(CornerRadius::same(4))
+                                .min_size(Vec2::new(88.0, 30.0));
+                            if ui.add(back).clicked() {
+                                if let Some(back) =
+                                    menu.menu_rows().iter().position(|label| label == "back")
+                                {
+                                    action = menu.activate_row(back);
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    // Search filters the inspector property list.
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Filter").size(13.0).color(MUTED));
+                        let mut query = menu.settings_query().to_string();
+                        let edit = egui::TextEdit::singleline(&mut query)
+                            .desired_width((panel_w - 120.0).clamp(160.0, 420.0))
+                            .hint_text("world, bob, glow…")
+                            .text_color(INK);
+                        if ui.add(edit).changed() {
+                            menu.set_settings_query(&query);
+                        }
+                    });
+                    ui.add_space(8.0);
+
+                    let dock_w = (panel_w * 0.28).clamp(150.0, 220.0);
+                    let body_h = (panel_h - 110.0).max(220.0);
+                    let cat_idx = menu
+                        .settings_category()
+                        .min(categories.len().saturating_sub(1));
+                    if cat_idx != menu.settings_category() {
+                        menu.set_settings_category(cat_idx);
+                    }
+                    let active = categories[cat_idx].clone();
+
+                    ui.horizontal(|ui| {
+                        ui.set_min_height(body_h);
+                        // Left category dock (Godot Project Settings style).
+                        // Force vertical: Frames inherit the parent horizontal row.
+                        Frame::new()
+                            .fill(TITLE_PLATE)
+                            .stroke(Stroke::new(1.0, SLOT_EDGE))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(Margin::symmetric(8, 8))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.set_width(dock_w);
+                                    ui.set_min_height(body_h);
+                                    ui.label(
+                                        RichText::new("CATEGORIES")
+                                            .size(11.0)
+                                            .color(MUTED)
+                                            .strong(),
+                                    );
+                                    ui.add_space(6.0);
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("settings_dock")
+                                        .max_height(body_h - 28.0)
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            for (i, cat) in categories.iter().enumerate() {
+                                                let selected = i == cat_idx;
+                                                let fill =
+                                                    if selected { SELECT_SOFT } else { BUTTON };
+                                                let stroke = if selected {
+                                                    Stroke::new(1.5, SELECT)
+                                                } else {
+                                                    Stroke::new(1.0, SLOT_EDGE)
+                                                };
+                                                let btn = egui::Button::new(
+                                                    RichText::new(&cat.title)
+                                                        .size(14.0)
+                                                        .color(if selected {
+                                                            Color32::from_rgb(20, 18, 12)
+                                                        } else {
+                                                            INK
+                                                        })
+                                                        .strong(),
+                                                )
+                                                .fill(if selected { SELECT } else { fill })
+                                                .stroke(stroke)
+                                                .corner_radius(CornerRadius::same(3))
+                                                .min_size(Vec2::new(
+                                                    ui.available_width().max(dock_w - 16.0),
+                                                    30.0,
+                                                ));
+                                                if ui.add(btn).clicked() {
+                                                    menu.set_settings_category(i);
+                                                }
+                                                if !cat.detail.is_empty() {
+                                                    ui.label(
+                                                        RichText::new(&cat.detail)
+                                                            .size(11.0)
+                                                            .color(MUTED),
+                                                    );
+                                                    ui.add_space(4.0);
+                                                }
+                                            }
+                                        });
+                                });
+                            });
+
+                        ui.add_space(10.0);
+
+                        // Right inspector property list.
+                        Frame::new()
+                            .fill(WELL)
+                            .stroke(Stroke::new(1.0, SLOT_EDGE))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(Margin::symmetric(10, 8))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    let inspector_w = (panel_w - dock_w - 48.0).max(280.0);
+                                    ui.set_width(inspector_w);
+                                    ui.set_min_height(body_h);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(active.title.to_uppercase())
+                                                .size(15.0)
+                                                .color(DETAIL)
+                                                .strong(),
+                                        );
+                                        if !active.detail.is_empty() {
+                                            ui.label(
+                                                RichText::new(format!("— {}", active.detail))
+                                                    .size(12.0)
+                                                    .color(MUTED),
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(6.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+
+                                    let query = menu.settings_query().to_lowercase();
+                                    let props: Vec<_> = active
+                                        .options
+                                        .iter()
+                                        .filter(|label| {
+                                            if query.is_empty() {
+                                                return true;
+                                            }
+                                            let name = label.to_lowercase();
+                                            let hint = menu.settings_hint(label).to_lowercase();
+                                            name.contains(&query) || hint.contains(&query)
+                                        })
+                                        .cloned()
+                                        .collect();
+
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("settings_inspector")
+                                        .max_height(body_h - 48.0)
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            if props.is_empty() {
+                                                ui.label(
+                                                    RichText::new("no matching properties")
+                                                        .size(13.0)
+                                                        .color(MUTED),
+                                                );
+                                            }
+                                            for label in props {
+                                                let Some(row_index) =
+                                                    menu.settings_row_index(&label)
+                                                else {
+                                                    continue;
+                                                };
+                                                let name = gui::title_case_label(&label);
+                                                let hint = menu.settings_hint(&label);
+                                                let control = menu.settings_control(&label);
+                                                let locked =
+                                                    label == "world" && menu.size_locked();
+                                                if let Some(pending) = inspector_property_row(
+                                                    ui,
+                                                    row_index,
+                                                    &name,
+                                                    &hint,
+                                                    &control,
+                                                    locked,
+                                                ) {
+                                                    action = match pending {
+                                                        SettingsPending::Toggle(on) => menu
+                                                            .set_settings_toggle(row_index, on),
+                                                        SettingsPending::Choice(choice) => menu
+                                                            .set_settings_choice(
+                                                                row_index, choice,
+                                                            ),
+                                                    };
+                                                }
+                                                ui.add_space(4.0);
+                                            }
+                                        });
+                                });
+                            });
+                    });
+                });
+            });
+        });
+    action
+}
+
+enum SettingsPending {
+    Toggle(bool),
+    Choice(usize),
+}
+
+/// Inspector row: property label | control (Godot editor style).
+fn inspector_property_row(
+    ui: &mut Ui,
+    index: usize,
+    name: &str,
+    hint: &str,
+    control: &SettingsControl,
+    locked: bool,
+) -> Option<SettingsPending> {
+    let mut pending = None;
+    Frame::new()
+        .fill(ROW)
+        .stroke(Stroke::new(1.0, SLOT_EDGE))
+        .corner_radius(CornerRadius::same(3))
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                // Left property label column.
+                ui.allocate_ui_with_layout(
+                    Vec2::new((ui.available_width() * 0.42).clamp(120.0, 220.0), 36.0),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(name).size(14.0).color(INK).strong());
+                            if !hint.is_empty() {
+                                ui.label(RichText::new(hint).size(11.0).color(MUTED));
+                            }
+                        });
+                    },
+                );
+                // Right control column.
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_enabled_ui(!locked, |ui| {
+                        match control {
+                            SettingsControl::Toggle {
+                                on,
+                                on_label,
+                                off_label,
+                            } => {
+                                let label = if *on { *on_label } else { *off_label };
+                                ui.label(
+                                    RichText::new(label).size(12.0).color(DETAIL).strong(),
+                                );
+                                if settings_switch(ui, *on, index) {
+                                    pending = Some(SettingsPending::Toggle(!*on));
+                                }
+                            }
+                            SettingsControl::Slider { index: cur, choices } => {
+                                if choices.len() <= 1 {
+                                    if let Some(value) = choices.first() {
+                                        value_chip(ui, value);
+                                    }
+                                } else {
+                                    let mut pos = *cur as f32;
+                                    let max = (choices.len() - 1) as f32;
+                                    let width = ui.available_width().clamp(140.0, 240.0);
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(width, 28.0),
+                                        Layout::right_to_left(Align::Center),
+                                        |ui| {
+                                            ui.set_min_width(width);
+                                            let resp = ui.push_id(("settings_slider", index), |ui| {
+                                                ui.add(
+                                                    egui::Slider::new(&mut pos, 0.0..=max)
+                                                        .integer()
+                                                        .show_value(false)
+                                                        .trailing_fill(true),
+                                                )
+                                            })
+                                            .inner;
+                                            let choice = pos.round().clamp(0.0, max) as usize;
+                                            let label = choices
+                                                .get(choice)
+                                                .map(String::as_str)
+                                                .unwrap_or("");
+                                            ui.label(
+                                                RichText::new(label)
+                                                    .size(12.0)
+                                                    .color(DETAIL)
+                                                    .strong(),
+                                            );
+                                            if resp.changed() {
+                                                pending = Some(SettingsPending::Choice(choice));
+                                            }
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+        });
+    pending
+}
+
+/// Compact on/off switch. Returns true when the user flipped it.
+fn settings_switch(ui: &mut Ui, on: bool, index: usize) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(46.0, 24.0), Sense::click());
+    let fill = if on { SELECT_SOFT } else { BUTTON };
+    let stroke = if on {
+        Stroke::new(1.5, SELECT)
+    } else {
+        Stroke::new(1.0, SLOT_EDGE)
+    };
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(12),
+        fill,
+        stroke,
+        StrokeKind::Inside,
+    );
+    let x = if on {
+        rect.right() - 12.0
+    } else {
+        rect.left() + 12.0
+    };
+    ui.painter().circle_filled(
+        egui::pos2(x, rect.center().y),
+        8.0,
+        if on { SELECT } else { LIP },
+    );
+    let _ = ui.interact(rect, ui.id().with(("settings_switch", index)), Sense::hover());
+    resp.clicked()
+}
+
+fn value_chip(ui: &mut Ui, value: &str) {
+    Frame::new()
+        .fill(BUTTON)
+        .stroke(Stroke::new(1.0, LIP))
+        .corner_radius(CornerRadius::same(3))
+        .inner_margin(Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(value)
+                    .size(13.0)
+                    .color(DETAIL)
+                    .strong(),
+            );
+        });
 }
 
 fn draw_creative(
