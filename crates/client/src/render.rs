@@ -1016,6 +1016,8 @@ pub struct State {
     found_camp: bool,
     found_shrine: bool,
     found_mine: bool,
+    /// Once: holding raw while looking at a campfire or smoker.
+    told_cook_heat: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1961,6 +1963,7 @@ impl State {
             found_camp: false,
             found_shrine: false,
             found_mine: false,
+            told_cook_heat: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3493,6 +3496,29 @@ impl State {
             self.found_mine = true;
             self.gui.push_chat("a mine");
         }
+    }
+
+    /// Once: hold raw, look at a campfire or smoker — tip to use it.
+    fn tell_cook_heat(&mut self) {
+        if self.told_cook_heat || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead)
+        {
+            return;
+        }
+        if self.hotbar.slot(self.hotbar.selected()) != Some("raw") {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        let heat = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id;
+        if heat != "campfire" && heat != "smoker" {
+            return;
+        }
+        self.told_cook_heat = true;
+        self.gui.push_chat("use to cook");
     }
 
     /// True when `events.jump` keeps the player on the ground.
@@ -10350,6 +10376,7 @@ impl State {
         self.gui.stoke(dt);
         self.gui.age_chat(dt);
         self.tell_landmarks();
+        self.tell_cook_heat();
         self.note_pose();
         if self.drops.tick_motes(dt) {
             self.rebuild_drops();
