@@ -674,6 +674,8 @@ pub struct Gui {
     craft: hotbar::Bag,
     /// Player-inventory Craft tab 2×2 (slots `0..3`). Preview-only until taken.
     inv_craft: hotbar::Bag,
+    /// True when `inv_craft` holds an EMI ghost layout (not taken from bags).
+    inv_craft_ghost: bool,
     furnace_open: bool,
     /// `0` input, `1` fuel, `2` output.
     furnace_selected: usize,
@@ -846,6 +848,7 @@ impl Gui {
                 craft_selected: 0,
                 craft: hotbar::Bag::new(),
                 inv_craft: hotbar::Bag::new(),
+                inv_craft_ghost: false,
                 furnace_open: false,
                 furnace_selected: 0,
                 furnace: hotbar::Bag::new(),
@@ -964,6 +967,7 @@ impl Gui {
                     craft_selected: 0,
                     craft: hotbar::Bag::new(),
                     inv_craft: hotbar::Bag::new(),
+                    inv_craft_ghost: false,
                     furnace_open: false,
                     furnace_selected: 0,
                     furnace: hotbar::Bag::new(),
@@ -1092,6 +1096,7 @@ impl Gui {
             craft_selected: 0,
             craft: hotbar::Bag::new(),
             inv_craft: hotbar::Bag::new(),
+            inv_craft_ghost: false,
             furnace_open: false,
             furnace_selected: 0,
             furnace: hotbar::Bag::new(),
@@ -1269,6 +1274,16 @@ impl Gui {
         self.open = false;
         self.extra = None;
         self.built_at = None;
+    }
+
+    /// Open the player inventory (E) on the Craft tab for EMI cook shots.
+    pub fn open_player_craft(&mut self) {
+        self.open = true;
+        self.extra = None;
+        self.built_at = None;
+        self.bag_open = false;
+        self.selected = 0;
+        self.inv_tab = PlayerInvTab::Craft;
     }
 
     /// Step category tabs (`true` = next / `>` , `false` = prev / `<`).
@@ -1733,6 +1748,9 @@ impl Gui {
         if index >= Self::INV_CRAFT {
             return false;
         }
+        if self.inv_craft_ghost {
+            self.clear_inv_craft_ghost();
+        }
         self.inv_craft.insert_at(index, id)
     }
 
@@ -1741,7 +1759,16 @@ impl Gui {
         if index >= Self::INV_CRAFT {
             return None;
         }
+        if self.inv_craft_ghost {
+            self.clear_inv_craft_ghost();
+            return None;
+        }
         self.inv_craft.take_one(index)
+    }
+
+    /// True when the Craft tab 2×2 is an EMI ghost layout.
+    pub fn inv_craft_is_ghost(&self) -> bool {
+        self.inv_craft_ghost
     }
 
     /// Book result for the 2×2 grid (top-left of a virtual 3×3).
@@ -1751,6 +1778,9 @@ impl Gui {
 
     /// Spend one of each ingredient and return the result id.
     pub fn pull_inv_craft(&mut self) -> Option<String> {
+        if self.inv_craft_ghost {
+            return None;
+        }
         let result = self.inv_craft_preview()?;
         let inputs = self.book.inputs(&result)?;
         for id in &inputs {
@@ -1762,6 +1792,10 @@ impl Gui {
     }
 
     pub fn drain_inv_craft(&mut self) -> Vec<&'static str> {
+        if self.inv_craft_ghost {
+            self.clear_inv_craft_ghost();
+            return Vec::new();
+        }
         let mut out = Vec::new();
         for index in 0..Self::INV_CRAFT {
             while let Some(id) = self.inv_craft.take_one(index) {
@@ -1769,6 +1803,71 @@ impl Gui {
             }
         }
         out
+    }
+
+    fn clear_inv_craft_ghost(&mut self) {
+        self.inv_craft = hotbar::Bag::new();
+        self.inv_craft_ghost = false;
+    }
+
+    /// Ghost-fill the Craft tab 2×2 from the selected EMI recipe when it fits.
+    ///
+    /// Shaped recipes must live in the top-left 2×2 of the 3×3. Shapeless
+    /// recipes need at most four ingredients. Opens the Craft tab on success.
+    /// Caller should [`Self::drain_inv_craft`] / refund real items first.
+    pub fn ghost_fill_emi(&mut self) -> bool {
+        let Some(id) = self.emi_id.clone() else {
+            return false;
+        };
+        let Some(cells) = self.emi_ghost_cells(&id) else {
+            return false;
+        };
+        self.inv_craft = hotbar::Bag::new();
+        for (index, cell) in cells.iter().enumerate() {
+            if let Some(item) = cell {
+                let _ = self.inv_craft.insert_at(index, item);
+            }
+        }
+        self.inv_craft_ghost = true;
+        self.inv_tab = PlayerInvTab::Craft;
+        true
+    }
+
+    /// True when the selected EMI recipe can ghost-fill the Craft 2×2.
+    pub fn emi_can_ghost_fill(&self) -> bool {
+        self.emi_id
+            .as_deref()
+            .is_some_and(|id| self.emi_ghost_cells(id).is_some())
+    }
+
+    /// Four Craft-tab cells for `id`, or `None` when the recipe needs a 3×3.
+    fn emi_ghost_cells(&self, id: &str) -> Option<[Option<String>; 4]> {
+        if let Some(pattern) = self.book.pattern_of(id) {
+            if pattern.len() != 9 {
+                return None;
+            }
+            // Top-left 2×2 only: cells 2 / 5 / 6 / 7 / 8 must stay empty.
+            for &i in &[2usize, 5, 6, 7, 8] {
+                if !pattern[i].is_empty() {
+                    return None;
+                }
+            }
+            return Some([
+                pattern_cell(&pattern[0]),
+                pattern_cell(&pattern[1]),
+                pattern_cell(&pattern[3]),
+                pattern_cell(&pattern[4]),
+            ]);
+        }
+        let inputs = self.book.inputs(id)?;
+        if inputs.is_empty() || inputs.len() > Self::INV_CRAFT {
+            return None;
+        }
+        let mut cells = [None, None, None, None];
+        for (i, item) in inputs.iter().enumerate() {
+            cells[i] = Some(item.clone());
+        }
+        Some(cells)
     }
 
     fn inv_craft_as_nine(&self) -> Vec<String> {
@@ -6276,6 +6375,14 @@ fn creative_view(tab: usize, query: &str) -> Vec<String> {
 }
 
 /// True when `query` fits the id or its readable name.
+fn pattern_cell(id: &str) -> Option<String> {
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
 fn creative_hit(id: &str, query: &str) -> bool {
     let needle = fold_name(query);
     if needle.is_empty() {
@@ -8259,6 +8366,7 @@ mod tests {
             craft_selected: 0,
             craft: hotbar::Bag::new(),
             inv_craft: hotbar::Bag::new(),
+            inv_craft_ghost: false,
             furnace_open: false,
             furnace_selected: 0,
             furnace: hotbar::Bag::new(),
@@ -9894,6 +10002,22 @@ mod tests {
         assert_eq!(gui.inv_craft_preview().as_deref(), Some("torch"));
         assert_eq!(gui.drain_inv_craft(), vec!["stick", "coal_ore"]);
         assert!(gui.inv_craft_preview().is_none());
+    }
+
+    #[test]
+    fn emi_ghost_fill_torch_into_craft_tab() {
+        let mut gui = Gui::from_screen(shipped());
+        gui.select_emi("torch");
+        assert!(gui.emi_can_ghost_fill());
+        assert!(gui.ghost_fill_emi());
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Craft);
+        assert!(gui.inv_craft_is_ghost());
+        assert_eq!(gui.inv_craft_slot(0), Some("stick"));
+        assert!(gui.inv_craft_slot(1).is_some_and(|id| id.contains("coal")));
+        assert_eq!(gui.inv_craft_preview().as_deref(), Some("torch"));
+        assert!(gui.pull_inv_craft().is_none(), "ghosts do not craft");
+        assert!(gui.drain_inv_craft().is_empty(), "ghosts do not refund");
+        assert!(!gui.inv_craft_is_ghost());
     }
 
     #[test]

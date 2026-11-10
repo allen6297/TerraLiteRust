@@ -1136,6 +1136,9 @@ fn draw_creative_panel(
                                         let tex = icon_texture(ui.ctx(), icons, id);
                                         let resp = slot_button(ui, tex, selected, None);
                                         resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                        if resp.hovered() {
+                                            gui.select_emi(id);
+                                        }
                                         if resp.clicked() {
                                             gui.set_catalog_index(i);
                                             let _ = hotbar.give_stack(id);
@@ -1154,7 +1157,7 @@ fn draw_creative_panel(
         ui.add_space(10.0);
         ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
         ui.add_space(4.0);
-        draw_hotbar_row(ui, hotbar, icons);
+        draw_hotbar_row(ui, Some(gui), hotbar, icons);
         ui.add_space(8.0);
         if close_button(ui, "Close (I)").clicked() {
             gui.close_bag();
@@ -1273,20 +1276,20 @@ fn draw_player_inventory_panel(
                     touched = true;
                 }
                 ui.add_space(12.0);
-                draw_inv_body_grid(ui, hotbar, bag, icons);
+                draw_inv_body_grid(ui, gui, hotbar, bag, icons);
             }
             PlayerInvTab::Craft => {
                 if draw_craft_detail(ui, gui, hotbar, bag, icons) {
                     touched = true;
                 }
                 ui.add_space(12.0);
-                draw_inv_body_grid(ui, hotbar, bag, icons);
+                draw_inv_body_grid(ui, gui, hotbar, bag, icons);
             }
         }
         ui.add_space(12.0);
         ui.label(RichText::new("hotbar").color(MUTED).size(13.0));
         ui.add_space(4.0);
-        draw_hotbar_row(ui, hotbar, icons);
+        draw_hotbar_row(ui, Some(gui), hotbar, icons);
         ui.add_space(8.0);
         if close_button(ui, "Close (E)").clicked() {
             if refund_inv_craft(gui, hotbar, bag) {
@@ -1311,6 +1314,7 @@ fn draw_emi_sidebar(
 ) -> bool {
     let mut touched = false;
     let mut craft_click = false;
+    let mut fill_click = false;
     let emi_w = EMI_SIDE_W.max(180.0).min(ui.available_width().max(160.0));
     let list_h = list_h.max(CREATIVE_GRID_MIN_H);
     let list_rows = creative_visible_rows(list_h);
@@ -1406,6 +1410,9 @@ fn draw_emi_sidebar(
                                 let tex = icon_texture(ui.ctx(), icons, &id);
                                 let resp = slot_button(ui, tex, true, None);
                                 resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                if resp.clicked() && gui.emi_can_ghost_fill() {
+                                    fill_click = true;
+                                }
                             });
                             if let Some(pattern) = gui.emi_pattern() {
                                 ui.add_space(4.0);
@@ -1420,13 +1427,17 @@ fn draw_emi_sidebar(
                                             } else {
                                                 icon_texture(ui.ctx(), icons, cell)
                                             };
-                                            let _ = slot_button_sized(
+                                            let resp = slot_button_sized(
                                                 ui,
                                                 tex,
                                                 false,
                                                 None,
                                                 SLOT * 0.55,
+                                                false,
                                             );
+                                            if resp.clicked() && gui.emi_can_ghost_fill() {
+                                                fill_click = true;
+                                            }
                                             if (i + 1) % 3 == 0 {
                                                 ui.end_row();
                                             }
@@ -1434,16 +1445,30 @@ fn draw_emi_sidebar(
                                     });
                             }
                             ui.add_space(4.0);
-                            let craft = egui::Button::new(
-                                RichText::new("Craft").size(13.0).color(INK),
-                            )
-                            .fill(BUTTON)
-                            .stroke(Stroke::new(1.0, SLOT_EDGE))
-                            .corner_radius(CornerRadius::same(3))
-                            .min_size(Vec2::new(72.0, 24.0));
-                            if ui.add(craft).clicked() {
-                                craft_click = true;
-                            }
+                            ui.horizontal(|ui| {
+                                if gui.emi_can_ghost_fill() {
+                                    let fill = egui::Button::new(
+                                        RichText::new("Fill").size(13.0).color(INK),
+                                    )
+                                    .fill(SELECT_SOFT)
+                                    .stroke(Stroke::new(1.0, SELECT))
+                                    .corner_radius(CornerRadius::same(3))
+                                    .min_size(Vec2::new(72.0, 24.0));
+                                    if ui.add(fill).clicked() {
+                                        fill_click = true;
+                                    }
+                                }
+                                let craft = egui::Button::new(
+                                    RichText::new("Craft").size(13.0).color(INK),
+                                )
+                                .fill(BUTTON)
+                                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                                .corner_radius(CornerRadius::same(3))
+                                .min_size(Vec2::new(72.0, 24.0));
+                                if ui.add(craft).clicked() {
+                                    craft_click = true;
+                                }
+                            });
                         }
                         _ => {
                             ui.label(RichText::new("no recipe").color(MUTED).size(12.0));
@@ -1481,6 +1506,12 @@ fn draw_emi_sidebar(
                 });
         }
     });
+    if fill_click {
+        let _ = refund_inv_craft(gui, hotbar, bag);
+        if gui.ghost_fill_emi() {
+            touched = true;
+        }
+    }
     if craft_click && gui.craft_selected_into(hotbar, bag) {
         touched = true;
     }
@@ -1648,6 +1679,7 @@ fn click_armor_slot(
 
 fn draw_inv_body_grid(
     ui: &mut Ui,
+    gui: &mut Gui,
     hotbar: &mut Hotbar,
     bag: &mut hotbar::Bag,
     icons: &mut HashMap<String, TextureHandle>,
@@ -1680,6 +1712,9 @@ fn draw_inv_body_grid(
                 if !id.is_empty() {
                     let tip = gui::tip_for(&id, Some(count));
                     resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                    if resp.hovered() {
+                        gui.select_emi(&id);
+                    }
                     if resp.clicked() {
                         let _ = hotbar.give_stack(&id);
                     }
@@ -1693,6 +1728,7 @@ fn draw_inv_body_grid(
 
 fn draw_hotbar_row(
     ui: &mut Ui,
+    gui: Option<&mut Gui>,
     hotbar: &mut Hotbar,
     icons: &mut HashMap<String, TextureHandle>,
 ) {
@@ -1702,6 +1738,7 @@ fn draw_hotbar_row(
     if ui.available_width() + 0.5 >= row_w {
         ui.set_min_width(row_w);
     }
+    let mut hover_id: Option<String> = None;
     egui::Grid::new("inv_hotbar_row")
         .spacing([SLOT_GAP, SLOT_GAP])
         .min_col_width(SLOT)
@@ -1724,6 +1761,9 @@ fn draw_hotbar_row(
                 if !id.is_empty() {
                     let tip = gui::tip_for_keen(id, Some(count), hotbar.is_keen(slot));
                     resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                    if resp.hovered() {
+                        hover_id = Some(id.to_string());
+                    }
                 }
                 if resp.clicked() {
                     let _ = hotbar.select_digit((slot + 1) as u8);
@@ -1731,6 +1771,9 @@ fn draw_hotbar_row(
             }
             ui.end_row();
         });
+    if let (Some(gui), Some(id)) = (gui, hover_id) {
+        gui.select_emi(&id);
+    }
 }
 
 /// 2×2 INPUT + OUT wired to [`Gui::inv_craft_*`], plus a lower "2?" tray stub.
@@ -1782,7 +1825,15 @@ fn draw_craft_detail(
                 });
             });
             ui.add_space(10.0);
-            ui.label(RichText::new("2?").size(12.0).color(MUTED));
+            ui.label(
+                RichText::new(if gui.inv_craft_is_ghost() {
+                    "ghost"
+                } else {
+                    "2?"
+                })
+                .size(12.0)
+                .color(MUTED),
+            );
             ui.add_space(4.0);
             Frame::new()
                 .fill(SLOT_WELL)
@@ -1811,14 +1862,24 @@ fn craft_input_slot(
 ) -> bool {
     let id = gui.inv_craft_slot(index).unwrap_or("").to_string();
     let count = gui.inv_craft_count(index);
+    let ghost = gui.inv_craft_is_ghost();
     let tex = if id.is_empty() {
         None
     } else {
         icon_texture(ui.ctx(), icons, &id)
     };
-    let resp = slot_button(ui, tex, false, if count > 1 { Some(count) } else { None });
+    let resp = if ghost {
+        slot_button_ghost(ui, tex, false, if count > 1 { Some(count) } else { None })
+    } else {
+        slot_button(ui, tex, false, if count > 1 { Some(count) } else { None })
+    };
     if !id.is_empty() {
-        let tip = gui::tip_for(&id, Some(count));
+        let tip = if ghost {
+            let name = gui::tip_for(&id, Some(count)).name;
+            gui::ItemTip::plain(name, "ghost — place real items to craft")
+        } else {
+            gui::tip_for(&id, Some(count))
+        };
         resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
     }
     if !resp.clicked() {
@@ -1835,10 +1896,20 @@ fn craft_out_slot(
     icons: &mut HashMap<String, TextureHandle>,
     preview: Option<&str>,
 ) -> bool {
+    let ghost = gui.inv_craft_is_ghost();
     let tex = preview.and_then(|id| icon_texture(ui.ctx(), icons, id));
-    let resp = slot_button(ui, tex, preview.is_some(), None);
+    let resp = if ghost {
+        slot_button_ghost(ui, tex, preview.is_some(), None)
+    } else {
+        slot_button(ui, tex, preview.is_some(), None)
+    };
     if let Some(id) = preview {
-        let tip = gui::tip_for(id, None);
+        let tip = if ghost {
+            let name = gui::tip_for(id, None).name;
+            gui::ItemTip::plain(name, "ghost recipe — Fill from EMI")
+        } else {
+            gui::tip_for(id, None)
+        };
         resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
     } else {
         resp.clone().on_hover_ui(|ui| {
@@ -1848,7 +1919,7 @@ fn craft_out_slot(
             );
         });
     }
-    if !resp.clicked() || preview.is_none() {
+    if !resp.clicked() || preview.is_none() || ghost {
         return false;
     }
     click_craft_out(gui, hotbar, bag)
@@ -1981,7 +2052,16 @@ fn slot_button(
     selected: bool,
     count: Option<u16>,
 ) -> egui::Response {
-    slot_button_sized(ui, tex, selected, count, SLOT)
+    slot_button_sized(ui, tex, selected, count, SLOT, false)
+}
+
+fn slot_button_ghost(
+    ui: &mut Ui,
+    tex: Option<TextureId>,
+    selected: bool,
+    count: Option<u16>,
+) -> egui::Response {
+    slot_button_sized(ui, tex, selected, count, SLOT, true)
 }
 
 fn slot_button_sized(
@@ -1990,9 +2070,12 @@ fn slot_button_sized(
     selected: bool,
     count: Option<u16>,
     size: f32,
+    ghost: bool,
 ) -> egui::Response {
     let stroke = if selected {
         Stroke::new(2.0, SELECT)
+    } else if ghost {
+        Stroke::new(1.5, DETAIL)
     } else {
         Stroke::new(1.0, SLOT_EDGE)
     };
@@ -2013,11 +2096,16 @@ fn slot_button_sized(
             // Modest inset — the raster itself is already AABB-fitted.
             let pad = (size * 0.06).max(1.5);
             let icon_rect = rect.shrink(pad);
+            let tint = if ghost {
+                Color32::from_rgba_unmultiplied(255, 255, 255, 120)
+            } else {
+                Color32::WHITE
+            };
             ui.painter().image(
                 tex,
                 icon_rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
+                tint,
             );
         }
         if let Some(count) = count.filter(|n| *n > 1) {
@@ -2242,6 +2330,17 @@ mod tests {
             (0..hotbar::SLOTS).any(|i| hotbar.slot(i) == Some("torch")),
             "crafted torch should land in the hotbar"
         );
+    }
+
+    #[test]
+    fn emi_fill_ghosts_craft_grid_for_torch() {
+        let mut gui = Gui::new();
+        gui.select_emi("torch");
+        assert!(gui.emi_can_ghost_fill());
+        assert!(gui.ghost_fill_emi());
+        assert!(gui.inv_craft_is_ghost());
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Craft);
+        assert_eq!(gui.inv_craft_preview().as_deref(), Some("torch"));
     }
 
     #[test]

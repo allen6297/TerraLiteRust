@@ -7814,6 +7814,21 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open inventory with EMI torch ghost-fill, then quit with a PNG.
+    pub fn arm_emi_shot(&mut self, path: std::path::PathBuf) {
+        // Reuse the creative cook timer — same egui settle frames.
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+        self.gui.open_player_craft();
+        self.gui.set_emi_query("torch");
+        self.gui.select_emi("torch");
+        let _ = self.gui.ghost_fill_emi();
+        self.gui.push_chat("emi fill ghosts the craft grid");
+        let _ = self.window.focus_window();
+    }
+
     /// Midnight outdoor horde in view, then quit with a PNG.
     pub fn arm_night_spawn_shot(&mut self, path: std::path::PathBuf) {
         self.night_spawn_shot_path = Some(path);

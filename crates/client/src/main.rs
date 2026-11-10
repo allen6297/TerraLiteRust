@@ -158,6 +158,8 @@ struct Args {
     shot_compound: Option<std::path::PathBuf>,
     /// Creative inventory flow tab, then quit.
     shot_creative: Option<std::path::PathBuf>,
+    /// EMI recipe sidebar with torch ghost-fill, then quit.
+    shot_emi: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -358,6 +360,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_pot: args.shot_pot,
         shot_compound: args.shot_compound,
         shot_creative: args.shot_creative,
+        shot_emi: args.shot_emi,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -453,6 +456,8 @@ struct App {
     shot_pot: Option<std::path::PathBuf>,
     shot_compound: Option<std::path::PathBuf>,
     shot_creative: Option<std::path::PathBuf>,
+    /// EMI recipe sidebar with torch ghost-fill, then quit.
+    shot_emi: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -621,6 +626,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_creative.take() {
                     state.arm_creative_shot(path);
+                }
+                if let Some(path) = self.shot_emi.take() {
+                    state.arm_emi_shot(path);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -942,6 +950,7 @@ where
         shot_pot: None,
         shot_compound: None,
         shot_creative: None,
+        shot_emi: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -1163,6 +1172,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-creative".to_string())?;
                 parsed.shot_creative = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-emi" | "--shot-recipe-sidebar" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-emi".to_string())?;
+                parsed.shot_emi = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter
