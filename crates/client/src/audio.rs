@@ -89,6 +89,8 @@ pub enum Sound {
     Bubble,
     /// Soft grindstone stone scrape.
     Grind,
+    /// Soft enchanting-table chime.
+    Chime,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -691,6 +693,7 @@ impl Audio {
             Sound::Ring => anvil_clang(),
             Sound::Bubble => brew_bubble(),
             Sound::Grind => grind_scrape(),
+            Sound::Chime => enchant_chime(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -940,6 +943,15 @@ fn iron_ring() -> Vec<i16> {
         let mixed = (click * 0.8 + ring * 0.55).clamp(-1.0, 1.0);
         samples.push((mixed * 30_000.0) as i16);
     }
+    samples
+}
+
+/// Soft enchanting chime. Two rising glass tones.
+fn enchant_chime() -> Vec<i16> {
+    let mut samples = Vec::new();
+    samples.extend(bird_tone(660.0, 0.12, 0.12, 53));
+    samples.extend(vec![0i16; (22_050.0 * 0.04) as usize]);
+    samples.extend(bird_tone(990.0, 0.16, 0.11, 59));
     samples
 }
 
@@ -1610,6 +1622,17 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn enchant_chime_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Chime);
+        assert_eq!(audio.played, vec![Sound::Chime]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Chime);
+        assert_eq!(audio.played, vec![Sound::Chime]);
     }
 
     #[test]

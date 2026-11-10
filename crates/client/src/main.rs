@@ -1332,7 +1332,7 @@ where
                     .ok_or_else(|| "missing value for --shot-cauldron".to_string())?;
                 parsed.shot_cauldron = Some(std::path::PathBuf::from(value));
             }
-            "--shot-enchant" | "--shot-enchanting" => {
+            "--shot-enchant" | "--shot-enchanting" | "--shot-chime" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-enchant".to_string())?;

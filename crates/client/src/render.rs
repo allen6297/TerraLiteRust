@@ -1180,6 +1180,8 @@ pub struct State {
     found_bubble: bool,
     /// Once: used a grindstone and heard the scrape.
     found_grind: bool,
+    /// Once: enchanted at the table and heard the chime.
+    found_chime: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2233,6 +2235,7 @@ impl State {
             bubble_at: None,
             found_bubble: false,
             found_grind: false,
+            found_chime: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -11929,10 +11932,12 @@ impl State {
         self.note_shot_brew = false;
         self.drops.book_swirl(swirl_at);
         self.rebuild_drops();
-        self.play_world(crate::audio::Sound::Note(10), swirl_at);
+        self.play_world(crate::audio::Sound::Chime, swirl_at);
         let _ = self.gui.open_enchanting([ex, ey, ez]);
         self.gui.note_enchant("efficiency");
         self.gui.push_chat("efficiency");
+        self.found_chime = true;
+        self.gui.push_chat("chime");
         self.found_shrine = true;
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("iron_pickaxe");
@@ -16311,9 +16316,13 @@ impl State {
         if word == "efficiency" {
             if let Some(at) = self.gui.enchant_at() {
                 let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
-                self.play_world(crate::audio::Sound::Note(10), source);
+                self.play_world(crate::audio::Sound::Chime, source);
                 self.drops.book_swirl(source);
                 self.rebuild_drops();
+                if !self.found_chime {
+                    self.found_chime = true;
+                    self.gui.push_chat("chime");
+                }
             }
         }
     }
