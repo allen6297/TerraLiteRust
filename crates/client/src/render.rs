@@ -2908,6 +2908,85 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Loot tiles mid-magnet toward the player, then quit with a PNG.
+    pub fn arm_loot_magnet_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        // Look down the pad so several loot tiles read mid-pull in frame.
+        let eye = glam::Vec3::new(8.5, 1.55 + crate::body::EYE_HEIGHT, 13.6);
+        let focus = glam::Vec3::new(8.5, 1.35, 10.2);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        // Clear ambient motes; pin a readable loot cluster mid-magnet.
+        self.drops = crate::drops::Drops::new();
+        let pins = [
+            ("cobblestone", [8.35, 1.55, 11.35]),
+            ("oak_log", [8.85, 1.7, 11.05]),
+            ("iron_ore", [8.05, 1.45, 10.85]),
+            ("coal_ore", [8.65, 1.85, 10.55]),
+            ("dirt", [8.2, 1.3, 11.55]),
+        ];
+        for (id, at) in pins {
+            self.drops.pin(id, at);
+        }
+        // One short pull so they lean toward the camera without vanishing.
+        let _ = self.drops.tick_magnet(0.12, [8.5, 2.4, 12.4]);
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
     /// XP orbs mid-home + filled XP bar, then quit with a PNG.
     pub fn arm_xp_orbs_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -21066,9 +21145,13 @@ impl State {
         self.tell_shape_pot();
         self.note_pose();
         let mut drops_dirty = self.drops.tick_motes(dt);
-        // Still shots freeze orb motion so the armed pose stays readable.
+        // Still shots freeze orb / loot magnet motion so the armed pose stays readable.
         if self.cook_shot_path.is_none() {
-            let (xp_dirty, leveled) = self.xp.tick_collect(dt, self.camera.eye.to_array());
+            let eye = self.camera.eye.to_array();
+            if self.drops.tick_magnet(dt, eye) {
+                drops_dirty = true;
+            }
+            let (xp_dirty, leveled) = self.xp.tick_collect(dt, eye);
             if xp_dirty {
                 drops_dirty = true;
             }

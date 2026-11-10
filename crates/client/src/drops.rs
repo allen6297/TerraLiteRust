@@ -4,7 +4,9 @@
 //! is rebuilt every frame, so a step or a turn cannot leave it edge-on. It
 //! is not saved and does not enter the hotbar until the player walks into
 //! it. A full hotbar leaves it where it is, unless the caller also offers
-//! the inventory. Sparks stay small untextured cubes.
+//! the inventory. Nearby loot gently homes toward the player after a short
+//! settle (tunable magnet — not a whole-chunk vacuum). Sparks stay small
+//! untextured cubes.
 
 use rebuild_world::Block;
 
@@ -14,6 +16,12 @@ use crate::palette;
 
 /// Half the width of a dropped item, in blocks. Pickup uses the same reach.
 const HALF: f32 = 0.12;
+/// Settle time before a drop starts homing (seconds).
+pub const MAGNET_DELAY: f32 = 0.45;
+/// How close the player must be before loot pulls in (blocks).
+pub const MAGNET_RANGE: f32 = 2.75;
+/// Homing speed while magnetized (blocks / second).
+pub const MAGNET_SPEED: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Drop {
@@ -21,6 +29,8 @@ pub struct Drop {
     pub center: [f32; 3],
     /// A pickup hook already refused this drop while the player is touching it.
     refused: bool,
+    /// Seconds since spawn — gates the magnet delay.
+    age: f32,
 }
 
 struct Mote {
@@ -747,7 +757,62 @@ impl Drops {
             id: Block::new(id, 0).id,
             center: center_for(cell, remains_solid),
             refused: false,
+            age: 0.0,
         });
+    }
+
+    /// Pin a drop at an exact world point (still / magnet mid-home).
+    pub fn pin(&mut self, id: &str, center: [f32; 3]) {
+        if id.is_empty() || id == "air" {
+            return;
+        }
+        self.items.push(Drop {
+            id: Block::new(id, 0).id,
+            center,
+            refused: false,
+            age: MAGNET_DELAY + 0.2,
+        });
+    }
+
+    /// Age drops and gently home nearby loot toward the player eye.
+    /// Returns true when any center moved (mesh should rebuild).
+    pub fn tick_magnet(&mut self, dt: f32, eye: [f32; 3]) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        let step = dt.max(0.0);
+        if step <= 0.0 {
+            return false;
+        }
+        let range2 = MAGNET_RANGE * MAGNET_RANGE;
+        // Pull toward mid-torso so the tile enters the body AABB.
+        let target = [eye[0], eye[1] - 0.85, eye[2]];
+        let mut dirty = false;
+        for drop in &mut self.items {
+            drop.age += step;
+            if drop.age < MAGNET_DELAY || drop.refused {
+                continue;
+            }
+            let dx = target[0] - drop.center[0];
+            let dy = target[1] - drop.center[1];
+            let dz = target[2] - drop.center[2];
+            let dist2 = dx * dx + dy * dy + dz * dz;
+            if dist2 > range2 || dist2 < 1.0e-8 {
+                continue;
+            }
+            let dist = dist2.sqrt();
+            let inv = MAGNET_SPEED / dist;
+            drop.center[0] += dx * inv * step;
+            drop.center[1] += dy * inv * step;
+            drop.center[2] += dz * inv * step;
+            dirty = true;
+        }
+        dirty
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn item_count(&self) -> usize {
+        self.items.len()
     }
 
     /// Drops the body just started touching and a hook has not refused yet.
@@ -1141,6 +1206,40 @@ mod tests {
         assert!(above.iter().all(|vertex| vertex.normal[1] > 0.9));
         assert_ne!(south[0].position, east[0].position);
         assert_ne!(south[0].position, above[0].position);
+    }
+
+    #[test]
+    fn nearby_loot_homes_after_delay_but_far_stays() {
+        let mut drops = Drops::new();
+        drops.spawn("cobblestone", [8, 1, 10], false);
+        drops.spawn("oak_log", [20, 1, 20], false);
+        let near = drops.items[0].center;
+        let far = drops.items[1].center;
+        let eye = [8.5, 2.6, 8.5];
+        // Still settling — no pull yet.
+        assert!(!drops.tick_magnet(MAGNET_DELAY * 0.5, eye));
+        assert_eq!(drops.items[0].center, near);
+        // Past delay: near drop moves toward the player, far drop stays put.
+        assert!(drops.tick_magnet(MAGNET_DELAY + 0.05, eye));
+        let pulled = drops.items[0].center;
+        assert!((pulled[0] - near[0]).abs() + (pulled[2] - near[2]).abs() > 0.05);
+        assert_eq!(drops.items[1].center, far);
+        // Keep pulling until it would overlap a body around the eye.
+        for _ in 0..40 {
+            let _ = drops.tick_magnet(0.05, eye);
+        }
+        let body = (
+            [eye[0] - 0.35, eye[1] - 1.7, eye[2] - 0.35],
+            [eye[0] + 0.35, eye[1] + 0.2, eye[2] + 0.35],
+        );
+        let mut bar = Hotbar::new();
+        assert!(drops.pickup(body.0, body.1, &mut bar));
+        assert_eq!(bar.slot(1), Some("cobblestone"));
+        assert_eq!(drops.item_count(), 1);
+        assert_eq!(drops.items[0].id, "oak_log");
+        drops.pin("iron_ore", [9.0, 2.0, 9.0]);
+        assert_eq!(drops.item_count(), 2);
+        assert!(drops.items[1].age >= MAGNET_DELAY);
     }
 
     #[test]
