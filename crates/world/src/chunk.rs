@@ -59,16 +59,46 @@ impl Block {
 }
 
 /// Hosts that can hold water or ember without replacing the solid.
+///
+/// Porous / non-cube solids in the feel of Minecraft waterlogging — not only
+/// the demo copper grate.
 pub fn compound_host(id: &str) -> bool {
     matches!(
         id,
         "copper_grate"
             | "fence"
+            | "fence_gate"
             | "slab"
             | "oak_stairs"
             | "stone_stairs"
             | "chain"
             | "glass"
+            | "trapdoor"
+            | "copper_trapdoor"
+            | "door"
+            | "copper_door"
+            | "ladder"
+            | "leaves"
+            | "lightning_rod"
+            | "lantern"
+            | "end_rod"
+            | "brewing_stand"
+            | "grindstone"
+            | "cobweb"
+            | "vine"
+            | "shelf"
+            | "lectern"
+            | "stonecutter"
+            | "bell"
+            | "flower_pot"
+            | "composter"
+            | "cauldron"
+            | "decorated_pot"
+            | "sign"
+            | "hanging_sign"
+            | "carpet"
+            | "plate"
+            | "banner"
     )
 }
 

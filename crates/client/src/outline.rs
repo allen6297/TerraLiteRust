@@ -242,6 +242,18 @@ mod tests {
             LIME
         );
         assert_eq!(outline_color(Some("cobblestone"), "copper_grate", FILL_NONE), WHITE);
+        assert_eq!(
+            outline_color(Some("water_bucket"), "fence", FILL_NONE),
+            CYAN
+        );
+        assert_eq!(
+            outline_color(Some("ember_charge"), "leaves", FILL_NONE),
+            AMBER
+        );
+        assert_eq!(
+            outline_color(Some("drain_sponge"), "glass", FILL_EMBER),
+            LIME
+        );
     }
 
     #[test]

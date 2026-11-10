@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bytemuck::bytes_of;
 use rebuild_world::{
@@ -995,6 +996,10 @@ pub struct State {
     lodestone: Option<[i32; 3]>,
     /// Right mouse is down on a held spyglass.
     zoom_mouse: bool,
+    /// Control key is down (trackpad Ctrl+click secondary place).
+    ctrl_mod: bool,
+    /// Last place/use click time — collapses WindowEvent + DeviceEvent doubles.
+    place_click_at: Option<Instant>,
     /// The full map sheet is open.
     map_open: bool,
     /// F is down on a held spyglass.
@@ -1959,6 +1964,8 @@ impl State {
             bell_return: None,
             lodestone: None,
             zoom_mouse: false,
+            ctrl_mod: false,
+            place_click_at: None,
             map_open: false,
             zoom_key: false,
             horn_wait: 0.0,
@@ -2437,10 +2444,18 @@ impl State {
     }
 
     /// Route a mouse button through remaps / keybind listening.
+    ///
+    /// Place/use fires on the bound place button (default Right), on Ctrl+Attack
+    /// (trackpad / one-button secondary click), and after a capture grab so the
+    /// first secondary click still places.
     pub fn set_mouse(&mut self, button: winit::event::MouseButton, pressed: bool) {
         use crate::keybinds::Action;
         if pressed && self.binds.listening.is_some() && self.menu.is_keybinds() {
             let _ = self.binds.hear_mouse(button);
+            return;
+        }
+        if self.binds.is_place_press(button, self.ctrl_mod) {
+            self.press_place(pressed);
             return;
         }
         if self.binds.is_mouse(Action::Attack, button) {
@@ -2457,20 +2472,31 @@ impl State {
             } else {
                 self.set_capture(true);
             }
+        }
+    }
+
+    /// Place / use from a mouse or raw device secondary click.
+    fn press_place(&mut self, pressed: bool) {
+        if !pressed {
+            self.release_spyglass();
             return;
         }
-        if self.binds.is_mouse(Action::Place, button) {
-            if !pressed {
-                self.release_spyglass();
-                return;
-            }
-            if self.screen_open() || self.menu_open() {
-                return;
-            }
-            if self.is_captured() {
-                self.place_targeted();
-            }
+        if self.is_dead() || self.screen_open() || self.menu_open() {
+            return;
         }
+        if !self.is_captured() {
+            self.set_capture(true);
+        }
+        // Window right-click and DeviceEvent button 1 often arrive as a pair.
+        let now = Instant::now();
+        if self
+            .place_click_at
+            .is_some_and(|at| now.duration_since(at) < Duration::from_millis(80))
+        {
+            return;
+        }
+        self.place_click_at = Some(now);
+        self.place_targeted();
     }
 
     /// A left click asks `events.attack` before mining, an egg hop, or a crystal blast.
@@ -4857,6 +4883,55 @@ impl State {
         true
     }
 
+    /// Empty hand: move fill from the looked-at host into the host past that face.
+    fn try_compound_transfer(&mut self) -> bool {
+        if self.hotbar.slot(self.hotbar.selected()).is_some() {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        let src = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if !compound_host(src.id) || src.fill == FILL_NONE {
+            return false;
+        }
+        let dest = self
+            .world
+            .block_at(hit.place[0], hit.place[1], hit.place[2]);
+        if !compound_host(dest.id) || dest.fill != FILL_NONE {
+            return false;
+        }
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        let player = PlayerBox { min, max };
+        let fill = src.fill;
+        self.send_edit(
+            encode_place(
+                hit.block[0],
+                hit.block[1],
+                hit.block[2],
+                src.with_fill(FILL_NONE),
+                player,
+            ),
+            TAG_PLACE,
+            None,
+        );
+        self.send_edit(
+            encode_place(
+                hit.place[0],
+                hit.place[1],
+                hit.place[2],
+                dest.with_fill(fill),
+                player,
+            ),
+            TAG_PLACE,
+            None,
+        );
+        self.gui.push_chat("moved");
+        true
+    }
+
     /// Scoop water into an empty bucket, or pour a full one into air.
     fn try_bucket(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -5382,6 +5457,7 @@ impl State {
         if self.try_saddle()
             || self.try_compound_fill()
             || self.try_compound_drain()
+            || self.try_compound_transfer()
             || self.try_bucket()
             || self.try_place_boat()
         {
@@ -6536,7 +6612,9 @@ impl State {
         self.guests.clear();
         self.rebuild_zombie();
         self.rebuild_guests();
-        self.clock.set_time_of_day(0.42);
+        // Ember shot at night so fill light reads; water stays day.
+        self.clock
+            .set_time_of_day(if ember { 0.88 } else { 0.42 });
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
@@ -6544,20 +6622,7 @@ impl State {
         let gx = 11;
         let gy = 1;
         let gz = 12;
-        let mut changes = vec![
-            CellChange {
-                x: gx,
-                y: gy,
-                z: gz,
-                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
-            },
-            CellChange {
-                x: gx + 2,
-                y: gy,
-                z: gz,
-                block: Block::new("copper_grate", 0).with_fill(FILL_EMBER),
-            },
-        ];
+        let mut changes = Vec::new();
         for z in 10..=14 {
             for x in 9..=14 {
                 changes.push(CellChange {
@@ -6566,20 +6631,17 @@ impl State {
                     z,
                     block: Block::new("grass", 0),
                 });
-                // Clear clutter so the filled grate reads cleanly.
                 for y in 1..=3 {
-                    if !(x == gx && z == gz && y == gy) && !(x == gx + 2 && z == gz && y == gy) {
-                        changes.push(CellChange {
-                            x,
-                            y,
-                            z,
-                            block: Block::AIR,
-                        });
-                    }
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
                 }
             }
         }
-        // Keep the two filled hosts after the air sweep.
+        // Row of hosts: water grate, empty fence (transfer target), ember glass, leaves.
         changes.push(CellChange {
             x: gx,
             y: gy,
@@ -6587,10 +6649,28 @@ impl State {
             block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
         });
         changes.push(CellChange {
+            x: gx + 1,
+            y: gy,
+            z: gz,
+            block: Block::new("fence", 0),
+        });
+        changes.push(CellChange {
             x: gx + 2,
             y: gy,
             z: gz,
-            block: Block::new("copper_grate", 0).with_fill(FILL_EMBER),
+            block: Block::new("glass", 0).with_fill(FILL_EMBER),
+        });
+        changes.push(CellChange {
+            x: gx + 3,
+            y: gy,
+            z: gz,
+            block: Block::new("leaves", 0).with_fill(FILL_EMBER),
+        });
+        changes.push(CellChange {
+            x: gx + 1,
+            y: gy,
+            z: gz + 1,
+            block: Block::new("oak_stairs", 0).with_fill(FILL_WATER),
         });
         apply_changes(&mut self.world, &changes);
         for change in &changes {
@@ -9117,7 +9197,10 @@ impl State {
             KeyCode::KeyA => self.input.left = pressed,
             KeyCode::KeyD => self.input.right = pressed,
             KeyCode::Space => self.input.jump = pressed,
-            KeyCode::ControlLeft | KeyCode::ControlRight => self.input.fast = pressed,
+            KeyCode::ControlLeft | KeyCode::ControlRight => {
+                self.ctrl_mod = pressed;
+                self.input.fast = pressed;
+            }
             KeyCode::ShiftLeft | KeyCode::ShiftRight => self.input.crouch = pressed,
             KeyCode::KeyF if pressed && self.playing && self.holding_spyglass() => {
                 self.zoom_key = true;

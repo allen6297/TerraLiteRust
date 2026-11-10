@@ -61,8 +61,11 @@ fn synthetic_chunk_at(x: i32, z: i32) -> Chunk {
         blocks.push((15, 1, 8, Block::new("cobblestone", 0)));
         // South of the log, on the line the start camera looks along.
         blocks.push((8, 1, 12, Block::new(OAK_STAIRS, 0)));
-        // Compound host for water/ember fills (waterlogging-like).
+        // Compound hosts for water/ember fills (waterlogging-like).
         blocks.push((11, 1, 12, Block::new("copper_grate", 0)));
+        blocks.push((12, 1, 12, Block::new("fence", 0)));
+        blocks.push((13, 1, 12, Block::new("glass", 0)));
+        blocks.push((12, 1, 13, Block::new("leaves", 0)));
         // Just east of the stairs, in view from the start camera.
         blocks.push((9, 1, 13, Block::new(COAL_ORE, 0)));
         // One block further east, so a walk past the coal reaches the other ore.

@@ -228,6 +228,33 @@ impl Keybinds {
         matches!(self.get(action), Bind::Mouse(bound) if bound == button)
     }
 
+    /// True when this press should run Place / use (right button, or Ctrl+Attack).
+    ///
+    /// Trackpads often deliver two-finger click as Right; when that fails on a
+    /// grabbed cursor, Windows Ctrl+primary click is the same path.
+    pub fn is_place_press(&self, button: MouseButton, ctrl_held: bool) -> bool {
+        if self.is_mouse(Action::Place, button) {
+            return true;
+        }
+        ctrl_held
+            && self.is_mouse(Action::Attack, button)
+            && matches!(self.get(Action::Place), Bind::Mouse(MouseButton::Right))
+    }
+
+    /// Map a raw `DeviceEvent::Button` id to a mouse button.
+    ///
+    /// Windows raw input indexes 0=left, 1=right, 2=middle, 3=back, 4=forward.
+    pub fn mouse_from_device_button(button: u32) -> Option<MouseButton> {
+        match button {
+            0 => Some(MouseButton::Left),
+            1 => Some(MouseButton::Right),
+            2 => Some(MouseButton::Middle),
+            3 => Some(MouseButton::Back),
+            4 => Some(MouseButton::Forward),
+            _ => None,
+        }
+    }
+
     /// Map a physical key to the shipped default the rest of the client expects.
     pub fn canonicalize_key(&self, code: KeyCode) -> KeyCode {
         for action in Action::ALL {
@@ -672,5 +699,25 @@ mod tests {
         assert!(binds.hear_mouse(MouseButton::Middle));
         assert!(binds.is_mouse(Action::Place, MouseButton::Middle));
         assert!(binds.is_mouse(Action::Attack, MouseButton::Right));
+    }
+
+    #[test]
+    fn ctrl_primary_click_counts_as_place_for_trackpads() {
+        let binds = Keybinds::default();
+        assert!(binds.is_place_press(MouseButton::Right, false));
+        assert!(binds.is_place_press(MouseButton::Right, true));
+        assert!(!binds.is_place_press(MouseButton::Left, false));
+        assert!(
+            binds.is_place_press(MouseButton::Left, true),
+            "Ctrl+left is secondary-click place"
+        );
+        assert_eq!(
+            Keybinds::mouse_from_device_button(1),
+            Some(MouseButton::Right)
+        );
+        assert_eq!(
+            Keybinds::mouse_from_device_button(0),
+            Some(MouseButton::Left)
+        );
     }
 }

@@ -453,6 +453,28 @@ mod tests {
     }
 
     #[test]
+    fn ember_fill_in_a_grate_emits_warm_light() {
+        use crate::chunk::FILL_EMBER;
+        let dark = LightField::solve(&world([(2, 1, 2, Block::new("copper_grate", 0))]));
+        assert_eq!(dark.channels(2, 1, 2)[0], 0);
+        let lit = LightField::solve(&world([(
+            2,
+            1,
+            2,
+            Block::new("copper_grate", 0).with_fill(FILL_EMBER),
+        )]));
+        assert!(
+            lit.channels(2, 1, 2)[0] > 0,
+            "ember fill should light its own cell"
+        );
+        assert!(
+            lit.channels(3, 1, 2)[0] > 0,
+            "ember fill should reach a neighbor"
+        );
+        assert!(lit.channels(2, 1, 2)[0] > lit.channels(2, 1, 2)[2]);
+    }
+
+    #[test]
     fn light_does_not_cross_a_chunk_onto_unlit_cells() {
         let grass = Block::new("grass", 0);
         let mut near = Vec::new();

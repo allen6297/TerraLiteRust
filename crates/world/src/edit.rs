@@ -325,6 +325,37 @@ mod tests {
     }
 
     #[test]
+    fn fence_glass_and_leaves_take_compound_fills() {
+        use crate::chunk::compound_host;
+        for id in ["fence", "glass", "leaves", "oak_stairs", "trapdoor", "ladder"] {
+            assert!(compound_host(id), "{id} should host fills");
+            let chunk = Chunk::from_blocks(0, 0, [(2, 1, 2, Block::new(id, 0))]).unwrap();
+            let mut world = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
+            let wet = Block::new(id, 0).with_fill(FILL_WATER);
+            assert!(
+                apply(
+                    &mut world,
+                    Edit::Place {
+                        x: 2,
+                        y: 1,
+                        z: 2,
+                        block: wet,
+                        player: far_player(),
+                    }
+                ),
+                "{id} accepts water fill"
+            );
+            assert_eq!(world.block_at(2, 1, 2).fill, FILL_WATER);
+            assert!(
+                light_of(Block::new(id, 0).with_fill(FILL_EMBER)).is_some(),
+                "{id} ember fill should glow"
+            );
+        }
+        assert!(!compound_host("stone"));
+        assert!(!compound_host("cobblestone"));
+    }
+
+    #[test]
     fn a_normal_block_breaks_to_air() {
         let chunk = Chunk::from_blocks(0, 0, [(4, 1, 4, Block::new("grass", 0))]).unwrap();
         let mut world = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();

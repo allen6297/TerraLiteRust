@@ -519,10 +519,24 @@ impl ApplicationHandler for App {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            if let Some(state) = self.state.as_mut() {
-                state.mouse_look(delta.0, delta.1);
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                if let Some(state) = self.state.as_mut() {
+                    state.mouse_look(delta.0, delta.1);
+                }
             }
+            // Raw right button (1) still fires when a grabbed cursor drops
+            // WindowEvent::MouseInput for some Windows trackpads.
+            DeviceEvent::Button { button, state: element } => {
+                if let Some(mapped) =
+                    crate::keybinds::Keybinds::mouse_from_device_button(button)
+                {
+                    if let Some(state) = self.state.as_mut() {
+                        state.set_mouse(mapped, element == ElementState::Pressed);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

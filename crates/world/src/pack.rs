@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use crate::chunk::Block;
+use crate::chunk::{Block, FILL_EMBER};
 use crate::registry::Registry;
 use crate::shape::{CellBox, MeshFace, Plane, Shape};
 use serde_json::Value;
@@ -1964,7 +1964,17 @@ impl Pack {
         if let Some(light) = self.script_light(block.id) {
             return Some(light);
         }
-        self.blocks.get(block.id).and_then(BlockEntry::light)
+        if let Some(light) = self.blocks.get(block.id).and_then(BlockEntry::light) {
+            return Some(light);
+        }
+        // Ember energy occupying a compound host glows warm through the solid.
+        if block.fill == FILL_EMBER {
+            return Some(Light {
+                color: [1.0, 0.42, 0.1],
+                level: 11,
+            });
+        }
+        None
     }
 
     /// The PNG path this block names, relative to `assets/`.
