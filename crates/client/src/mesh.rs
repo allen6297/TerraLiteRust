@@ -42,8 +42,8 @@ use std::collections::{HashMap, HashSet};
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
     Plane, Shape, buffer_level, buffer_max, compound_accepts, conduit_edge_tube, conduit_fill_span,
-    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, is_lamp, is_spout, is_tank,
-    lamp_on, pump_dir, pump_on, shape_of, tank_level,
+    conduit_links, conduit_shell_boxes, conduit_span, is_buffer, is_drain, is_lamp, is_spout,
+    is_tank, lamp_on, pump_dir, pump_on, shape_of, tank_level,
 };
 
 use crate::daylight;
@@ -1595,7 +1595,7 @@ fn mesh_partial_shapes(
                     }
                     continue;
                 }
-                if is_spout(block.id) {
+                if is_spout(block.id) || is_drain(block.id) {
                     let shape = shape_of(block);
                     if !shape.is_empty() {
                         mesh_cell(block, shape, cell, sample, light, sun, mesh);
@@ -1603,16 +1603,25 @@ fn mesh_partial_shapes(
                             mesh_faces(block, shape, cell, sample, light, sun, mesh);
                         }
                     }
-                    // Open spout with water pressure shows a drip from the nozzle.
+                    // Open spout/drain with water shows a drip at the nozzle.
                     if pump_on(block.metadata) {
                         let dir = pump_dir(block.metadata);
-                        let intake = sample(
-                            cell[0] - dir[0],
-                            cell[1] - dir[1],
-                            cell[2] - dir[2],
-                        );
-                        let wet = intake.fill == FILL_WATER
-                            || (is_tank(intake.id) && tank_level(intake) > 0);
+                        let wet = if is_drain(block.id) {
+                            sample(
+                                cell[0] + dir[0],
+                                cell[1] + dir[1],
+                                cell[2] + dir[2],
+                            )
+                            .id == "water"
+                        } else {
+                            let intake = sample(
+                                cell[0] - dir[0],
+                                cell[1] - dir[1],
+                                cell[2] - dir[2],
+                            );
+                            intake.fill == FILL_WATER
+                                || (is_tank(intake.id) && tank_level(intake) > 0)
+                        };
                         if wet {
                             let drip = Block::new("water", 0);
                             let drip_shape = Shape::from_boxes(&[CellBox {

@@ -138,6 +138,7 @@ fn swings(id: &str) -> bool {
             | "copper_bulb"
             | "lamp"
             | "spout"
+            | "drain"
             | "pump"
             | "decorated_pot"
             | "shelf"

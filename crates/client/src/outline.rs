@@ -9,8 +9,8 @@
 use glam::Vec3;
 use rebuild_world::{
     Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts_meta, compound_host,
-    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, is_lamp, is_spout,
-    lamp_on, pump_on, shape_of,
+    conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, is_drain, is_lamp,
+    is_spout, lamp_on, pump_on, shape_of,
 };
 
 use crate::look;
@@ -86,8 +86,8 @@ fn outline_color(held: Option<&str>, host_id: &str, metadata: u8, fill: u8) -> [
     if is_lamp(host_id) && lamp_on(metadata) {
         return AMBER;
     }
-    // Open spouts read cyan so the faucet state is obvious.
-    if is_spout(host_id) && pump_on(metadata) {
+    // Open spouts / drains read cyan so faucet and intake state is obvious.
+    if (is_spout(host_id) || is_drain(host_id)) && pump_on(metadata) {
         return CYAN;
     }
     let Some(held) = held else {

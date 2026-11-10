@@ -14,11 +14,11 @@ use rebuild_world::{
     BAG_SLOTS, BATTERY_CHARGE, BATTERY_MAX, Block, CellChange, Cluster, Emitter, FILL_EMBER,
     FILL_NONE, FILL_WATER, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, TANK_BUCKET,
     TANK_MAX, apply_changes, apply_compound_seeps, apply_ember_lamps, apply_pump_pushes,
-    apply_water_spouts, battery_at, battery_level,
-    buffer_level, buffer_max, compound_accepts_meta, compound_host, encode_bag, encode_break,
-    encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind, fill_name,
-    held_light_of, is_battery, is_buffer, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire,
-    lamp_at, lamp_on, load_dir, plan_compound_seeps, plan_ember_lamps, plan_pump_pushes,
+    apply_water_spouts, battery_at, battery_level, buffer_level, buffer_max,
+    compound_accepts_meta, compound_host, encode_bag, encode_break, encode_chat, encode_chest,
+    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of, is_battery,
+    is_buffer, is_drain, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire, lamp_at, lamp_on,
+    load_dir, plan_compound_seeps, plan_ember_lamps, plan_pump_pushes, plan_water_drains,
     plan_water_spouts, pump_dir, pump_meta, pump_on, shape_of, tank_at, tank_level,
 };
 use wgpu::util::DeviceExt;
@@ -1052,6 +1052,8 @@ pub struct State {
     told_lamp: bool,
     /// Once: look at a spout — tip that it dumps tank/pipe water.
     told_spout: bool,
+    /// Once: look at a drain — tip that it pulls world water into pipes.
+    told_drain: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -2012,6 +2014,7 @@ impl State {
             told_battery: false,
             told_lamp: false,
             told_spout: false,
+            told_drain: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3293,6 +3296,10 @@ impl State {
             self.toggle_spout(hit.block, block.metadata);
             return;
         }
+        if block.id == "drain" {
+            self.toggle_drain(hit.block, block.metadata);
+            return;
+        }
         if hinge(block.id) {
             self.toggle_swing(block.id, hit.block, block.metadata);
             return;
@@ -3522,6 +3529,25 @@ impl State {
         );
     }
 
+    /// Open bit (8) on a drain — facing bits stay. Off is a closed intake.
+    fn toggle_drain(&mut self, at: [i32; 3], metadata: u8) {
+        let next = metadata ^ 8;
+        self.gui
+            .push_chat(if pump_on(next) { "drain open" } else { "drain closed" });
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                at[0],
+                at[1],
+                at[2],
+                Block::new("drain", next),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            None,
+        );
+    }
+
     /// Right-click a pump to toggle when not holding a block to place.
     fn try_use_pump(&mut self) -> bool {
         if self.hotbar.selected_block().is_some() {
@@ -3535,6 +3561,10 @@ impl State {
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
         if block.id == "spout" {
             self.toggle_spout(hit.block, block.metadata);
+            return true;
+        }
+        if block.id == "drain" {
+            self.toggle_drain(hit.block, block.metadata);
             return true;
         }
         if block.id != "pump" {
@@ -3813,6 +3843,24 @@ impl State {
         }
         self.told_spout = true;
         self.gui.push_chat("spout dumps tank water");
+    }
+
+    /// Once: look at a drain — tip that open pulls world water.
+    fn tell_drain(&mut self) {
+        if self.told_drain || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "drain" {
+            return;
+        }
+        self.told_drain = true;
+        self.gui.push_chat("drain pulls world water");
     }
 
     /// Once: hold clay, look at a furnace — tip to use it.
@@ -5073,6 +5121,19 @@ impl State {
             note_flow(&mut self.gui, &mut self.compound_flow_told);
             return;
         }
+        let drain_plan = plan_water_drains(&self.world, focus, 20, 1);
+        if !drain_plan.is_empty() {
+            for change in drain_plan.into_iter().take(2) {
+                self.send_edit(
+                    encode_place(change.x, change.y, change.z, change.block, player),
+                    TAG_PLACE,
+                    None,
+                );
+            }
+            self.compound_flow_wait = 0.35;
+            note_flow(&mut self.gui, &mut self.compound_flow_told);
+            return;
+        }
         if let Some(cell) = plan_compound_seeps(&self.world, focus, 20, 1).into_iter().next() {
             let conduit =
                 is_pipe(cell.block.id) || is_wire(cell.block.id) || is_pump(cell.block.id);
@@ -5652,6 +5713,21 @@ impl State {
                 format!("Spout  {power}")
             });
         }
+        if is_drain(block.id) {
+            let power = if pump_on(block.metadata) { "open" } else { "closed" };
+            let dir = pump_dir(block.metadata);
+            let intake = self.world.block_at(
+                target.block[0] + dir[0],
+                target.block[1] + dir[1],
+                target.block[2] + dir[2],
+            );
+            let wet = intake.id == "water";
+            return Some(if wet && pump_on(block.metadata) {
+                format!("Drain  {power}  pull")
+            } else {
+                format!("Drain  {power}")
+            });
+        }
         if is_tank(block.id) {
             let level = tank_level(block);
             let kind = match block.fill {
@@ -5982,6 +6058,13 @@ impl State {
             // Open by default; faces along look so water dumps away from you.
             block = Block::new(
                 "spout",
+                pump_meta(pump_facing_from_look(self.camera.forward()), true),
+            );
+        }
+        if block.id == "drain" {
+            // Open by default; faces along look so intake faces the water ahead.
+            block = Block::new(
+                "drain",
                 pump_meta(pump_facing_from_look(self.camera.forward()), true),
             );
         }
@@ -7156,11 +7239,13 @@ impl State {
         let pump_shot = name.contains("pump") || name.contains("valve");
         let lamp_shot = name.contains("lamp");
         let spout_shot = name.contains("spout") || name.contains("faucet");
+        let drain_shot = name.contains("drain") || name.contains("intake");
         let battery_shot =
             !lamp_shot && (name.contains("battery") || name.contains("charge"));
         let tank_shot = !battery_shot
             && !lamp_shot
             && !spout_shot
+            && !drain_shot
             && (name.contains("tank") || name.contains("buffer"));
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -7207,7 +7292,27 @@ impl State {
                 }
             }
         }
-        if spout_shot {
+        if drain_shot {
+            // World water ahead → open drain (+X) pulls into empty pipe behind.
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: Block::new("water", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("drain", pump_meta(0, true)),
+            });
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0),
+            });
+        } else if spout_shot {
             // Pressurized tank → open spout (+X) sprays water into air.
             changes.push(CellChange {
                 x: gx,
@@ -7591,7 +7696,18 @@ impl State {
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
         self.chunk_bake.touch(gx + 2, gz - 2);
-        let (eye, focus) = if spout_shot {
+        let (eye, focus) = if drain_shot {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            (
+                glam::Vec3::new(
+                    (gx + 1) as f32 + 0.5,
+                    gy as f32 + 2.1 + body::EYE_HEIGHT,
+                    gz as f32 - 2.6,
+                ),
+                glam::Vec3::new((gx + 1) as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.5),
+            )
+        } else if spout_shot {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("water_bucket");
             (
@@ -12143,6 +12259,7 @@ impl State {
         self.tell_battery();
         self.tell_lamp();
         self.tell_spout();
+        self.tell_drain();
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();

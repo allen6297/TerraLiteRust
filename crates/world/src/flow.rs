@@ -8,9 +8,10 @@ use std::collections::HashSet;
 
 use crate::changes::CellChange;
 use crate::chunk::{
-    BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, battery_at, battery_level, buffer_level,
-    buffer_max, compound_accepts_meta, ember_conducts, is_battery, is_buffer, is_lamp, is_pipe,
-    is_pump, is_spout, is_tank, is_wire, lamp_at, lamp_on, pump_dir, pump_on, tank_at, tank_level,
+    BATTERY_MAX, FILL_EMBER, FILL_NONE, FILL_WATER, TANK_MAX, battery_at, battery_level,
+    buffer_level, buffer_max, compound_accepts_meta, ember_conducts, is_battery, is_buffer,
+    is_drain, is_lamp, is_pipe, is_pump, is_spout, is_tank, is_wire, lamp_at, lamp_on, pump_dir,
+    pump_on, tank_at, tank_level,
 };
 use crate::cluster::Cluster;
 
@@ -529,6 +530,7 @@ fn spout_source(block: crate::chunk::Block) -> Option<(u8, crate::chunk::Block)>
             || is_pump(block.id)
             || (compound_accepts_meta(block.id, block.metadata, FILL_WATER)
                 && !is_spout(block.id)
+                && !is_drain(block.id)
                 && !is_lamp(block.id)
                 && !is_battery(block.id)))
     {
@@ -653,6 +655,136 @@ pub fn apply_water_spouts(
     max_spouts: usize,
 ) -> usize {
     let planned = plan_water_spouts(world, focus, radius, max_spouts);
+    let count = planned.len();
+    for cell in planned {
+        world.set_block(cell.x, cell.y, cell.z, cell.block);
+    }
+    count
+}
+
+/// True when `dest` can take one unit of water from a drain.
+fn drain_sink(block: crate::chunk::Block) -> Option<crate::chunk::Block> {
+    if is_tank(block.id) {
+        if block.fill == FILL_NONE {
+            return Some(tank_at(FILL_WATER, 1));
+        }
+        if block.fill == FILL_WATER {
+            let level = tank_level(block);
+            if level < TANK_MAX {
+                return Some(tank_at(FILL_WATER, level + 1));
+            }
+        }
+        return None;
+    }
+    if block.fill == FILL_NONE
+        && (is_pipe(block.id)
+            || is_pump(block.id)
+            || (compound_accepts_meta(block.id, block.metadata, FILL_WATER)
+                && !is_spout(block.id)
+                && !is_drain(block.id)
+                && !is_lamp(block.id)
+                && !is_battery(block.id)))
+    {
+        return Some(block.with_fill(FILL_WATER));
+    }
+    None
+}
+
+/// Plan drain intakes: open drains pull world water ahead of facing into the
+/// opposite pipe / tank. Each pulse moves one water cell.
+pub fn plan_water_drains(
+    world: &Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_drains: usize,
+) -> Vec<CellChange> {
+    if max_drains == 0 || radius < 0 {
+        return Vec::new();
+    }
+    let mut drains = Vec::new();
+    let min_cx = (focus[0] - radius).div_euclid(16);
+    let max_cx = (focus[0] + radius).div_euclid(16);
+    let min_cz = (focus[2] - radius).div_euclid(16);
+    let max_cz = (focus[2] + radius).div_euclid(16);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let Some(chunk) = world.get(cx, cz) else {
+                continue;
+            };
+            chunk.for_each_block(|x, y, z, block| {
+                if !is_drain(block.id) || !pump_on(block.metadata) {
+                    return;
+                }
+                if (x - focus[0]).abs() > radius
+                    || (y - focus[1]).abs() > radius
+                    || (z - focus[2]).abs() > radius
+                {
+                    return;
+                }
+                drains.push((x, y, z, block.metadata));
+            });
+        }
+    }
+    drains.sort_by_key(|&(x, y, z, _)| {
+        (
+            (x - focus[0]).abs() + (z - focus[2]).abs(),
+            y,
+            x,
+            z,
+        )
+    });
+
+    let mut claimed = HashSet::new();
+    let mut out = Vec::new();
+    let mut pulled = 0usize;
+    for (x, y, z, meta) in drains {
+        if pulled >= max_drains {
+            break;
+        }
+        let dir = pump_dir(meta);
+        // Facing = world intake; opposite = pipe/tank sink.
+        let ix = x + dir[0];
+        let iy = y + dir[1];
+        let iz = z + dir[2];
+        let ox = x - dir[0];
+        let oy = y - dir[1];
+        let oz = z - dir[2];
+        let intake = world.block_at(ix, iy, iz);
+        if intake.id != "water" || !claimed.insert((ix, iy, iz)) {
+            continue;
+        }
+        let sink = world.block_at(ox, oy, oz);
+        let Some(after_sink) = drain_sink(sink) else {
+            continue;
+        };
+        if !claimed.insert((ox, oy, oz)) {
+            continue;
+        }
+        out.push(CellChange {
+            x: ix,
+            y: iy,
+            z: iz,
+            block: crate::chunk::Block::AIR,
+        });
+        out.push(CellChange {
+            x: ox,
+            y: oy,
+            z: oz,
+            block: after_sink,
+        });
+        pulled += 1;
+    }
+    out
+}
+
+/// Apply [`plan_water_drains`] into `world`. Returns how many cells changed.
+pub fn apply_water_drains(
+    world: &mut Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_drains: usize,
+) -> usize {
+    let planned = plan_water_drains(world, focus, radius, max_drains);
     let count = planned.len();
     for cell in planned {
         world.set_block(cell.x, cell.y, cell.z, cell.block);
@@ -1089,5 +1221,56 @@ mod tests {
             (2, 1, 1, Block::new("spout", pump_meta(0, false))),
         ]);
         assert!(plan_water_spouts(&cluster, [2, 1, 1], 8, 2).is_empty());
+    }
+
+    #[test]
+    fn drain_pulls_world_water_into_pipe() {
+        use crate::chunk::pump_meta;
+        let mut cluster = world(&[
+            (3, 1, 1, Block::new("water", 0)),
+            (2, 1, 1, Block::new("drain", pump_meta(0, true))),
+            (1, 1, 1, Block::new("pipe", 0)),
+        ]);
+        let planned = plan_water_drains(&cluster, [2, 1, 1], 8, 2);
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 3 && c.block.is_air()),
+            "world water removed"
+        );
+        assert!(
+            planned
+                .iter()
+                .any(|c| c.x == 1 && c.block.fill == FILL_WATER),
+            "pipe fills"
+        );
+        assert_eq!(apply_water_drains(&mut cluster, [2, 1, 1], 8, 2), 2);
+        assert!(cluster.block_at(3, 1, 1).is_air());
+        assert_eq!(cluster.block_at(1, 1, 1).fill, FILL_WATER);
+    }
+
+    #[test]
+    fn drain_fills_tank_from_world_water() {
+        use crate::chunk::{pump_meta, tank_at, tank_level};
+        let mut cluster = world(&[
+            (3, 1, 1, Block::new("water", 0)),
+            (2, 1, 1, Block::new("drain", pump_meta(0, true))),
+            (1, 1, 1, tank_at(FILL_WATER, 2)),
+        ]);
+        let planned = plan_water_drains(&cluster, [2, 1, 1], 8, 2);
+        assert!(planned.iter().any(|c| c.x == 1 && tank_level(c.block) == 3));
+        assert_eq!(apply_water_drains(&mut cluster, [2, 1, 1], 8, 2), 2);
+        assert_eq!(tank_level(cluster.block_at(1, 1, 1)), 3);
+    }
+
+    #[test]
+    fn closed_drain_leaves_water() {
+        use crate::chunk::pump_meta;
+        let cluster = world(&[
+            (3, 1, 1, Block::new("water", 0)),
+            (2, 1, 1, Block::new("drain", pump_meta(0, false))),
+            (1, 1, 1, Block::new("pipe", 0)),
+        ]);
+        assert!(plan_water_drains(&cluster, [2, 1, 1], 8, 2).is_empty());
     }
 }
