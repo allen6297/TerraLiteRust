@@ -205,6 +205,8 @@ struct Args {
     shot_ladder: Option<std::path::PathBuf>,
     /// Fishing bobber cast wait mote, then quit.
     shot_fish: Option<std::path::PathBuf>,
+    /// Sugar cane bone-meal grow, then quit.
+    shot_grow: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -321,6 +323,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_anvil: args.shot_anvil,
         shot_ladder: args.shot_ladder,
         shot_fish: args.shot_fish,
+        shot_grow: args.shot_grow,
         state: None,
         last_frame: Instant::now(),
     };
@@ -386,6 +389,7 @@ struct App {
     shot_anvil: Option<std::path::PathBuf>,
     shot_ladder: Option<std::path::PathBuf>,
     shot_fish: Option<std::path::PathBuf>,
+    shot_grow: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -573,6 +577,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_fish.take() {
                     state.arm_fish_shot(path);
                 }
+                if let Some(path) = self.shot_grow.take() {
+                    state.arm_grow_shot(path);
+                }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
                 self.state = Some(state);
@@ -755,6 +762,7 @@ where
         shot_anvil: None,
         shot_ladder: None,
         shot_fish: None,
+        shot_grow: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -1066,6 +1074,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-fish".to_string())?;
                 parsed.shot_fish = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-grow" | "--shot-cane" | "--shot-fertilize" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-grow".to_string())?;
+                parsed.shot_grow = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

@@ -4828,6 +4828,65 @@ impl State {
         true
     }
 
+    /// Spend bone meal on a sugar cane stalk to grow one more block. True when holding fertilizer.
+    fn try_fertilize(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_fertilizer(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "sugar_cane" {
+            self.gui.push_chat("need cane");
+            return true;
+        }
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let (x, z) = (hit.block[0], hit.block[2]);
+        let mut top = hit.block[1];
+        while top < 255 && self.world.block_at(x, top + 1, z).id == "sugar_cane" {
+            top += 1;
+        }
+        let mut base = hit.block[1];
+        while base > 0 && self.world.block_at(x, base - 1, z).id == "sugar_cane" {
+            base -= 1;
+        }
+        if top - base + 1 >= 3 {
+            self.gui.push_chat("tall");
+            return true;
+        }
+        let grow_y = top + 1;
+        if !self.world.block_at(x, grow_y, z).is_air() {
+            self.gui.push_chat("blocked");
+            return true;
+        }
+        let slot = self.hotbar.selected();
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                x,
+                grow_y,
+                z,
+                Block::new("sugar_cane", 0),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            Some(slot),
+        );
+        let mote = [x as f32 + 0.5, grow_y as f32 + 0.35, z as f32 + 0.5];
+        self.drops.puff(mote, [0.45, 0.85, 0.38]);
+        self.rebuild_drops();
+        self.gui.push_chat("grow");
+        true
+    }
+
     /// Cast a fishing bobber into looked-at water, or reel one in. True when holding a fishing rod.
     fn try_fish(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -6305,6 +6364,7 @@ impl State {
             || self.try_eye()
             || self.try_arrow()
             || self.try_fish()
+            || self.try_fertilize()
         {
             return;
         }
@@ -8763,6 +8823,105 @@ impl State {
     }
 
     /// Mid-climb on the shaft ladder looking into the pit, then quit with a PNG.
+    /// Mid-grow a sugar cane stalk with bone meal puff, then quit with a PNG.
+    pub fn arm_grow_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 12;
+        let cz = 22;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 2)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("sand", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        // Water against the sand so the cane is supported.
+        for z in (cz - 1)..=(cz + 1) {
+            changes.push(CellChange {
+                x: cx + 2,
+                y: 1,
+                z,
+                block: Block::new("water", 0),
+            });
+            changes.push(CellChange {
+                x: cx + 2,
+                y: 2,
+                z,
+                block: Block::AIR,
+            });
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: 2,
+            z: cz,
+            block: Block::new("sugar_cane", 0),
+        });
+        changes.push(CellChange {
+            x: cx,
+            y: 3,
+            z: cz,
+            block: Block::new("sugar_cane", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, 3.2, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(cx as f32 - 2.2, 2.15 + body::EYE_HEIGHT, cz as f32 + 2.8);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote = [cx as f32 + 0.5, 3.35, cz as f32 + 0.5];
+        self.note_shot_at = Some(mote);
+        self.note_shot_pitch = 5;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(mote, [0.45, 0.85, 0.38]);
+        self.drops.note(mote, 5);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(5), mote);
+        self.found_compound = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bone_meal");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("grow");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Cast a fishing bobber into a shore pool mid-wait with splash motes, then quit with a PNG.
     pub fn arm_fish_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
