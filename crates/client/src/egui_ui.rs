@@ -1468,7 +1468,8 @@ fn slot_button_sized(
         ui.painter()
             .rect_filled(lip, CornerRadius::same(2), LIP.gamma_multiply(0.85));
         if let Some(tex) = tex {
-            let pad = (size * 0.11).max(2.0);
+            // Tight inset so the ~1.5× larger model raster still sits in the well.
+            let pad = (size * 0.04).max(1.0);
             let icon_rect = rect.shrink(pad);
             ui.painter().image(
                 tex,

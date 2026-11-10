@@ -177,6 +177,8 @@ const BORDER_PX: f32 = 2.0;
 const SELECT_BORDER_PX: f32 = 6.0;
 const PAD_PX: f32 = 6.0;
 const FILL_INSET_PX: f32 = 4.0;
+/// Icon sits tighter than the empty fill so model rasters read ~1.5× larger.
+const ICON_INSET_PX: f32 = 1.5;
 
 /// GUI-space Y of the top lip of the hotbar chrome. HUD plates clear above this.
 pub fn bar_chrome_top() -> f32 {
@@ -1533,9 +1535,9 @@ pub fn bar_lifted(width: f32, height: f32, hotbar: &Hotbar, lift: f32) -> Vec<Qu
             )
             .tag(600 + index as u16),
         );
-        let icon_x = x + FILL_INSET_PX;
-        let icon_y = bottom + FILL_INSET_PX;
-        let icon_size = SLOT_PX - FILL_INSET_PX * 2.0;
+        let icon_x = x + ICON_INSET_PX;
+        let icon_y = bottom + ICON_INSET_PX;
+        let icon_size = SLOT_PX - ICON_INSET_PX * 2.0;
         match hotbar.slot(index) {
             Some(id) => push_slot_icon(&mut quads, width, height, icon_x, icon_y, icon_size, id),
             None => quads.push(pixel_quad(

@@ -339,10 +339,10 @@ fn soft_project(quads: &[Quad], gui: ItemDisplay, size: usize) -> ColorImage {
     let mut depth = vec![f32::INFINITY; size * size];
     let cx = (size as f32 - 1.0) * 0.5;
     let cy = (size as f32 - 1.0) * 0.52;
-    // MC gui scale 0.625 → fill most of the slot with a soft pad.
+    // MC gui scale 0.625. Fill ~98% of the raster so the block reads ~1.5×
+    // larger than the old padded cube while still fitting the slot.
     let s = gui.scale[0].max(gui.scale[1]).max(gui.scale[2]).max(0.1);
-    // Keep a little pad so the MC gui cube doesn't clip the slot edge.
-    let fit = size as f32 * 0.82 / s;
+    let fit = size as f32 * 0.98 / s;
     let project = |p: [f32; 3]| -> (f32, f32, f32) {
         let t = apply_gui(p, gui);
         (cx + t[0] * fit, cy - t[1] * fit, -t[2])
