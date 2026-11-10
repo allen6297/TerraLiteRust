@@ -1,4 +1,4 @@
 {
-  "drops": ["torch", "stone_bricks", "apple", "bone_meal"],
-  "omen": ["iron_pickaxe", "healing_potion", "map", "compass"]
+  "drops": ["book", "clock", "brush", "map"],
+  "omen": ["spyglass", "goat_horn", "compass", "healing_potion"]
 }

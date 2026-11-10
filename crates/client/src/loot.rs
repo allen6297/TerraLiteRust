@@ -189,19 +189,19 @@ mod tests {
         assert_eq!(
             table.drops,
             [
-                "torch".to_string(),
-                "stone_bricks".to_string(),
-                "apple".to_string(),
-                "bone_meal".to_string()
+                "book".to_string(),
+                "clock".to_string(),
+                "brush".to_string(),
+                "map".to_string()
             ]
         );
         assert_eq!(
             table.omen,
             [
-                "iron_pickaxe".to_string(),
-                "healing_potion".to_string(),
-                "map".to_string(),
-                "compass".to_string()
+                "spyglass".to_string(),
+                "goat_horn".to_string(),
+                "compass".to_string(),
+                "healing_potion".to_string()
             ]
         );
         let (x, z) = rebuild_world::SHRINE_CHEST;
