@@ -5135,6 +5135,10 @@ pub fn sprint_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "sprint")
 }
 
+pub fn boat_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "row")
+}
+
 fn status_plate(width: f32, height: f32, amount: f32, label: &str) -> Vec<Quad> {
     let amount = amount.clamp(0.0, 1.0);
     if amount <= 0.02 || width <= 0.0 || height <= 0.0 {
@@ -7922,6 +7926,10 @@ mod tests {
             .any(|quad| quad.color == WELL));
         assert!(water_quads(200.0, 100.0, 0.0).is_empty());
         assert_eq!(water_quads(200.0, 100.0, 1.0).len(), 4);
+        assert!(boat_quads(200.0, 100.0, 0.0).is_empty());
+        assert!(boat_quads(200.0, 100.0, 1.0)
+            .iter()
+            .any(|quad| quad.color == WELL));
         assert_eq!(look_label("oak_log").as_deref(), Some("Oak Log"));
         assert_eq!(look_label("coal_ore").as_deref(), Some("Coal Ore"));
         assert_eq!(look_label("water").as_deref(), Some("Water"));

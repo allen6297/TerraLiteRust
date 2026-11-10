@@ -862,6 +862,14 @@ pub struct State {
     swim_shot_wet_eye: glam::Vec3,
     swim_shot_yaw: f32,
     swim_shot_pitch: f32,
+    /// One-shot idle boat vs rowing FOV stitch, then quit.
+    boat_shot_path: Option<std::path::PathBuf>,
+    boat_shot_frames: u32,
+    boat_shot_phase: BoatShotPhase,
+    boat_shot_idle: Option<CapturedRgba>,
+    boat_shot_eye: glam::Vec3,
+    boat_shot_yaw: f32,
+    boat_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -888,6 +896,12 @@ pub struct State {
     sprint_run: f32,
     /// HUD plate amount for the sprint cue, `0`..`1`.
     sprint_show: f32,
+    /// `1` while the boat is moving (eases). Widens the view a little.
+    boat_kick: f32,
+    /// HUD plate amount for the row cue, `0`..`1`.
+    boat_show: f32,
+    /// Seconds until the next paddle stroke while rowing.
+    boat_stroke: f32,
     /// `1` when a hit lands, then it fades. Tightens the view.
     hit_kick: f32,
     /// Red edge, `1` just hurt down to `0`.
@@ -1722,6 +1736,13 @@ impl State {
             swim_shot_wet_eye: glam::Vec3::ZERO,
             swim_shot_yaw: 0.0,
             swim_shot_pitch: 0.0,
+            boat_shot_path: None,
+            boat_shot_frames: 0,
+            boat_shot_phase: BoatShotPhase::Idle,
+            boat_shot_idle: None,
+            boat_shot_eye: glam::Vec3::ZERO,
+            boat_shot_yaw: 0.0,
+            boat_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -1737,6 +1758,9 @@ impl State {
             sprint_kick: 0.0,
             sprint_run: 0.0,
             sprint_show: 0.0,
+            boat_kick: 0.0,
+            boat_show: 0.0,
+            boat_stroke: 0.0,
             hit_kick: 0.0,
             hurt_flash: 0.0,
             sip: 0.0,
@@ -4266,6 +4290,14 @@ impl State {
     }
 
     fn steer_boat(&mut self, dt: f32) {
+        if self.boat_shot_path.is_some() {
+            if let Some(seat) = self.boat.seat() {
+                self.camera.eye = glam::Vec3::from(seat);
+                self.camera.velocity_y = 0.0;
+                self.camera.on_ground = true;
+            }
+            return;
+        }
         let (forward, right) = self.camera.walk_axes();
         let mut wish = glam::Vec3::ZERO;
         if self.input.forward {
@@ -4280,17 +4312,40 @@ impl State {
         if self.input.left {
             wish -= right;
         }
-        if wish.length_squared() > 0.0 {
+        let rowing = wish.length_squared() > 0.0;
+        if rowing {
             wish = wish.normalize() * crate::boat::SPEED;
         }
-        if self.boat.steer(dt, wish.x, wish.z, &self.world) {
+        let moved = self.boat.steer(dt, wish.x, wish.z, &self.world);
+        if moved {
             self.rebuild_boat();
+        }
+        let goal = if moved || rowing { 1.0 } else { 0.0 };
+        self.boat_kick += (goal - self.boat_kick) * (dt * 8.0).min(1.0);
+        self.boat_show += (goal - self.boat_show) * (dt * 10.0).min(1.0);
+        if moved {
+            self.boat_stroke -= dt;
+            if self.boat_stroke <= 0.0 {
+                self.boat_stroke = 0.48;
+                if let Some(origin) = self.boat.origin() {
+                    self.play_world(crate::audio::Sound::Paddle, origin);
+                }
+            }
+            self.bob_amount = (self.bob_amount + dt * 3.5).min(0.55);
+        } else {
+            self.boat_stroke = 0.0;
         }
         if let Some(seat) = self.boat.seat() {
             self.camera.eye = glam::Vec3::from(seat);
             self.camera.velocity_y = 0.0;
             self.camera.on_ground = true;
         }
+    }
+
+    fn clear_boat_feel(&mut self) {
+        self.boat_kick = 0.0;
+        self.boat_show = 0.0;
+        self.boat_stroke = 0.0;
     }
 
     fn steer_pig(&mut self, dt: f32) {
@@ -5452,6 +5507,110 @@ impl State {
         self.pose_dirty = true;
     }
 
+    /// Idle aboard then rowing FOV from a marsh pool, stitched side by side.
+    pub fn arm_boat_shot(&mut self, path: std::path::PathBuf) {
+        self.boat_shot_path = Some(path);
+        self.boat_shot_frames = 0;
+        self.boat_shot_phase = BoatShotPhase::WaitingIdle;
+        self.boat_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 12..=20 {
+            for x in 6..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                for y in 1..=2 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::new("water", 0),
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let _ = self.boat.take();
+        assert!(self.boat.place(8, 1, 16));
+        assert!(self.boat.mount());
+        self.rebuild_boat();
+        let seat = self
+            .boat
+            .seat()
+            .map(glam::Vec3::from)
+            .expect("boat seat");
+        let target = glam::Vec3::new(8.5, 2.0, 20.0);
+        self.camera = Camera::looking_at(seat, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.input.forward = false;
+        self.input.fast = false;
+        self.clear_boat_feel();
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.boat_shot_eye = seat;
+        self.boat_shot_yaw = yaw;
+        self.boat_shot_pitch = pitch;
+        self.posed_eye = seat;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_boat_shot_camera(&mut self) {
+        if self.boat_shot_path.is_none() {
+            return;
+        }
+        if !self.boat.aboard() {
+            let _ = self.boat.mount();
+        }
+        self.camera.restore(
+            self.boat_shot_eye,
+            self.boat_shot_yaw,
+            self.boat_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.boat_shot_eye;
+        self.posed_yaw = self.boat_shot_yaw;
+        self.posed_pitch = self.boat_shot_pitch;
+        self.pose_dirty = true;
+        match self.boat_shot_phase {
+            BoatShotPhase::WaitingIdle | BoatShotPhase::Idle => {
+                self.input.forward = false;
+                self.input.back = false;
+                self.input.left = false;
+                self.input.right = false;
+                self.boat_kick = 0.0;
+                self.boat_show = 0.0;
+                self.boat_stroke = 0.0;
+            }
+            BoatShotPhase::WaitingRow => {
+                self.input.forward = true;
+                self.boat_kick = 1.0;
+                self.boat_show = 1.0;
+                self.boat_stroke = 0.2;
+                self.bob_amount = 0.45;
+            }
+        }
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -5754,6 +5913,75 @@ impl State {
                 }
             }
             SwimShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_boat_shot(&mut self) {
+        let Some(path) = self.boat_shot_path.clone() else {
+            return;
+        };
+        self.pin_boat_shot_camera();
+        self.boat_shot_frames = self.boat_shot_frames.saturating_add(1);
+        if self.boat_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.boat_shot_frames > 600 {
+                eprintln!("boat shot timed out");
+                self.boat_shot_path = None;
+                self.boat_shot_phase = BoatShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.boat_shot_phase {
+            BoatShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.boat_shot_idle = Some(idle);
+                    self.boat_shot_frames = 0;
+                    self.boat_shot_phase = BoatShotPhase::WaitingRow;
+                }
+                Err(err) => {
+                    eprintln!("boat idle capture failed: {err}");
+                    if self.boat_shot_frames > 400 {
+                        self.boat_shot_path = None;
+                        self.boat_shot_phase = BoatShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            BoatShotPhase::WaitingRow => {
+                let Some(idle) = self.boat_shot_idle.take() else {
+                    self.boat_shot_path = None;
+                    self.boat_shot_phase = BoatShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(row) => match stitch_held_light_proof(&idle, &row, &path) {
+                        Ok(()) => {
+                            eprintln!("boat shot wrote {}", path.display());
+                            self.boat_shot_path = None;
+                            self.boat_shot_phase = BoatShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("boat stitch failed: {err}");
+                            self.boat_shot_path = None;
+                            self.boat_shot_phase = BoatShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("boat row capture failed: {err}");
+                        self.boat_shot_idle = Some(idle);
+                        if self.boat_shot_frames > 400 {
+                            self.boat_shot_path = None;
+                            self.boat_shot_phase = BoatShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            BoatShotPhase::Idle => {}
         }
     }
 
@@ -6384,7 +6612,18 @@ impl State {
             }
             KeyCode::KeyF if pressed && self.playing => {
                 if self.boat.aboard() {
+                    let seat = self.boat.seat();
                     self.boat.dismount();
+                    self.clear_boat_feel();
+                    if let Some(pos) = seat.or_else(|| self.boat.origin()) {
+                        let wet = body::in_water(self.camera.eye, &self.world);
+                        let sound = if wet {
+                            crate::audio::Sound::Splash
+                        } else {
+                            crate::audio::Sound::SplashOut
+                        };
+                        self.play_world(sound, pos);
+                    }
                     self.gui.push_chat("ashore");
                 } else if self.pig.ridden() {
                     self.pig.dismount();
@@ -6408,7 +6647,11 @@ impl State {
                         self.camera.eye = glam::Vec3::from(seat);
                         self.camera.velocity_y = 0.0;
                         self.camera.on_ground = true;
+                        self.play_world(crate::audio::Sound::SplashOut, seat);
                     }
+                    self.boat_kick = 0.0;
+                    self.boat_show = 0.0;
+                    self.boat_stroke = 0.0;
                     self.gui.push_chat("aboard");
                 } else if self.pig.saddled()
                     && self
@@ -8239,6 +8482,7 @@ impl State {
         self.was_wet = false;
         self.water_sub = 0.0;
         self.splash_kick = 0.0;
+        self.clear_boat_feel();
         self.sync_pointer();
     }
 
@@ -8310,6 +8554,11 @@ impl State {
         self.sip = (self.sip - dt * 1.8).max(0.0);
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
         self.splash_kick = (self.splash_kick - dt * 5.0).max(0.0);
+        if !self.boat.aboard() {
+            self.boat_kick = (self.boat_kick - dt * 6.0).max(0.0);
+            self.boat_show = (self.boat_show - dt * 5.0).max(0.0);
+            self.boat_stroke = 0.0;
+        }
         self.bob_amount = (self.bob_amount - dt * 2.5).max(0.0);
         let crouch_goal = if self.input.crouch { 1.0 } else { 0.0 };
         self.crouch += (crouch_goal - self.crouch) * (dt * 10.0).min(1.0);
@@ -8344,6 +8593,7 @@ impl State {
         self.pin_crouch_shot_camera();
         self.pin_sprint_shot_camera();
         self.pin_swim_shot_camera();
+        self.pin_boat_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -8902,6 +9152,7 @@ impl State {
             self.sprint_kick * bob_scale,
             self.hit_kick * bob_scale,
             water_fov,
+            self.boat_kick * bob_scale,
         );
         let (side, rise) =
             crate::camera::head_bob(self.bob_phase, self.bob_amount * bob_scale);
@@ -9391,6 +9642,9 @@ impl State {
         if self.sprint_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sprint_quads(gui_w, gui_h, self.sprint_show));
         }
+        if self.boat_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::boat_quads(gui_w, gui_h, self.boat_show));
+        }
         if self.water_sub > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::water_quads(gui_w, gui_h, self.water_sub));
         }
@@ -9579,6 +9833,7 @@ impl State {
         self.poll_crouch_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
+        self.poll_boat_shot();
     }
 }
 
@@ -9601,6 +9856,13 @@ enum SwimShotPhase {
     Idle,
     WaitingDry,
     WaitingWet,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BoatShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingRow,
 }
 
 struct CapturedRgba {

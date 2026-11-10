@@ -27,6 +27,8 @@ pub enum Sound {
     SplashOut,
     /// A stroke while swimming. Slower and softer than a step.
     Swim,
+    /// A soft paddle dip while rowing a boat.
+    Paddle,
     Break,
     /// A low crumble when coal ore breaks.
     BreakCoal,
@@ -341,6 +343,7 @@ impl Audio {
             Sound::Splash => splash_wave(),
             Sound::SplashOut => splash_out_wave(),
             Sound::Swim => swim_wave(),
+            Sound::Paddle => paddle_wave(),
             Sound::Break => self.break_wave.clone(),
             Sound::BreakCoal => self.coal_wave.clone(),
             Sound::BreakIron => self.iron_wave.clone(),
@@ -692,6 +695,11 @@ fn splash_out_wave() -> Vec<i16> {
 /// A swim stroke. A soft noise, not a footstep tone.
 fn swim_wave() -> Vec<i16> {
     noise_burst(0.16, 0.14, 41)
+}
+
+/// A boat paddle. Softer and shorter than a swim stroke.
+fn paddle_wave() -> Vec<i16> {
+    noise_burst(0.12, 0.18, 47)
 }
 
 /// A soft splash. Noise, not a tone.
