@@ -268,6 +268,9 @@ pub const SHAFT_CHEST: (i32, i32) = (SHAFT_MOUTH.0 + 2, SHAFT_MOUTH.1);
 /// The blast furnace on the apron, one block south of the chest.
 pub const SHAFT_BLAST: (i32, i32) = (SHAFT_CHEST.0, SHAFT_CHEST.1 + 1);
 
+/// Grindstone on the apron, one block north of the chest.
+pub const SHAFT_GRIND: (i32, i32) = (SHAFT_CHEST.0, SHAFT_CHEST.1 - 1);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Broken stone-brick shrine, southeast of the demo pad.
@@ -492,6 +495,10 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     let blast_x = (SHAFT_BLAST.0 - chunk_x * 16) as u8;
     let blast_z = (SHAFT_BLAST.1 - chunk_z * 16) as u8;
     blocks.push((blast_x, floor, blast_z, Block::new("blast_furnace", 0)));
+    // North of the chest: clear Efficiency or sharpen a worn pick.
+    let grind_x = (SHAFT_GRIND.0 - chunk_x * 16) as u8;
+    let grind_z = (SHAFT_GRIND.1 - chunk_z * 16) as u8;
+    blocks.push((grind_x, floor, grind_z, Block::new("grindstone", 0)));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -988,6 +995,11 @@ mod tests {
         assert_eq!(
             (-2 * 16 + 10, 2 * 16 + i32::from(local_z + 1)),
             SHAFT_BLAST
+        );
+        assert_eq!(shaft.block(10, post, local_z - 1).id, "grindstone");
+        assert_eq!(
+            (-2 * 16 + 10, 2 * 16 + i32::from(local_z - 1)),
+            SHAFT_GRIND
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;

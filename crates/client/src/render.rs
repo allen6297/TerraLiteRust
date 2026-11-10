@@ -3416,7 +3416,7 @@ impl State {
             "anvil" => self.gui.open_anvil(),
             "enchanting_table" => self.gui.open_enchanting(hit.block),
             "brewing_stand" => self.gui.open_brewing(),
-            "grindstone" => self.gui.open_grind(),
+            "grindstone" => self.gui.open_grind(hit.block),
             "smithing_table" => self.gui.open_smith(),
             "loom" => self.gui.open_loom(),
             "cartography_table" => self.gui.open_chart(),
@@ -8673,6 +8673,75 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shaft grindstone panel mid-spark after clearing Efficiency, then quit with a PNG.
+    pub fn arm_grind_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (gx, gz) = rebuild_world::SHAFT_GRIND;
+        let mut gy = 4;
+        for y in 0..80 {
+            if self.world.block_at(gx, y, gz).id == "grindstone" {
+                gy = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(gx, gz);
+        let focus = glam::Vec3::new(gx as f32 + 0.5, gy as f32 + 0.85, gz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            gx as f32 + 2.8,
+            gy as f32 + 1.35 + body::EYE_HEIGHT,
+            gz as f32 - 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let spark_at = [gx as f32 + 0.5, gy as f32 + 0.95, gz as f32 + 0.5];
+        self.note_shot_at = Some(spark_at);
+        self.note_shot_pitch = 3;
+        self.note_shot_book = false;
+        self.drops.puff(spark_at, [0.78, 0.76, 0.70]);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(3), spark_at);
+        let _ = self.gui.open_grind([gx, gy, gz]);
+        self.gui.note_grind("ground");
+        self.gui.push_chat("ground");
+        self.found_mine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        // Keen then clear so the tip reads as a freshly ground pick.
+        let _ = self.hotbar.collect("bookshelf");
+        let _ = self.hotbar.enchant_pick();
+        let _ = self.hotbar.grind_pick();
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(gx + dx * 8, gz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shrine enchant panel mid-swirl with Efficiency tip, then quit with a PNG.
     pub fn arm_enchant_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -8728,7 +8797,7 @@ impl State {
         self.found_shrine = true;
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("iron_pickaxe");
-        let _ = self.hotbar.give_stack("bookshelf");
+        let _ = self.hotbar.collect("bookshelf");
         let _ = self.hotbar.enchant_pick();
         self.hotbar_dirty = true;
         self.set_capture(false);
@@ -11579,6 +11648,16 @@ impl State {
                     self.gui.note_grind(word);
                     self.gui.push_chat(word);
                     self.hotbar_dirty = true;
+                    if matches!(word, "ground" | "sharpened") {
+                        if let Some(at) = self.gui.grind_at() {
+                            let source =
+                                [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                            let pitch = if word == "ground" { 3 } else { 6 };
+                            self.play_world(crate::audio::Sound::Note(pitch), source);
+                            self.drops.puff(source, [0.78, 0.76, 0.70]);
+                            self.rebuild_drops();
+                        }
+                    }
                 }
                 if self.gui.smith_open() && code == KeyCode::Enter {
                     self.try_smith();

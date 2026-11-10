@@ -698,6 +698,8 @@ pub struct Gui {
     grind_open: bool,
     /// The line under the grind title. Enter replaces it with the grind word.
     grind_note: String,
+    /// The grindstone the panel is clearing at.
+    grind_at: Option<[i32; 3]>,
     smith_open: bool,
     /// The line under the smith title. Enter replaces it with the upgrade word.
     smith_note: String,
@@ -854,6 +856,7 @@ impl Gui {
                 brew_note: String::new(),
                 grind_open: false,
                 grind_note: String::new(),
+                grind_at: None,
                 smith_open: false,
                 smith_note: String::new(),
                 loom_open: false,
@@ -968,6 +971,7 @@ impl Gui {
                     brew_note: String::new(),
                     grind_open: false,
                     grind_note: String::new(),
+                    grind_at: None,
                     smith_open: false,
                     smith_note: String::new(),
                     loom_open: false,
@@ -1092,6 +1096,7 @@ impl Gui {
             brew_note: String::new(),
             grind_open: false,
             grind_note: String::new(),
+            grind_at: None,
             smith_open: false,
             smith_note: String::new(),
             loom_open: false,
@@ -1564,6 +1569,7 @@ impl Gui {
         self.enchant_at = None;
         self.brew_open = false;
         self.grind_open = false;
+        self.grind_at = None;
         self.smith_open = false;
         self.loom_open = false;
         self.chart_open = false;
@@ -1904,10 +1910,11 @@ impl Gui {
     }
 
     /// A grind panel. Other screens keep it closed.
-    pub fn open_grind(&mut self) -> bool {
+    pub fn open_grind(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
+        self.grind_at = Some(at);
         self.grind_note = "enter clears efficiency".to_string();
         self.grind_open = true;
         true
@@ -1915,6 +1922,10 @@ impl Gui {
 
     pub fn grind_open(&self) -> bool {
         self.grind_open
+    }
+
+    pub fn grind_at(&self) -> Option<[i32; 3]> {
+        self.grind_at
     }
 
     /// The word the last grind left on the panel.
@@ -3118,6 +3129,7 @@ impl Gui {
     fn on_grind(&mut self, code: KeyCode) -> bool {
         if code == KeyCode::KeyF || code == KeyCode::Escape {
             self.grind_open = false;
+            self.grind_at = None;
             return true;
         }
         code == KeyCode::Enter
@@ -8158,6 +8170,7 @@ mod tests {
             brew_note: String::new(),
             grind_open: false,
             grind_note: String::new(),
+            grind_at: None,
             smith_open: false,
             smith_note: String::new(),
             loom_open: false,
@@ -8707,13 +8720,15 @@ mod tests {
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.brew_open());
 
-        assert!(gui.open_grind());
+        assert!(gui.open_grind([7, 1, 7]));
         assert_eq!(gui.screen_id(), "grindstone");
+        assert_eq!(gui.grind_at(), Some([7, 1, 7]));
         assert!(!gui.quads(1280.0, 720.0).is_empty());
         assert!(gui.on_press(KeyCode::Enter));
         assert!(gui.grind_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.grind_open());
+        assert_eq!(gui.grind_at(), None);
 
         assert!(gui.open_smith());
         assert_eq!(gui.screen_id(), "smithing");
