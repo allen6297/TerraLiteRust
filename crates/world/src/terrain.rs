@@ -187,6 +187,9 @@ pub const CAMP_HIVE: (i32, i32) = (CAMP_FIRE.0 - 2, CAMP_FIRE.1 + 2);
 /// Cauldron southeast of the fire (south of the jukebox).
 pub const CAMP_CAULDRON: (i32, i32) = (CAMP_FIRE.0 + 2, CAMP_FIRE.1 - 2);
 
+/// Fenced wheat plot east of the camp ring.
+pub const CAMP_FARM: (i32, i32) = (CAMP_FIRE.0 + 5, CAMP_FIRE.1);
+
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
 /// A ruined ring, a campfire, and a chest. Only the camp chunk gets one.
@@ -253,6 +256,40 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
     blocks.push((local_x - 2, floor, local_z + 2, Block::new("beehive", 0)));
     // Southeast of the fire: pour or scoop water.
     blocks.push((local_x + 2, floor, local_z - 2, Block::new("cauldron", 0)));
+    // East of the ring: a fenced wheat plot with a west-facing gate.
+    let fx0 = 11u8;
+    let fx1 = 14u8;
+    let fz0 = 5u8;
+    let fz1 = 8u8;
+    blocks.retain(|(x, y, z, _)| {
+        !(*x >= fx0 && *x <= fx1 && *z >= fz0 && *z <= fz1 && *y + 1 >= floor)
+    });
+    for lz in fz0..=fz1 {
+        for lx in fx0..=fx1 {
+            let top = blocks
+                .iter()
+                .filter(|(x, _, z, _)| *x == lx && *z == lz)
+                .map(|(_, y, _, _)| *y)
+                .max()
+                .unwrap_or(0);
+            for y in (top + 1)..floor.saturating_sub(1) {
+                blocks.push((lx, y, lz, Block::new("dirt", 0)));
+            }
+            let edge = lx == fx0 || lx == fx1 || lz == fz0 || lz == fz1;
+            let gate = lx == fx0 && lz == local_z;
+            if edge && !gate {
+                blocks.push((lx, floor - 1, lz, Block::new("grass", 0)));
+                blocks.push((lx, floor, lz, Block::new("fence", 0)));
+            } else if gate {
+                blocks.push((lx, floor - 1, lz, Block::new("grass", 0)));
+                blocks.push((lx, floor, lz, Block::new("fence_gate", 0)));
+            } else {
+                blocks.push((lx, floor - 1, lz, Block::new("farmland", 0)));
+                let stage = (lx + lz) % 4;
+                blocks.push((lx, floor, lz, Block::new("wheat_crop", stage)));
+            }
+        }
+    }
 }
 
 /// The open pit of the mine mouth, west and south of the demo pad.
@@ -883,6 +920,14 @@ mod tests {
             (2 * 16 + i32::from(x + 2), -2 * 16 + i32::from(z - 2)),
             CAMP_CAULDRON
         );
+        assert_eq!(camp.block(x + 5, y - 1, z).id, "farmland");
+        assert_eq!(camp.block(x + 5, y, z).id, "wheat_crop");
+        assert_eq!(
+            (2 * 16 + i32::from(x + 5), -2 * 16 + i32::from(z)),
+            CAMP_FARM
+        );
+        assert_eq!(camp.block(x + 4, y, z).id, "fence_gate");
+        assert_eq!(camp.block(x + 4, y, z - 1).id, "fence");
         let elsewhere = generate_chunk(3, 0);
         for local_z in 0..16u8 {
             for local_x in 0..16u8 {

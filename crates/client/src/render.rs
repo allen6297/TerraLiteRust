@@ -1037,6 +1037,7 @@ pub struct State {
     rain_told: bool,
     /// First approach chat tips for the three findable landmarks this session.
     found_camp: bool,
+    found_farm: bool,
     found_shrine: bool,
     found_mine: bool,
     found_clay: bool,
@@ -2034,6 +2035,7 @@ impl State {
             rain_mix: 0.0,
             rain_told: false,
             found_camp: false,
+            found_farm: false,
             found_shrine: false,
             found_mine: false,
             found_clay: false,
@@ -3750,6 +3752,10 @@ impl State {
         if !self.found_camp && near(rebuild_world::CAMP_FIRE.0, rebuild_world::CAMP_FIRE.1) {
             self.found_camp = true;
             self.gui.push_chat("a camp");
+        }
+        if !self.found_farm && near(rebuild_world::CAMP_FARM.0, rebuild_world::CAMP_FARM.1) {
+            self.found_farm = true;
+            self.gui.push_chat("a farm plot");
         }
         if !self.found_shrine && near(rebuild_world::SHRINE.0, rebuild_world::SHRINE.1) {
             self.found_shrine = true;
@@ -8966,6 +8972,72 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(lx + dx * 8, lz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Camp east fence plot with wheat, then quit with a PNG.
+    pub fn arm_farm_plot_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CAMP_FARM;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "wheat_crop" {
+                cy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 - 3.4,
+            cy as f32 + 1.15 + body::EYE_HEIGHT,
+            cz as f32 + 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote = [cx as f32 + 0.5, cy as f32 + 1.05, cz as f32 + 0.5];
+        self.note_shot_at = Some(mote);
+        self.note_shot_pitch = 2;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(mote, [0.55, 0.72, 0.28]);
+        self.drops.note(mote, 2);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(2), mote);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("wooden_hoe");
+        let _ = self.hotbar.collect("wheat_seeds");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("plot");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
