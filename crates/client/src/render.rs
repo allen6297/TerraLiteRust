@@ -1040,6 +1040,8 @@ pub struct State {
     found_shrine: bool,
     found_mine: bool,
     found_clay: bool,
+    /// Once: walked up to the starter compound demo by the pad.
+    found_compound: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -2016,6 +2018,7 @@ impl State {
             found_shrine: false,
             found_mine: false,
             found_clay: false,
+            found_compound: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3725,6 +3728,12 @@ impl State {
         if !self.found_clay && near(rebuild_world::CLAY_BANK.0, rebuild_world::CLAY_BANK.1) {
             self.found_clay = true;
             self.gui.push_chat("clay under the water");
+        }
+        if !self.found_compound
+            && near(rebuild_world::COMPOUND_DEMO.0, rebuild_world::COMPOUND_DEMO.1)
+        {
+            self.found_compound = true;
+            self.gui.push_chat("compound loop by the pad");
         }
     }
 
@@ -7364,6 +7373,8 @@ impl State {
             self.arm_creative_shot(path);
             return;
         }
+        // Pad starter demo: photograph the stamped fixture loops in place.
+        let demo_shot = name.contains("demo") || name.contains("starter");
         let ember = name.contains("ember");
         let flow = name.contains("flow");
         let pipes = name.contains("pipe") || name.contains("wire");
@@ -7381,6 +7392,7 @@ impl State {
             && !gen_shot
             && !spout_shot
             && !drain_shot
+            && !demo_shot
             && (name.contains("tank") || name.contains("buffer"));
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -7395,7 +7407,8 @@ impl State {
         self.rebuild_guests();
         // Ember / wire / pump / battery / lamp / generator shots at night so fill light reads.
         self.clock.set_time_of_day(
-            if ember || pipes || pump_shot || battery_shot || lamp_shot || gen_shot {
+            if demo_shot || ember || pipes || pump_shot || battery_shot || lamp_shot || gen_shot
+            {
                 0.88
             } else {
                 0.42
@@ -7404,6 +7417,112 @@ impl State {
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        if demo_shot {
+            // Stamp the pad loops even when a dirty save is loaded, then photograph.
+            let (dx, dz) = rebuild_world::COMPOUND_DEMO;
+            let mut changes = Vec::new();
+            // Clear past the camera stand so generated terrain does not bury the shot.
+            for z in 8..=17 {
+                for x in 1..=16 {
+                    changes.push(CellChange {
+                        x,
+                        y: 0,
+                        z,
+                        block: Block::new("grass", 0),
+                    });
+                    for y in 1..=6 {
+                        changes.push(CellChange {
+                            x,
+                            y,
+                            z,
+                            block: Block::AIR,
+                        });
+                    }
+                }
+            }
+            // West: tank → pipe → spout (+X). East: generator → wire → battery → lamp.
+            changes.push(CellChange {
+                x: 3,
+                y: 1,
+                z: 12,
+                block: tank_at(FILL_WATER, 5),
+            });
+            changes.push(CellChange {
+                x: 4,
+                y: 1,
+                z: 12,
+                block: Block::new("pipe", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: 5,
+                y: 1,
+                z: 12,
+                block: Block::new("spout", pump_meta(0, true)),
+            });
+            changes.push(CellChange {
+                x: 11,
+                y: 1,
+                z: 10,
+                block: generator_at(true),
+            });
+            changes.push(CellChange {
+                x: 12,
+                y: 1,
+                z: 10,
+                block: Block::new("wire", 0),
+            });
+            changes.push(CellChange {
+                x: 13,
+                y: 1,
+                z: 10,
+                block: battery_at(4),
+            });
+            changes.push(CellChange {
+                x: 14,
+                y: 1,
+                z: 10,
+                block: lamp_at(true),
+            });
+            // Stairs stay as the pad landmark south of the oak.
+            changes.push(CellChange {
+                x: 8,
+                y: 1,
+                z: 12,
+                block: Block::new("oak_stairs", 0),
+            });
+            apply_changes(&mut self.world, &changes);
+            for change in &changes {
+                self.chunk_bake.touch(change.x, change.z);
+            }
+            let _ = apply_water_spouts(&mut self.world, [5, 1, 12], 8, 2);
+            let _ = apply_ember_lamps(&mut self.world, [13, 1, 10], 8, 4, false);
+            self.chunk_bake.touch(5, 12);
+            self.chunk_bake.touch(6, 12);
+            self.chunk_bake.touch(14, 10);
+            self.found_compound = true;
+            self.gui.push_chat("compound loop by the pad");
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            let eye = glam::Vec3::new(
+                dx as f32 + 0.5,
+                1.0 + 2.15 + body::EYE_HEIGHT,
+                15.4,
+            );
+            let focus = glam::Vec3::new(dx as f32 + 0.5, 1.2, dz as f32 + 0.3);
+            self.camera = Camera::looking_at(eye, focus);
+            let (yaw, pitch) = self.camera.yaw_pitch();
+            self.cook_shot_eye = eye;
+            self.cook_shot_yaw = yaw;
+            self.cook_shot_pitch = pitch;
+            self.posed_eye = eye;
+            self.posed_yaw = yaw;
+            self.posed_pitch = pitch;
+            self.pose_dirty = true;
+            self.wanted_focus = chunk_of(self.camera.eye);
+            let _ = self.window.focus_window();
+            return;
+        }
 
         let gx = 11;
         let gy = 1;

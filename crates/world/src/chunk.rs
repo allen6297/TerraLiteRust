@@ -632,12 +632,28 @@ pub(crate) fn chunk_from_root(root: &Tag, expected: (i32, i32)) -> Result<Chunk,
                 Some(bytes)
             }
         };
-        chunk.sections[y as usize] = Some(Box::new(decode_section(y, blocks, data, add)));
+        let fills = match section_tag.get("Fills") {
+            None => None,
+            Some(tag) => {
+                let bytes = tag.as_bytes().ok_or(Error::BadSection("section Fills"))?;
+                if bytes.len() != 4096 {
+                    return Err(Error::BadSection("section Fills length"));
+                }
+                Some(bytes)
+            }
+        };
+        chunk.sections[y as usize] = Some(Box::new(decode_section(y, blocks, data, add, fills)));
     }
     Ok(chunk)
 }
 
-fn decode_section(y: u8, blocks: &[u8], data: &[u8], add: Option<&[u8]>) -> Section {
+fn decode_section(
+    y: u8,
+    blocks: &[u8],
+    data: &[u8],
+    add: Option<&[u8]>,
+    fills: Option<&[u8]>,
+) -> Section {
     let mut section = Section::empty(y);
     for index in 0..4096 {
         let mut id = blocks[index] as u16;
@@ -646,6 +662,9 @@ fn decode_section(y: u8, blocks: &[u8], data: &[u8], add: Option<&[u8]>) -> Sect
         }
         section.blocks[index] = anvil_name(id);
         section.meta[index] = nibble(data, index);
+        if let Some(fills) = fills {
+            section.fills[index] = fills[index] & 0x03;
+        }
     }
     section
 }
@@ -671,7 +690,9 @@ fn section_to_tag(section: &Section) -> Tag {
     let mut blocks = vec![0u8; 4096];
     let mut data = vec![0u8; 2048];
     let mut add = vec![0u8; 2048];
+    let mut fills = vec![FILL_NONE; 4096];
     let mut needs_add = false;
+    let mut needs_fills = false;
     for index in 0..4096 {
         let id = anvil_id(section.blocks[index]);
         blocks[index] = (id & 0xFF) as u8;
@@ -681,6 +702,11 @@ fn section_to_tag(section: &Section) -> Tag {
         }
         set_nibble(&mut add, index, high);
         set_nibble(&mut data, index, section.meta[index]);
+        let fill = section.fills[index] & 0x03;
+        fills[index] = fill;
+        if fill != FILL_NONE {
+            needs_fills = true;
+        }
     }
     let mut entries = vec![
         ("Y".into(), Tag::Byte(section.y as i8)),
@@ -689,6 +715,9 @@ fn section_to_tag(section: &Section) -> Tag {
     ];
     if needs_add {
         entries.push(("Add".into(), Tag::ByteArray(add)));
+    }
+    if needs_fills {
+        entries.push(("Fills".into(), Tag::ByteArray(fills)));
     }
     Tag::Compound(entries)
 }
@@ -752,5 +781,27 @@ mod tests {
     fn out_of_range_block_is_rejected() {
         let err = Chunk::from_blocks(0, 0, [(16, 0, 0, Block::new("stone", 0))]).unwrap_err();
         assert!(matches!(err, Error::BadBlockCoord));
+    }
+
+    #[test]
+    fn fills_roundtrip_through_section_nbt() {
+        let chunk = Chunk::from_blocks(
+            0,
+            0,
+            [
+                (3, 1, 4, tank_at(FILL_WATER, 5)),
+                (5, 1, 4, battery_at(4)),
+                (7, 1, 4, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            ],
+        )
+        .unwrap();
+        let loaded = chunk_from_root(&chunk_to_nbt(&chunk), (0, 0)).unwrap();
+        assert_eq!(loaded.block(3, 1, 4), tank_at(FILL_WATER, 5));
+        assert_eq!(loaded.block(5, 1, 4), battery_at(4));
+        assert_eq!(
+            loaded.block(7, 1, 4),
+            Block::new("pipe", 0).with_fill(FILL_WATER)
+        );
+        assert_eq!(loaded.block(0, 0, 0).fill, FILL_NONE);
     }
 }

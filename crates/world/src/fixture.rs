@@ -7,7 +7,8 @@
 //! its east edge, plus oak stairs just south of the log, plus a copper grate
 //! for compound fills, plus coal ore and iron ore beside those stairs, plus a
 //! sign just west of the coal, plus an orange lantern just southwest of that
-//! sign, plus a perch beside the chicken.
+//! sign, plus a perch beside the chicken, plus a starter compound demo
+//! (tank→pipe→spout west of the stairs; generator→wire→battery→lamp east).
 //! Public ids:
 //! grass, cobblestone, coal ore, iron ore, deepslate, oak log, oak stairs, sign, lantern, wool, and
 //! `marker` (stored above 255 in the region file so the Add nibble is exercised). The stairs are two boxes
@@ -17,12 +18,17 @@
 //! crossing a border changes the ground color. The east neighbor has a
 //! cobblestone against the center's, and each corner has a short post.
 
-use crate::chunk::{Block, Chunk, chunk_to_nbt};
+use crate::chunk::{
+    Block, Chunk, FILL_WATER, chunk_to_nbt, generator_at, lamp_at, pump_meta, tank_at,
+};
 use crate::cluster::Cluster;
 use crate::nbt;
 use crate::region;
 use crate::shape::{COAL_ORE, IRON_ORE, LANTERN, OAK_STAIRS, SIGN};
 use crate::size::WorldSize;
+
+/// Midpoint of the starter compound demo (water + ember loops by the pad).
+pub const COMPOUND_DEMO: (i32, i32) = (8, 11);
 
 pub fn synthetic_chunk() -> Chunk {
     Chunk::from_blocks(0, 0, demo_blocks()).expect("synthetic chunk fits in one section")
@@ -76,6 +82,15 @@ fn synthetic_chunk_at(x: i32, z: i32) -> Chunk {
         blocks.push((6, 1, 14, Block::new(LANTERN, 0)));
         // Beside the chicken, west of the oak. The seat is a Blockbench model.
         blocks.push((4, 1, 9, Block::new("perch", 0)));
+        // Starter compound demo — west: tank → pipe → spout (+X).
+        blocks.push((3, 1, 12, tank_at(FILL_WATER, 5)));
+        blocks.push((4, 1, 12, Block::new("pipe", 0).with_fill(FILL_WATER)));
+        blocks.push((5, 1, 12, Block::new("spout", pump_meta(0, true))));
+        // East: generator → wire → battery → lamp (ember loop).
+        blocks.push((11, 1, 10, generator_at(true)));
+        blocks.push((12, 1, 10, Block::new("wire", 0)));
+        blocks.push((13, 1, 10, crate::chunk::battery_at(4)));
+        blocks.push((14, 1, 10, lamp_at(true)));
         return Chunk::from_blocks(0, 0, blocks).expect("center chunk");
     }
     let mut blocks = wool_floor(neighbor_wool(x, z));
@@ -165,9 +180,10 @@ mod tests {
         let center = cluster.get(0, 0).unwrap();
         let demo = synthetic_chunk();
         // Center demo is 267 blocks, plus the east-edge cobblestone, the
-        // stairs, the coal ore, the iron ore, the sign, the lantern, and the perch.
+        // stairs, four compound hosts, the coal ore, the iron ore, the sign,
+        // the lantern, the perch, and the seven compound-demo cells (285).
         // Eight wool floors are 256 each. The east neighbor and the four
-        // corners each add one cobblestone: 274 + 8 * 256 + 5 = 2327.
+        // corners each add one cobblestone: 285 + 8 * 256 + 5 = 2338.
         // The rest of the 31×31 square is empty.
         let side = crate::WorldSize::Small.side();
         let radius = crate::WorldSize::Small.chunk_radius();
@@ -183,8 +199,8 @@ mod tests {
                 (radius + 1) * 16
             )
         );
-        assert_eq!(center.non_air_count(), 274);
-        assert_eq!(cluster.non_air_count(), 2327);
+        assert_eq!(center.non_air_count(), 285);
+        assert_eq!(cluster.non_air_count(), 2338);
         assert_eq!(center.block(15, 1, 8), Block::new("cobblestone", 0));
         assert_eq!(center.block(8, 1, 12), Block::new(OAK_STAIRS, 0));
         assert_eq!(center.block(9, 1, 13), Block::new(COAL_ORE, 0));
@@ -192,23 +208,43 @@ mod tests {
         assert_eq!(center.block(7, 1, 13), Block::new(SIGN, 0));
         assert_eq!(center.block(6, 1, 14), Block::new(LANTERN, 0));
         assert_eq!(center.block(4, 1, 9), Block::new("perch", 0));
+        assert_eq!(center.block(3, 1, 12).id, "tank");
+        assert_eq!(center.block(4, 1, 12).id, "pipe");
+        assert_eq!(center.block(5, 1, 12).id, "spout");
+        assert_eq!(center.block(11, 1, 10).id, "generator");
+        assert_eq!(center.block(12, 1, 10).id, "wire");
+        assert_eq!(center.block(13, 1, 10).id, "battery");
+        assert_eq!(center.block(14, 1, 10).id, "lamp");
         assert!(demo.block(15, 1, 8).is_air());
         assert!(demo.block(8, 1, 12).is_air());
         assert!(demo.block(9, 1, 13).is_air());
         assert!(demo.block(10, 1, 13).is_air());
         assert!(demo.block(7, 1, 13).is_air());
         assert!(demo.block(6, 1, 14).is_air());
+        let extras = [
+            (15u8, 1u16, 8u8),
+            (8, 1, 12),
+            (11, 1, 12),
+            (12, 1, 12),
+            (13, 1, 12),
+            (12, 1, 13),
+            (9, 1, 13),
+            (10, 1, 13),
+            (7, 1, 13),
+            (6, 1, 14),
+            (4, 1, 9),
+            (3, 1, 12),
+            (4, 1, 12),
+            (5, 1, 12),
+            (11, 1, 10),
+            (12, 1, 10),
+            (13, 1, 10),
+            (14, 1, 10),
+        ];
         for y in 0..256u16 {
             for z in 0..16u8 {
                 for x in 0..16u8 {
-                    if (x, y, z) == (15, 1, 8)
-                        || (x, y, z) == (8, 1, 12)
-                        || (x, y, z) == (9, 1, 13)
-                        || (x, y, z) == (10, 1, 13)
-                        || (x, y, z) == (7, 1, 13)
-                        || (x, y, z) == (6, 1, 14)
-                        || (x, y, z) == (4, 1, 9)
-                    {
+                    if extras.contains(&(x, y, z)) {
                         continue;
                     }
                     assert_eq!(center.block(x, y, z), demo.block(x, y, z));
