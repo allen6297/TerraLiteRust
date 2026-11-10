@@ -168,6 +168,7 @@ struct LivePlayer {
     y: f32,
     z: f32,
     yaw: f32,
+    name: String,
 }
 
 /// One chat line waiting for other Host/Join peers.
@@ -283,26 +284,46 @@ impl Drop for PeerLeave<'_> {
     }
 }
 
-fn note_peer(peers: &mut Vec<LivePlayer>, id: u32, x: f32, y: f32, z: f32, yaw: f32) {
+fn note_peer(
+    peers: &mut Vec<LivePlayer>,
+    id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    yaw: f32,
+    name: &str,
+) {
+    let cleaned = rebuild_world::player_label(name);
     if let Some(peer) = peers.iter_mut().find(|peer| peer.id == id) {
         peer.x = x;
         peer.y = y;
         peer.z = z;
         peer.yaw = yaw;
+        if !cleaned.is_empty() {
+            peer.name = cleaned;
+        }
         return;
     }
-    peers.push(LivePlayer { id, x, y, z, yaw });
+    peers.push(LivePlayer {
+        id,
+        x,
+        y,
+        z,
+        yaw,
+        name: if cleaned.is_empty() {
+            format!("Player{id}")
+        } else {
+            cleaned
+        },
+    });
 }
 
 fn other_peers(peers: &[LivePlayer], id: u32) -> Vec<PeerPose> {
     peers
         .iter()
         .filter(|peer| peer.id != id)
-        .map(|peer| PeerPose {
-            x: peer.x,
-            y: peer.y,
-            z: peer.z,
-            yaw: peer.yaw,
+        .map(|peer| {
+            PeerPose::new(peer.x, peer.y, peer.z, peer.yaw).with_name(&peer.name)
         })
         .collect()
 }
@@ -331,6 +352,7 @@ fn session(
             5.12,
             sz as f32 + 0.5,
             -1.57,
+            "",
         );
         let cells = occupied_cells(&guard.world);
         let (center_x, center_z) = guard.world.center();
@@ -363,12 +385,13 @@ fn session(
             z,
             yaw,
             pitch,
+            name,
         } = &request
         {
             if let Some(path) = save.as_deref() {
                 store_pose(path, *x, *y, *z, *yaw, *pitch);
             }
-            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw);
+            note_peer(&mut guard.peers, id, *x, *y, *z, *yaw, name);
             // Peer chat rides ahead of the pose list; client drains TAG_CHAT then peers.
             deliver_chats(&mut stream, &guard, id, &mut last_chat)?;
             let others = other_peers(&guard.peers, id);
@@ -963,16 +986,25 @@ mod tests {
         write_frame(&mut second, &encode_hello()).unwrap();
         let _ = read_frame(&mut second).unwrap();
 
-        write_frame(&mut second, &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0)).unwrap();
+        write_frame(
+            &mut second,
+            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2"),
+        )
+        .unwrap();
         let seen = decode_peers(&read_frame(&mut second).unwrap()).unwrap();
         assert_eq!(seen.len(), 1);
         assert!((seen[0].x - 8.5).abs() < 0.1);
+        assert_eq!(seen[0].name(), "Player1");
 
         // First player chats (echoed back); second receives it on the next pose poll.
         write_frame(&mut first, &encode_chat("hello there")).unwrap();
         let echo = decode_client(&read_frame(&mut first).unwrap()).unwrap();
         assert!(matches!(echo, ClientRequest::Chat { text } if text == "hello there"));
-        write_frame(&mut second, &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0)).unwrap();
+        write_frame(
+            &mut second,
+            &encode_pose(9.0, 5.0, 11.0, 0.4, 0.0, "Player2"),
+        )
+        .unwrap();
         let chat_frame = read_frame(&mut second).unwrap();
         let got = decode_client(&chat_frame).unwrap();
         assert!(matches!(got, ClientRequest::Chat { text } if text == "hello there"));

@@ -83,7 +83,7 @@ Keys 1 through 9 and 0 while it is open stash one from that hotbar slot. Those n
 slots, the hotbar, and where you stand are written into the same save. G opens the guide.
 C lists registered commands. Enter runs the selected one.
 T opens chat. Enter sends a line of letters; solo echoes into the HUD log, and on a Host/Join listen peers see the line too.
-Joined players show as another body. A long fall spends hearts, and at none you
+Joined players show as another body with a short nameplate (Player2 by join order, or `--name`). A long fall spends hearts, and at none you
 respawn by the stairs. F opens a chest, a crafting table, or a furnace. Settings world size also changes a
 dedicated server.
 The hotbar stays.
@@ -194,6 +194,10 @@ struct Args {
     shot_localhost_join: Option<std::path::PathBuf>,
     /// In-world chat overlay (field + HUD log), then quit.
     shot_localhost_chat: Option<std::path::PathBuf>,
+    /// Peer nameplates above Host/Join bodies, then quit.
+    shot_peer_nameplates: Option<std::path::PathBuf>,
+    /// Host/Join nameplate label sent with pose.
+    name: Option<String>,
     /// Start a private localhost listen, then join as host.
     host: bool,
     /// Join an existing localhost listen.
@@ -436,6 +440,8 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_creative_flight: args.shot_creative_flight,
         shot_localhost_join: args.shot_localhost_join,
         shot_localhost_chat: args.shot_localhost_chat,
+        shot_peer_nameplates: args.shot_peer_nameplates,
+        name: args.name,
         host: args.host,
         join: args.join,
         creative: args.creative,
@@ -557,6 +563,8 @@ struct App {
     shot_creative_flight: Option<std::path::PathBuf>,
     shot_localhost_join: Option<std::path::PathBuf>,
     shot_localhost_chat: Option<std::path::PathBuf>,
+    shot_peer_nameplates: Option<std::path::PathBuf>,
+    name: Option<String>,
     host: bool,
     join: bool,
     creative: bool,
@@ -782,8 +790,14 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_localhost_join.take() {
                     state.arm_localhost_join_shot(path);
                 }
+                if let Some(name) = self.name.take() {
+                    state.set_player_name(&name);
+                }
                 if let Some(path) = self.shot_localhost_chat.take() {
                     state.arm_localhost_chat_shot(path);
+                }
+                if let Some(path) = self.shot_peer_nameplates.take() {
+                    state.arm_peer_nameplates_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1136,6 +1150,8 @@ where
         shot_creative_flight: None,
         shot_localhost_join: None,
         shot_localhost_chat: None,
+        shot_peer_nameplates: None,
+        name: None,
         host: false,
         join: false,
         creative: false,
@@ -1469,6 +1485,18 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-localhost-chat".to_string())?;
                 parsed.shot_localhost_chat = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-peer-nameplates" | "--shot-nameplates" | "--shot-peer-names" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-peer-nameplates".to_string())?;
+                parsed.shot_peer_nameplates = Some(std::path::PathBuf::from(value));
+            }
+            "--name" | "--player-name" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --name".to_string())?;
+                parsed.name = Some(value);
             }
             "--host" | "--listen" => {
                 parsed.host = true;
@@ -1901,5 +1929,19 @@ mod tests {
             args.shot_localhost_chat.as_deref(),
             Some(std::path::Path::new("localhost-chat.png"))
         );
+        let Parsed::Run(args) = parse_args([
+            "--shot-peer-nameplates".into(),
+            "peer-nameplates.png".into(),
+            "--name".into(),
+            "Kalob".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_peer_nameplates.as_deref(),
+            Some(std::path::Path::new("peer-nameplates.png"))
+        );
+        assert_eq!(args.name.as_deref(), Some("Kalob"));
     }
 }

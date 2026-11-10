@@ -85,7 +85,7 @@ pub use net::{
     chat_line, decode_cell, decode_client, decode_peers, decode_welcome, encode_bag, encode_break,
     encode_cell, encode_chat, encode_chest, encode_hello, encode_hotbar, encode_peers,
     encode_place, encode_pose, encode_save, encode_welcome, encode_world_size, localhost,
-    occupied_cells, read_frame, valid_save_name, world_size_from_radius, write_frame,
+    occupied_cells, player_label, read_frame, valid_save_name, world_size_from_radius, write_frame,
 };
 pub use pack::{
     BlockEntry, HeatStation, ItemDisplay, Light, Pack, ShapeEntry, asset_png, asset_text,

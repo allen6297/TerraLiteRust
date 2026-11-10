@@ -128,12 +128,14 @@ pub enum ClientRequest {
         slots: Vec<(String, i32)>,
     },
     /// Eye position and look, in radians for yaw and pitch.
+    /// `name` is a short Host/Join label (letters/digits, at most 12).
     Pose {
         x: f32,
         y: f32,
         z: f32,
         yaw: f32,
         pitch: f32,
+        name: String,
     },
     /// A line of letters and spaces, at most 32 characters.
     Chat {
@@ -148,13 +150,73 @@ pub enum ClientRequest {
     },
 }
 
-/// One other player's eye and look, from a peers frame.
+/// One other player's eye, look, and short nameplate label.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PeerPose {
     pub x: f32,
     pub y: f32,
     pub z: f32,
     pub yaw: f32,
+    name: [u8; 12],
+    name_len: u8,
+}
+
+impl PeerPose {
+    pub fn new(x: f32, y: f32, z: f32, yaw: f32) -> Self {
+        Self {
+            x,
+            y,
+            z,
+            yaw,
+            name: [0; 12],
+            name_len: 0,
+        }
+    }
+
+    pub fn with_name(mut self, name: &str) -> Self {
+        self.set_name(name);
+        self
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        let cleaned = player_label(name);
+        let bytes = cleaned.as_bytes();
+        let len = bytes.len().min(12);
+        self.name[..len].copy_from_slice(&bytes[..len]);
+        if len < 12 {
+            self.name[len..].fill(0);
+        }
+        self.name_len = len as u8;
+    }
+
+    pub fn name(&self) -> &str {
+        let len = self.name_len as usize;
+        std::str::from_utf8(&self.name[..len.min(12)]).unwrap_or("")
+    }
+
+    /// `Player{id}` when no name was sent.
+    pub fn label_or_player(&self, id: u32) -> String {
+        let name = self.name();
+        if name.is_empty() {
+            format!("Player{id}")
+        } else {
+            name.to_string()
+        }
+    }
+}
+
+/// Letters and digits for a nameplate, at most 12 characters.
+pub fn player_label(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        }
+        if out.len() >= 12 {
+            break;
+        }
+    }
+    out
 }
 
 /// Map a welcome radius back to a finite world size.
@@ -299,12 +361,17 @@ pub fn encode_bag(slots: &[(String, i32)]) -> Vec<u8> {
     out
 }
 
-pub fn encode_pose(x: f32, y: f32, z: f32, yaw: f32, pitch: f32) -> Vec<u8> {
-    let mut out = Vec::with_capacity(21);
+pub fn encode_pose(x: f32, y: f32, z: f32, yaw: f32, pitch: f32, name: &str) -> Vec<u8> {
+    let label = player_label(name);
+    let bytes = label.as_bytes();
+    let len = bytes.len().min(12);
+    let mut out = Vec::with_capacity(22 + len);
     out.push(TAG_POSE);
     for value in [x, y, z, yaw, pitch] {
         push_f32(&mut out, value);
     }
+    out.push(len as u8);
+    out.extend_from_slice(&bytes[..len]);
     out
 }
 
@@ -346,7 +413,7 @@ pub fn encode_chat(text: &str) -> Vec<u8> {
 
 pub fn encode_peers(peers: &[PeerPose]) -> Vec<u8> {
     let count = peers.len().min(8);
-    let mut out = Vec::with_capacity(2 + count * 16);
+    let mut out = Vec::with_capacity(2 + count * 29);
     out.push(TAG_PEERS);
     out.push(count as u8);
     for peer in peers.iter().take(count) {
@@ -354,6 +421,9 @@ pub fn encode_peers(peers: &[PeerPose]) -> Vec<u8> {
         push_f32(&mut out, peer.y);
         push_f32(&mut out, peer.z);
         push_f32(&mut out, peer.yaw);
+        let len = peer.name_len.min(12);
+        out.push(len);
+        out.extend_from_slice(&peer.name[..len as usize]);
     }
     out
 }
@@ -374,12 +444,14 @@ pub fn decode_peers(body: &[u8]) -> Result<Vec<PeerPose>, String> {
         if pose.iter().any(|value| !value.is_finite()) {
             return Err("peer is not finite".into());
         }
-        peers.push(PeerPose {
-            x: pose[0],
-            y: pose[1],
-            z: pose[2],
-            yaw: pose[3],
-        });
+        let len = reader.u8()? as usize;
+        if len > 12 {
+            return Err(format!("peer name is too long ({len})"));
+        }
+        let bytes = reader.take(len)?;
+        let text =
+            std::str::from_utf8(bytes).map_err(|_| "peer name is not utf-8".to_string())?;
+        peers.push(PeerPose::new(pose[0], pose[1], pose[2], pose[3]).with_name(text));
     }
     reader.finish()?;
     Ok(peers)
@@ -505,12 +577,20 @@ pub fn decode_client(body: &[u8]) -> Result<ClientRequest, String> {
             if pose.iter().any(|value| !value.is_finite()) {
                 return Err("pose is not finite".into());
             }
+            let len = reader.u8()? as usize;
+            if len > 12 {
+                return Err(format!("pose name is too long ({len})"));
+            }
+            let bytes = reader.take(len)?;
+            let text =
+                std::str::from_utf8(bytes).map_err(|_| "pose name is not utf-8".to_string())?;
             ClientRequest::Pose {
                 x: pose[0],
                 y: pose[1],
                 z: pose[2],
                 yaw: pose[3],
                 pitch: pose[4],
+                name: player_label(text),
             }
         }
         TAG_CHAT => {
@@ -858,31 +938,31 @@ mod tests {
             other => panic!("bag, got {other:?}"),
         }
 
-        match decode_client(&encode_pose(8.5, 5.0, 14.4, -1.2, 0.1)).unwrap() {
+        match decode_client(&encode_pose(8.5, 5.0, 14.4, -1.2, 0.1, "Kalob")).unwrap() {
             ClientRequest::Pose {
                 x,
                 y,
                 z,
                 yaw,
                 pitch,
+                name,
             } => {
                 assert_eq!(x.to_bits(), 8.5f32.to_bits());
                 assert_eq!(y.to_bits(), 5.0f32.to_bits());
                 assert_eq!(z.to_bits(), 14.4f32.to_bits());
                 assert_eq!(yaw.to_bits(), (-1.2f32).to_bits());
                 assert_eq!(pitch.to_bits(), 0.1f32.to_bits());
+                assert_eq!(name, "Kalob");
             }
             other => panic!("pose, got {other:?}"),
         }
-        let peers = decode_peers(&encode_peers(&[PeerPose {
-            x: 8.5,
-            y: 5.0,
-            z: 14.0,
-            yaw: 0.5,
-        }]))
+        let peers = decode_peers(&encode_peers(&[PeerPose::new(8.5, 5.0, 14.0, 0.5)
+            .with_name("Player2")]))
         .unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].x.to_bits(), 8.5f32.to_bits());
+        assert_eq!(peers[0].name(), "Player2");
+        assert_eq!(player_label("Hi 2!"), "Hi2");
         match decode_client(&encode_chest(1, 2, 3, &[("dirt".into(), 4)])).unwrap() {
             ClientRequest::Chest { x, y, z, slots } => {
                 assert_eq!((x, y, z), (1, 2, 3));

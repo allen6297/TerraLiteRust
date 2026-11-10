@@ -1512,6 +1512,8 @@ pub struct State {
     cart_buf: Option<wgpu::Buffer>,
     cart_count: u32,
     others: Vec<crate::peers::Other>,
+    /// Host/Join nameplate label sent with pose (`--name`, default Player1).
+    player_name: String,
     peer_buf: Option<wgpu::Buffer>,
     peer_count: u32,
     /// Local Blockbench body. Drawn in third person (F5).
@@ -2582,6 +2584,7 @@ impl State {
             cart_buf: None,
             cart_count: 0,
             others: Vec::new(),
+            player_name: "Player1".to_string(),
             peer_buf: None,
             peer_count: 0,
             player: crate::player::Pose::new(),
@@ -2807,6 +2810,89 @@ impl State {
         self.menu
             .note_join(&format!("hosting 127.0.0.1:{}", self.port));
         self.menu.open_on("host");
+        let _ = self.window.focus_window();
+    }
+
+    /// Set the Host/Join nameplate label sent with pose.
+    pub fn set_player_name(&mut self, name: &str) {
+        let cleaned = rebuild_world::player_label(name);
+        self.player_name = if cleaned.is_empty() {
+            "Player1".to_string()
+        } else {
+            cleaned
+        };
+    }
+
+    /// Peer nameplates above Host/Join bodies, then quit with a PNG.
+    pub fn arm_peer_nameplates_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.set_player_name("Host");
+        self.others = vec![
+            crate::peers::Other {
+                eye: [10.2, 1.0 + crate::body::EYE_HEIGHT, 10.5],
+                yaw: -0.8,
+                name: "Player2".into(),
+            },
+            crate::peers::Other {
+                eye: [6.8, 1.0 + crate::body::EYE_HEIGHT, 9.2],
+                yaw: 0.6,
+                name: "Kalob".into(),
+            },
+        ];
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        let eye = glam::Vec3::new(8.5, 3.4 + crate::body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.2, 9.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
         let _ = self.window.focus_window();
     }
 
@@ -7749,9 +7835,18 @@ impl State {
             if let Some(peers) = self.link.try_peers() {
                 self.others = peers
                     .into_iter()
-                    .map(|peer| crate::peers::Other {
-                        eye: [peer.x, peer.y, peer.z],
-                        yaw: peer.yaw,
+                    .enumerate()
+                    .map(|(index, peer)| {
+                        let name = peer.name().to_string();
+                        crate::peers::Other {
+                            eye: [peer.x, peer.y, peer.z],
+                            yaw: peer.yaw,
+                            name: if name.is_empty() {
+                                crate::peers::default_label(index)
+                            } else {
+                                name
+                            },
+                        }
                     })
                     .collect();
                 self.rebuild_peers();
@@ -18911,7 +19006,14 @@ impl State {
         let eye = self.camera.eye;
         if self
             .link
-            .send(encode_pose(eye.x, eye.y, eye.z, yaw, pitch))
+            .send(encode_pose(
+                eye.x,
+                eye.y,
+                eye.z,
+                yaw,
+                pitch,
+                &self.player_name,
+            ))
             .is_err()
         {
             self.note_disconnect();
@@ -22389,6 +22491,17 @@ impl State {
             self.sipping,
             self.dead,
         );
+        if self.playing && !self.menu.is_open() && !self.dead && !self.others.is_empty() {
+            let aspect = (screen_w / screen_h.max(1.0)).max(0.01);
+            let vp = self.camera.view_proj(aspect);
+            quads.extend(crate::peers::nameplate_quads(
+                &self.others,
+                vp,
+                screen_w,
+                screen_h,
+                self.camera.eye,
+            ));
+        }
         if self.crouch > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::crouch_quads(gui_w, gui_h, self.crouch));
         }
