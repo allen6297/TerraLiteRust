@@ -1631,6 +1631,13 @@ pub fn load_dir(dir: &Path, hooks: &mut Hooks) -> Result<Vec<(PathBuf, Vec<Scrip
     let mut paths = Vec::new();
     collect_scripts(dir, &mut paths)?;
     paths.sort();
+    // Skip disabled RoseGold mods (saves/mods.json). Other dirs stay unfiltered.
+    if dir == Path::new(crate::mods_enable::MODS_DIR) {
+        paths.retain(|path| match crate::mods_enable::mod_id_for_path(dir, path) {
+            Some(id) => crate::mods_enable::mod_is_enabled(&id),
+            None => true,
+        });
+    }
     let host = Host::start();
     let mut loaded = Vec::new();
     for path in paths {

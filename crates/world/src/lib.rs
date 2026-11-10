@@ -39,6 +39,7 @@ mod pack;
 mod region;
 mod resource_packs;
 mod datapacks;
+mod mods_enable;
 mod registry;
 mod rosegold;
 mod shape;
@@ -107,6 +108,10 @@ pub use datapacks::{
     datapack_roots, datapack_selection, discover_datapacks, install_datapack_selection,
     list_datapack_json, prepare_datapack_overlays, resolve_datapack_file,
     selection_file as datapack_selection_file,
+};
+pub use mods_enable::{
+    MODS_DIR, ModEntry, ModKind, ModSelection, discover_mods, install_mod_selection, mod_is_enabled,
+    mod_selection, selection_file as mods_selection_file,
 };
 pub use rebuild_rosegold::{GuiElement, GuiScreen, SettingOption};
 pub use region::{load_chunk_from_path, load_chunk_from_region};

@@ -1270,6 +1270,7 @@ pub struct State {
     statistics: crate::statistics::Statistics,
     pack_picker: crate::resource_packs::PackPicker,
     datapack_picker: crate::datapacks::DataPackPicker,
+    mod_picker: crate::mods::ModPicker,
     /// F is down on a held spyglass.
     zoom_key: bool,
     /// Seconds until a held goat horn can sound again.
@@ -2468,6 +2469,7 @@ impl State {
             statistics: crate::statistics::Statistics::new(),
             pack_picker: crate::resource_packs::PackPicker::load(),
             datapack_picker: crate::datapacks::DataPackPicker::load(),
+            mod_picker: crate::mods::ModPicker::load(),
             zoom_key: false,
             horn_wait: 0.0,
             was_wet: false,
@@ -16655,6 +16657,49 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Mods enable list with craft-story toggled off (draft), then quit with a PNG.
+    pub fn arm_mods_enable_list_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_clay = true;
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+        self.mod_picker.refresh_from_disk();
+        self.mod_picker.toggle("craft-story");
+        self.menu.show_mods();
+
+        let eye = glam::Vec3::new(8.5, 2.2 + body::EYE_HEIGHT, 14.0);
+        let focus = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Resource pack picker with demo overlay enabled (draft), then quit with a PNG.
     pub fn arm_resource_pack_picker_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -21514,6 +21559,21 @@ impl State {
                     self.gui.push_chat(&format!("datapacks: {err}"));
                 }
             },
+            gui::MenuAction::ToggleMod => {
+                if let Some(id) = self.menu.take_mod_toggle() {
+                    self.mod_picker.toggle(&id);
+                }
+            }
+            gui::MenuAction::ApplyMods => match self.mod_picker.apply() {
+                Ok(()) => {
+                    self.gui
+                        .push_chat("mods saved — reload world to apply");
+                }
+                Err(err) => {
+                    eprintln!("mods: {err}");
+                    self.gui.push_chat(&format!("mods: {err}"));
+                }
+            },
             gui::MenuAction::Resume | gui::MenuAction::None => {}
         }
     }
@@ -25242,6 +25302,9 @@ impl State {
             let datapack_rows = self.datapack_picker.rows();
             let datapack_note = self.datapack_picker.note().to_string();
             let datapack_dirty = self.datapack_picker.dirty();
+            let mod_rows = self.mod_picker.rows();
+            let mod_note = self.mod_picker.note().to_string();
+            let mod_dirty = self.mod_picker.dirty();
             let full = self.egui.run(
                 &self.window,
                 &mut self.menu,
@@ -25261,6 +25324,9 @@ impl State {
                 &datapack_rows,
                 &datapack_note,
                 datapack_dirty,
+                &mod_rows,
+                &mod_note,
+                mod_dirty,
             );
             let action = self.egui.take_action();
             let touched = self.egui.take_touched();
