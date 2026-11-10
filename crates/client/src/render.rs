@@ -60,6 +60,8 @@ struct Uniforms {
     cloud: vec4<f32>,
     // textured ids (slot+1) for wheat / cane / grass blades / vine — 0 skips
     plant_ids: vec4<f32>,
+    // x underwater amount 0..1, y seconds (caustic scroll), z/w unused
+    water_fx: vec4<f32>,
 };
 
 @group(0) @binding(5)
@@ -327,6 +329,25 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
         lit_rgb = mix(body, env, clamp(fresnel, 0.0, 0.94)) + glint;
     }
     let dist = distance(input.world_pos, u.fog_eye.xyz);
+    // Underwater caustic shimmer on nearby floors/walls (not open water tops).
+    // Two scrolled sin sheets — cheap mottling; soft twin sharpens the bright tips.
+    let sub = u.water_fx.x;
+    if (sub > 0.02 && !is_water_top) {
+        let t = u.water_fx.y;
+        let p = input.world_pos.xz * 1.85 + vec2<f32>(t * 0.38, t * 0.24);
+        let q = input.world_pos.xz * 2.55 + vec2<f32>(-t * 0.29, t * 0.33);
+        let a = sin(p.x) * sin(p.y);
+        let b = sin(q.x + q.y) * sin(q.x - q.y * 0.7);
+        let wall = sin(input.world_pos.y * 2.3 + t * 0.45 + input.world_pos.x * 1.15);
+        let raw = clamp(0.5 + 0.5 * (a * 0.62 + b * 0.48 + wall * 0.22), 0.0, 1.0);
+        // Floors take the brightest shafts; walls keep a softer crawl.
+        let floor_w = mix(0.45, 1.0, clamp(nrm.y * 0.85 + 0.15, 0.0, 1.0));
+        let near = 1.0 - smoothstep(5.0, 16.0, dist);
+        let gain = mix(0.38, 0.62, use_trace);
+        let spark = mix(0.05, 0.28, use_trace) * pow(raw, 4.0);
+        let mott = (raw - 0.38) * gain + spark;
+        lit_rgb = lit_rgb + vec3<f32>(0.14, 0.42, 0.48) * mott * sub * floor_w * near * max(u.params.y, 0.45);
+    }
     let fog_end = max(u.fog_color.w, u.fog_eye.w + 1.0);
     let fog = smoothstep(u.fog_eye.w, fog_end, dist);
     return vec4<f32>(mix(lit_rgb, u.fog_color.xyz, fog), 1.0);
@@ -1011,6 +1032,12 @@ pub struct State {
     water_shot_eye: glam::Vec3,
     water_shot_yaw: f32,
     water_shot_pitch: f32,
+    /// One-shot underwater caustic shimmer on the pond floor, then quit.
+    caustic_shot_path: Option<std::path::PathBuf>,
+    caustic_shot_frames: u32,
+    caustic_shot_eye: glam::Vec3,
+    caustic_shot_yaw: f32,
+    caustic_shot_pitch: f32,
     /// One-shot drifting cloud ground darken, then quit.
     cloud_shot_path: Option<std::path::PathBuf>,
     cloud_shot_frames: u32,
@@ -2293,6 +2320,11 @@ impl State {
             water_shot_eye: glam::Vec3::ZERO,
             water_shot_yaw: 0.0,
             water_shot_pitch: 0.0,
+            caustic_shot_path: None,
+            caustic_shot_frames: 0,
+            caustic_shot_eye: glam::Vec3::ZERO,
+            caustic_shot_yaw: 0.0,
+            caustic_shot_pitch: 0.0,
             cloud_shot_path: None,
             cloud_shot_frames: 0,
             cloud_shot_wind: 0.0,
@@ -10300,6 +10332,136 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Underwater looking along the pond floor — caustic mottling, then quit with a PNG.
+    pub fn arm_underwater_caustics_shot(&mut self, path: std::path::PathBuf) {
+        self.caustic_shot_path = Some(path);
+        self.caustic_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Bright day so shafts read through the blue veil.
+        self.clock.set_time_of_day(0.48);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+
+        let mut changes = Vec::new();
+        // Shore pad + deep stone-floored pool so caustics land on a readable floor.
+        for z in 4..=16 {
+            for x in 3..=13 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=7 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        for z in 7..=13 {
+            for x in 5..=11 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::new("water", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 3,
+                    z,
+                    block: Block::new("water", 0),
+                });
+            }
+        }
+        // Stone wall at the far end so side caustics also read.
+        for y in 1..=4 {
+            for x in 5..=11 {
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z: 7,
+                    block: Block::new("stone", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye_warm = [8.0_f32, 2.6, 11.0];
+        for _ in 0..96 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        // Eye deep in the pool center, looking down the stone floor toward the wall.
+        let eye = glam::Vec3::new(8.0, 2.35, 11.4);
+        let target = glam::Vec3::new(8.0, 1.15, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = false;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.caustic_shot_eye = eye;
+        self.caustic_shot_yaw = yaw;
+        self.caustic_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.water_sub = 1.0;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.gui.age_chat(60.0);
+        let _ = self.window.focus_window();
+    }
+
     /// Open water pool reflecting sky/sun, then quit with a PNG.
     pub fn arm_water_reflection_shot(&mut self, path: std::path::PathBuf) {
         self.water_shot_path = Some(path);
@@ -10864,6 +11026,39 @@ impl State {
         self.bee_buf = None;
         self.bee_count = 0;
         self.guests.clear();
+    }
+
+    fn pin_caustic_shot_camera(&mut self) {
+        if self.caustic_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(0.48);
+        self.dusk_show = 0.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.caustic_shot_eye,
+            self.caustic_shot_yaw,
+            self.caustic_shot_pitch,
+        );
+        self.camera.on_ground = false;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.caustic_shot_eye;
+        self.posed_yaw = self.caustic_shot_yaw;
+        self.posed_pitch = self.caustic_shot_pitch;
+        self.pose_dirty = true;
+        self.water_sub = 1.0;
+        self.sheep = crate::sheep::Sheep::new();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.wanted_focus = chunk_of(self.camera.eye);
     }
 
     fn pin_water_shot_camera(&mut self) {
@@ -19886,6 +20081,37 @@ impl State {
         }
     }
 
+    fn poll_caustic_shot(&mut self) {
+        let Some(path) = self.caustic_shot_path.clone() else {
+            return;
+        };
+        self.pin_caustic_shot_camera();
+        self.caustic_shot_frames = self.caustic_shot_frames.saturating_add(1);
+        if self.caustic_shot_frames < 200 || !self.chunk_bake.is_idle() {
+            if self.caustic_shot_frames > 800 {
+                eprintln!("caustic shot timed out");
+                self.caustic_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("caustic shot wrote {}", path.display());
+                self.caustic_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("caustic shot failed: {err}");
+                if self.caustic_shot_frames > 280 {
+                    self.caustic_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_water_shot(&mut self) {
         let Some(path) = self.water_shot_path.clone() else {
             return;
@@ -24771,6 +24997,15 @@ impl State {
         ];
         self.queue
             .write_buffer(&self.uniform_buf, 432, bytes_of(&plant_ids));
+        // Underwater caustic scroll. Shot pins a readable mid-phase mottling.
+        let caustic_t = if self.caustic_shot_path.is_some() {
+            2.35
+        } else {
+            self.clock.seconds()
+        };
+        let water_fx = [sub, caustic_t, 0.0, 0.0];
+        self.queue
+            .write_buffer(&self.uniform_buf, 448, bytes_of(&water_fx));
 
         let surface_texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -25444,6 +25679,7 @@ impl State {
         self.poll_shadows_shot();
         self.poll_bounce_shot();
         self.poll_water_shot();
+        self.poll_caustic_shot();
         self.poll_cloud_shot();
         self.poll_splash_shot();
         self.poll_grass_shot();
@@ -27541,6 +27777,9 @@ mod tests {
         assert!(src.contains("blue_water"));
         assert!(src.contains("sun_disk"));
         assert!(src.contains("0.16, 0.30, 0.46"));
+        assert!(src.contains("water_fx"));
+        assert!(src.contains("Underwater caustic"));
+        assert!(src.contains("vec3<f32>(0.14, 0.42, 0.48)"));
         assert!(!src.contains("ssr_"));
         assert!(src.contains("cloud_cover"));
         assert!(src.contains("cloud_mul"));
