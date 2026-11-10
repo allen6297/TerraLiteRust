@@ -33,6 +33,8 @@ struct Mote {
     life: f32,
     /// Soft campfire smoke floats up instead of falling.
     rise: bool,
+    /// Dusk firefly: drifts and bobs, no gravity.
+    hover: bool,
     half: f32,
 }
 
@@ -70,6 +72,7 @@ impl Drops {
                 block: color,
                 life: 0.35,
                 rise: false,
+                hover: false,
                 half: 0.04,
             });
         }
@@ -93,9 +96,60 @@ impl Drops {
                 block: color,
                 life: 0.7,
                 rise: false,
+                hover: false,
                 half: 0.04,
             });
         }
+    }
+
+    /// How many dusk fireflies are still drifting.
+    pub fn firefly_count(&self) -> usize {
+        self.motes.iter().filter(|mote| mote.hover).count()
+    }
+
+    /// Soft warm motes that drift near water at dusk. Capped so the air stays quiet.
+    pub fn firefly(&mut self, origin: [f32; 3]) {
+        const MAX_FLIES: usize = 36;
+        if self.firefly_count() >= MAX_FLIES {
+            return;
+        }
+        // Warm yellow-green glow; block channel keeps them lit at dusk.
+        const FLIES: [([f32; 3], [f32; 3], [f32; 3], f32); 3] = [
+            (
+                [0.12, 0.05, -0.08],
+                [1.0, 0.92, 0.35],
+                [0.85, 0.72, 0.12],
+                4.2,
+            ),
+            (
+                [-0.1, 0.08, 0.1],
+                [0.95, 1.0, 0.4],
+                [0.7, 0.85, 0.15],
+                3.6,
+            ),
+            (
+                [0.05, -0.04, 0.12],
+                [1.0, 0.85, 0.28],
+                [0.9, 0.65, 0.08],
+                4.8,
+            ),
+        ];
+        let seed = ((origin[0] * 3.1 + origin[2] * 1.7).abs() as usize) % FLIES.len();
+        let (vel, color, block, life) = FLIES[seed];
+        self.motes.push(Mote {
+            center: [
+                origin[0] + (seed as f32) * 0.07 - 0.07,
+                origin[1] + 0.15,
+                origin[2] - (seed as f32) * 0.05,
+            ],
+            velocity: vel,
+            color,
+            block,
+            life,
+            rise: false,
+            hover: true,
+            half: 0.05,
+        });
     }
 
     /// Soft gray puffs that float up from a campfire. Cheap and capped.
@@ -149,6 +203,7 @@ impl Drops {
                 block,
                 life,
                 rise: true,
+                hover: false,
                 half: 0.12,
             });
             smoke_n += 1;
@@ -166,7 +221,19 @@ impl Drops {
             mote.center[0] += mote.velocity[0] * step;
             mote.center[1] += mote.velocity[1] * step;
             mote.center[2] += mote.velocity[2] * step;
-            if mote.rise {
+            if mote.hover {
+                // Soft bob and drift; reverse when the mote climbs or sinks too far.
+                mote.velocity[1] += (0.35 - mote.velocity[1]) * (1.4 * step).min(1.0);
+                if mote.life.sin().abs() > 0.92 {
+                    mote.velocity[0] = -mote.velocity[0] * 0.85;
+                    mote.velocity[2] = -mote.velocity[2] * 0.85;
+                }
+                let damp = (1.0 - 0.35 * step).max(0.0);
+                mote.velocity[0] *= damp;
+                mote.velocity[2] *= damp;
+                // Pulse a little so the glow reads against dusk.
+                mote.half = 0.04 + 0.02 * (mote.life * 3.1).sin().abs();
+            } else if mote.rise {
                 mote.velocity[1] += 0.28 * step;
                 let damp = (1.0 - 1.1 * step).max(0.0);
                 mote.velocity[0] *= damp;
@@ -649,6 +716,21 @@ mod tests {
         assert!(drops.tick_motes(2.0));
         assert!(drops.vertices().is_empty());
         assert!(!drops.tick_motes(0.1));
+    }
+
+    #[test]
+    fn dusk_fireflies_drift_and_fade() {
+        let mut drops = Drops::new();
+        drops.firefly([8.0, 2.0, 24.0]);
+        drops.firefly([9.0, 2.2, 25.0]);
+        assert_eq!(drops.firefly_count(), 2);
+        let before = drops.vertices().len();
+        assert!(before >= 2 * 36);
+        assert!(drops.tick_motes(0.2));
+        assert_eq!(drops.firefly_count(), 2);
+        assert!(drops.tick_motes(6.0));
+        assert_eq!(drops.firefly_count(), 0);
+        assert!(drops.vertices().is_empty());
     }
 
     #[test]

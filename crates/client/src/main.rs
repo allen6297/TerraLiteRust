@@ -165,6 +165,8 @@ struct Args {
     shot_keybinds: Option<std::path::PathBuf>,
     /// Axolotl companion swim, then quit.
     shot_axolotl: Option<std::path::PathBuf>,
+    /// Dusk fireflies over water, then quit.
+    shot_firefly: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -261,6 +263,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
+        shot_firefly: args.shot_firefly,
         state: None,
         last_frame: Instant::now(),
     };
@@ -306,6 +309,7 @@ struct App {
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
+    shot_firefly: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -432,6 +436,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_axolotl.take() {
                     state.arm_axolotl_shot(path);
+                }
+                if let Some(path) = self.shot_firefly.take() {
+                    state.arm_firefly_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -595,6 +602,7 @@ where
         shot_mine: None,
         shot_keybinds: None,
         shot_axolotl: None,
+        shot_firefly: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -786,6 +794,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-axolotl".to_string())?;
                 parsed.shot_axolotl = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-firefly" | "--shot-fireflies" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-firefly".to_string())?;
+                parsed.shot_firefly = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }

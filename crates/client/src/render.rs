@@ -1042,6 +1042,8 @@ pub struct State {
     found_clay: bool,
     /// Once: walked up to the starter compound demo by the pad.
     found_compound: bool,
+    /// Once: dusk fireflies near water.
+    found_fireflies: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -1078,6 +1080,8 @@ pub struct State {
     crackle_at: Option<[f32; 3]>,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
+    /// Seconds until the next dusk firefly can spawn.
+    firefly_wait: f32,
     /// One-shot campfire smoke proof PNG, then quit.
     campfire_smoke_shot_path: Option<std::path::PathBuf>,
     campfire_smoke_shot_frames: u32,
@@ -2019,6 +2023,7 @@ impl State {
             found_mine: false,
             found_clay: false,
             found_compound: false,
+            found_fireflies: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -2037,6 +2042,7 @@ impl State {
             crackle_mix: 0.0,
             crackle_at: None,
             smoke_wait: 0.0,
+            firefly_wait: 0.0,
             campfire_smoke_shot_path: None,
             campfire_smoke_shot_frames: 0,
             campfire_smoke_shot_eye: glam::Vec3::ZERO,
@@ -8129,6 +8135,105 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Dusk fireflies over a shore pool, then quit with a PNG.
+    pub fn arm_firefly_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Early night so fireflies read against a dark sky.
+        self.clock.set_time_of_day(0.88);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 20..=28 {
+            for x in 6..=12 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 1..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        for z in 22..=26 {
+            for x in 7..=11 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("water", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let shore = [9.5, 2.2, 24.5];
+        for offset in [
+            [0.0, 0.4, 0.0],
+            [1.2, 0.8, -0.5],
+            [-1.0, 1.0, 0.9],
+            [0.5, 1.3, 1.4],
+            [-0.7, 0.6, -1.2],
+            [1.5, 1.1, 0.3],
+            [-1.4, 0.9, -0.4],
+            [0.2, 1.6, -1.0],
+            [0.9, 0.5, 1.1],
+            [-0.3, 1.4, 0.2],
+            [1.1, 0.7, -1.3],
+            [-1.2, 1.2, 1.5],
+        ] {
+            self.drops.firefly([
+                shore[0] + offset[0],
+                shore[1] + offset[1],
+                shore[2] + offset[2],
+            ]);
+        }
+        self.rebuild_drops();
+        self.found_fireflies = true;
+        self.gui.push_chat("fireflies");
+
+        let eye = glam::Vec3::new(9.5, 1.0 + 1.8 + body::EYE_HEIGHT, 20.2);
+        let focus = glam::Vec3::new(9.5, 2.6, 24.5);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Axolotl companion swimming beside you in a pool, then quit with a PNG.
     pub fn arm_axolotl_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12748,6 +12853,7 @@ impl State {
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
         self.smoke_wait = (self.smoke_wait - dt).max(0.0);
+        self.firefly_wait = (self.firefly_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
             if let Some(source) = self.crackle_at {
                 if self.smoke_wait <= 0.0 {
@@ -12760,6 +12866,43 @@ impl State {
         let (shore_mix, shore_at) = nearest_water_edge(&self.world, eye);
         self.lap_mix += (shore_mix - self.lap_mix) * (dt * 2.2).min(1.0);
         self.lap_at = shore_at;
+        // Dusk / night fireflies drift near open-sky water.
+        let firefly_mood = if sky_open {
+            (night * (1.0 - wet * 0.7) * shore_mix.max(0.35)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if self.playing && !self.menu.is_open() && !self.dead && firefly_mood > 0.25 {
+            if self.firefly_wait <= 0.0 {
+                self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
+                let base = shore_at.unwrap_or([
+                    eye[0] + 1.2,
+                    eye[1] - 0.4,
+                    eye[2] + 0.8,
+                ]);
+                // A few offsets so a quiet shore fills without one hot spot.
+                let offsets = [
+                    [0.0, 0.6, 0.0],
+                    [1.4, 0.9, -0.6],
+                    [-1.1, 1.1, 1.0],
+                    [0.6, 1.4, 1.5],
+                    [-0.8, 0.7, -1.3],
+                ];
+                let n = 1 + ((firefly_mood * 3.0) as usize).min(2);
+                for offset in offsets.iter().take(n) {
+                    self.drops.firefly([
+                        base[0] + offset[0],
+                        base[1] + offset[1],
+                        base[2] + offset[2],
+                    ]);
+                }
+                self.rebuild_drops();
+                if !self.found_fireflies && self.drops.firefly_count() > 0 {
+                    self.found_fireflies = true;
+                    self.gui.push_chat("fireflies");
+                }
+            }
+        }
         if self.playing && !self.menu.is_open() && !self.dead {
             if was_dry && self.rain_mix >= 0.35 && !self.rain_told {
                 self.rain_told = true;
