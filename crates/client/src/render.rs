@@ -1148,6 +1148,10 @@ pub struct State {
     found_flicker: bool,
     /// Seconds of lantern flicker phase (drives params.w).
     lantern_phase: f32,
+    /// Once: stood by the scarecrow and saw straw blow past.
+    found_sway: bool,
+    /// Seconds until the next scarecrow straw fleck.
+    sway_wait: f32,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
     /// One-shot campfire smoke proof PNG, then quit.
@@ -2167,6 +2171,8 @@ impl State {
             found_embers: false,
             found_flicker: false,
             lantern_phase: 0.0,
+            found_sway: false,
+            sway_wait: 0.0,
             firefly_wait: 0.0,
             campfire_smoke_shot_path: None,
             campfire_smoke_shot_frames: 0,
@@ -10055,6 +10061,98 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Camp scarecrow with straw blowing past on the breeze, then quit with a PNG.
+    pub fn arm_scarecrow_sway_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Midday breeze so straw reads against blue sky.
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CAMP_SCARECROW;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "pumpkin"
+                && self.world.block_at(cx, y, cz).metadata >= 1
+            {
+                cy = y;
+                break;
+            }
+        }
+        // Clear pets so the plate stays on the scarecrow + straw.
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        // Side-back so flecks blow across the pumpkin against the sky.
+        let eye = glam::Vec3::new(
+            cx as f32 - 2.4,
+            cy as f32 + 0.35 + body::EYE_HEIGHT,
+            cz as f32 + 3.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.drops = crate::drops::Drops::new();
+        let head = [cx as f32 + 0.5, cy as f32 + 0.45, cz as f32 + 0.5];
+        for _ in 0..6 {
+            self.drops.straw(head);
+            self.drops.straw([head[0] - 0.3, head[1] - 0.2, head[2] + 0.2]);
+        }
+        let _ = self.drops.tick_motes(0.18);
+        self.rebuild_drops();
+        self.wind_mix = 1.0;
+        self.found_camp = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_sway = true;
+        self.zombie.spook([cx as f32 + 0.5, cz as f32 + 0.5]);
+        self.rebuild_zombie();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("sway");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Camp scarecrow south of the farm plot, then quit with a PNG.
     pub fn arm_scarecrow_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12069,6 +12167,14 @@ impl State {
                 } else {
                     self.drops.note(at, self.note_shot_pitch);
                 }
+            } else if self.found_sway {
+                let (sx, sz) = rebuild_world::CAMP_SCARECROW;
+                let head = [
+                    sx as f32 + 0.5,
+                    self.cook_shot_eye.y - body::EYE_HEIGHT + 0.55,
+                    sz as f32 + 0.5,
+                ];
+                self.drops.straw(head);
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
                 if self.found_embers {
@@ -16794,6 +16900,7 @@ impl State {
         self.crackle_at = fire_at;
         self.smoke_wait = (self.smoke_wait - dt).max(0.0);
         self.ember_wait = (self.ember_wait - dt).max(0.0);
+        self.sway_wait = (self.sway_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
             if let Some(source) = self.crackle_at {
@@ -16810,6 +16917,35 @@ impl State {
                     if !self.found_embers {
                         self.found_embers = true;
                         self.gui.push_chat("embers");
+                    }
+                }
+            }
+            // Straw flecks blow past the camp scarecrow when the day breeze is up.
+            if sky_open && open > 0.2 {
+                let (sx, sz) = rebuild_world::CAMP_SCARECROW;
+                let dx = eye[0] - (sx as f32 + 0.5);
+                let dz = eye[2] - (sz as f32 + 0.5);
+                let dist = (dx * dx + dz * dz).sqrt();
+                if dist < 9.0 {
+                    // Nudge the ambient wind so the scarecrow plot feels breezy.
+                    let near = ((9.0 - dist) / 9.0).clamp(0.0, 1.0);
+                    self.wind_mix = self.wind_mix.max(open * (0.55 + 0.45 * near));
+                    if self.sway_wait <= 0.0 {
+                        self.sway_wait = 0.28 + (1.0 - near) * 0.45;
+                        let mut head_y = 3.0;
+                        for y in 0..80 {
+                            let block = self.world.block_at(sx, y, sz);
+                            if block.id == "pumpkin" && block.metadata >= 1 {
+                                head_y = y as f32 + 0.35;
+                                break;
+                            }
+                        }
+                        self.drops.straw([sx as f32 + 0.5, head_y, sz as f32 + 0.5]);
+                        self.rebuild_drops();
+                        if !self.found_sway {
+                            self.found_sway = true;
+                            self.gui.push_chat("sway");
+                        }
                     }
                 }
             }

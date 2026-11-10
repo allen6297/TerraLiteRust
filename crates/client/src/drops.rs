@@ -297,6 +297,57 @@ impl Drops {
         }
     }
 
+    /// How many scarecrow straw motes are still drifting.
+    pub fn straw_count(&self) -> usize {
+        self.motes
+            .iter()
+            .filter(|mote| {
+                mote.hover
+                    && mote.color[0] > 0.75
+                    && mote.color[1] > 0.55
+                    && mote.color[1] < 0.82
+                    && mote.color[2] < 0.4
+            })
+            .count()
+    }
+
+    /// Pale hay flecks that blow past the camp scarecrow on the breeze.
+    pub fn straw(&mut self, origin: [f32; 3]) {
+        const MAX_STRAW: usize = 28;
+        if self.straw_count() >= MAX_STRAW {
+            return;
+        }
+        const FLECKS: [([f32; 3], [f32; 3], f32); 5] = [
+            ([0.55, 0.12, 0.08], [0.98, 0.82, 0.32], 1.6),
+            ([0.42, 0.18, -0.1], [0.94, 0.72, 0.24], 1.35),
+            ([0.68, 0.05, 0.04], [1.0, 0.88, 0.38], 1.8),
+            ([0.35, 0.22, 0.14], [0.9, 0.68, 0.2], 1.2),
+            ([0.5, 0.08, -0.16], [0.96, 0.78, 0.28], 1.5),
+        ];
+        let seed = ((origin[0] * 2.7 + origin[2] * 1.3).abs() as usize) % FLECKS.len();
+        for (i, (vel, color, life)) in FLECKS.into_iter().enumerate() {
+            if self.straw_count() >= MAX_STRAW {
+                break;
+            }
+            let wobble = ((seed + i) as f32) * 0.05;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] - 0.55 + wobble,
+                    origin[1] + 0.15 + (i as f32) * 0.1,
+                    origin[2] + wobble * 0.5 - 0.15,
+                ],
+                velocity: vel,
+                color,
+                // Keep block near color so daytime shade does not wash flecks out.
+                block: color,
+                life,
+                rise: false,
+                hover: true,
+                half: 0.055,
+            });
+        }
+    }
+
     /// Hot orange sparks that pop up from a campfire, then fall. Capped.
     pub fn embers(&mut self, origin: [f32; 3]) {
         const MAX_EMBERS: usize = 20;
@@ -1039,6 +1090,22 @@ mod tests {
         assert!(drops.motes.len() <= 28);
         assert!(drops.tick_motes(2.0));
         assert!(drops.motes.is_empty());
+    }
+
+    #[test]
+    fn straw_drifts_hay_colored_and_caps() {
+        let mut drops = Drops::new();
+        drops.straw([8.0, 3.0, 8.0]);
+        assert!(drops.straw_count() >= 4);
+        assert!(drops.motes.iter().all(|mote| mote.hover));
+        assert!(drops.motes.iter().all(|mote| mote.color[0] > mote.color[2]));
+        assert!(drops.motes.iter().all(|mote| mote.velocity[0] > 0.2));
+        for _ in 0..20 {
+            drops.straw([8.0, 3.0, 8.0]);
+        }
+        assert!(drops.straw_count() <= 28);
+        assert!(drops.tick_motes(3.0));
+        assert_eq!(drops.straw_count(), 0);
     }
 
     #[test]
