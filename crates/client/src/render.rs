@@ -1016,6 +1016,10 @@ pub struct State {
     crackle_at: Option<[f32; 3]>,
     /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
     wind_mix: f32,
+    /// Eased water-edge proximity, `0` far through `1` at the surface.
+    lap_mix: f32,
+    /// World position of the water surface feeding `lap_mix`, when nearby.
+    lap_at: Option<[f32; 3]>,
     /// Seconds until a held mace can swing again.
     mace_wait: f32,
     /// The next trial key pays a richer drop.
@@ -1915,6 +1919,8 @@ impl State {
             crackle_mix: 0.0,
             crackle_at: None,
             wind_mix: 0.0,
+            lap_mix: 0.0,
+            lap_at: None,
             mace_wait: 0.0,
             omen: false,
             trial_at: None,
@@ -9631,7 +9637,7 @@ impl State {
             self.rain_wait = 1.6;
             self.audio.play(crate::audio::Sound::Rain);
         }
-        // Night insects, dawn birds, daytime wind, and campfire crackle; mute stays silent.
+        // Night insects, dawn birds, daytime wind, shore lapping, and campfire crackle.
         let time = self.clock.time_of_day();
         let night = crate::daylight::night_fog(time);
         let dawn = crate::daylight::dawn_chorus(time);
@@ -9647,6 +9653,9 @@ impl State {
         let (fire_mix, fire_at) = nearest_campfire(&self.world, eye);
         self.crackle_mix += (fire_mix - self.crackle_mix) * (dt * 2.4).min(1.0);
         self.crackle_at = fire_at;
+        let (shore_mix, shore_at) = nearest_water_edge(&self.world, eye);
+        self.lap_mix += (shore_mix - self.lap_mix) * (dt * 2.2).min(1.0);
+        self.lap_at = shore_at;
         if self.playing && !self.menu.is_open() && !self.dead {
             if let Some(level) = self.audio.cricket_ready(dt, self.cricket_mix) {
                 self.audio.play_heard(
@@ -9666,6 +9675,11 @@ impl State {
                     crate::audio::Hearing::even(level),
                 );
             }
+            if let Some(level) = self.audio.lap_ready(dt, self.lap_mix) {
+                if let Some(source) = self.lap_at {
+                    self.play_world_soft(crate::audio::Sound::Lap, source, level);
+                }
+            }
             if let Some(level) = self.audio.crackle_ready(dt, self.crackle_mix) {
                 if let Some(source) = self.crackle_at {
                     self.play_world_soft(crate::audio::Sound::Crackle, source, level);
@@ -9675,6 +9689,7 @@ impl State {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
             let _ = self.audio.wind_ready(dt, 0.0);
+            let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
         }
         self.mace_wait = (self.mace_wait - dt).max(0.0);
@@ -11670,6 +11685,44 @@ fn open_sky(world: &Cluster, eye: [f32; 3]) -> bool {
     true
 }
 
+/// Soft proximity to a water surface (air or non-water above). Mix is `0`
+/// outside ~10 blocks, rising to `1` at the shore. Returns the surface center.
+fn nearest_water_edge(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
+    const REACH: i32 = 8;
+    let cx = eye[0].floor() as i32;
+    let cy = eye[1].floor() as i32;
+    let cz = eye[2].floor() as i32;
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for z in (cz - REACH)..=(cz + REACH) {
+        for x in (cx - REACH)..=(cx + REACH) {
+            for y in (cy - 3)..=(cy + 2) {
+                if world.block_at(x, y, z).id != "water" {
+                    continue;
+                }
+                // Surface only: something that is not water above the cell.
+                if world.block_at(x, y + 1, z).id == "water" {
+                    continue;
+                }
+                let src = [x as f32 + 0.5, y as f32 + 0.85, z as f32 + 0.5];
+                let dx = eye[0] - src[0];
+                let dy = eye[1] - src[1];
+                let dz = eye[2] - src[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.is_none_or(|(so_far, _)| dist < so_far) {
+                    best = Some((dist, src));
+                }
+            }
+        }
+    }
+    match best {
+        Some((dist, src)) if dist < 10.0 => {
+            let t = ((10.0 - dist) / 10.0).clamp(0.0, 1.0);
+            (t * t, Some(src))
+        }
+        _ => (0.0, None),
+    }
+}
+
 /// Soft proximity to the nearest campfire. Mix is `0` outside ~12 blocks,
 /// rising to `1` when standing over the flame. Returns the fire's center too.
 fn nearest_campfire(world: &Cluster, eye: [f32; 3]) -> (f32, Option<[f32; 3]>) {
@@ -12120,6 +12173,28 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_camp(true, x, z, false).is_none());
         assert!(super::fresh_camp(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn water_edge_mix_rises_beside_a_surface_and_fades_away() {
+        let mut cluster = rebuild_world::synthetic_cluster();
+        rebuild_world::apply_changes(
+            &mut cluster,
+            &[rebuild_world::CellChange {
+                x: 4,
+                y: 1,
+                z: 4,
+                block: rebuild_world::Block::new("water", 0),
+            }],
+        );
+        let shore = [4.5, 2.4, 5.5];
+        let (close, src) = super::nearest_water_edge(&cluster, shore);
+        assert!(close > 0.4, "beside the surface: {close}");
+        assert!(src.is_some());
+        let far = [24.5, 2.4, 24.5];
+        let (away, none) = super::nearest_water_edge(&cluster, far);
+        assert_eq!(away, 0.0);
+        assert!(none.is_none());
     }
 
     #[test]
