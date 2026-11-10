@@ -8,7 +8,8 @@ use std::collections::HashSet;
 
 use crate::changes::CellChange;
 use crate::chunk::{
-    FILL_EMBER, FILL_NONE, compound_accepts_meta, is_pipe, is_pump, is_wire, pump_dir, pump_on,
+    FILL_EMBER, FILL_NONE, TANK_MAX, compound_accepts_meta, is_pipe, is_pump, is_tank, is_wire,
+    pump_dir, pump_on, tank_at, tank_level,
 };
 use crate::cluster::Cluster;
 
@@ -46,7 +47,44 @@ fn accepts(block: crate::chunk::Block, fill: u8) -> bool {
     compound_accepts_meta(block.id, block.metadata, fill)
 }
 
-/// True when fill may move from `src` into empty `dest` (pump one-way rules).
+/// True when `dest` can take a unit of `src.fill` (empty host or underfilled tank).
+fn can_receive(dest: crate::chunk::Block, fill: u8) -> bool {
+    if !accepts(dest, fill) {
+        return false;
+    }
+    if dest.fill == FILL_NONE {
+        return true;
+    }
+    is_tank(dest.id) && dest.fill == fill && tank_level(dest) < TANK_MAX
+}
+
+/// Next dest block after receiving one unit of `fill`.
+fn receive_fill(dest: crate::chunk::Block, fill: u8) -> crate::chunk::Block {
+    if is_tank(dest.id) {
+        let level = if dest.fill == FILL_NONE {
+            1
+        } else {
+            tank_level(dest).saturating_add(1).min(TANK_MAX)
+        };
+        return tank_at(fill, level);
+    }
+    dest.with_fill(fill)
+}
+
+/// Drawdown after a tank sources one unit. `None` when the source is not a tank.
+fn tank_after_source(src: crate::chunk::Block) -> Option<crate::chunk::Block> {
+    if !is_tank(src.id) {
+        return None;
+    }
+    let level = tank_level(src);
+    if level <= 1 {
+        Some(crate::chunk::Block::new("tank", 0))
+    } else {
+        Some(tank_at(src.fill, level - 1))
+    }
+}
+
+/// True when fill may move from `src` into `dest` (pump one-way + tank buffer).
 fn seep_allowed(
     src: crate::chunk::Block,
     dest: crate::chunk::Block,
@@ -54,7 +92,7 @@ fn seep_allowed(
     dy: i32,
     dz: i32,
 ) -> bool {
-    if dest.fill != FILL_NONE || !accepts(dest, src.fill) {
+    if !can_receive(dest, src.fill) {
         return false;
     }
     if is_pump(src.id) {
@@ -111,15 +149,16 @@ pub fn plan_compound_seeps(
                 {
                     return;
                 }
-                let conduit = is_pipe(block.id) || is_wire(block.id) || is_pump(block.id);
-                sources.push((x, y, z, block, conduit));
+                let prefer =
+                    is_pipe(block.id) || is_wire(block.id) || is_pump(block.id) || is_tank(block.id);
+                sources.push((x, y, z, block, prefer));
             });
         }
     }
-    // Pumps and conduits first, then lower cells so water drains through runs.
-    sources.sort_by_key(|&(x, y, z, block, conduit)| {
+    // Tanks / pumps / conduits first, then lower cells so water drains through runs.
+    sources.sort_by_key(|&(x, y, z, _, prefer)| {
         (
-            !(conduit || is_pump(block.id)),
+            !prefer,
             y,
             (x - focus[0]).abs() + (z - focus[2]).abs(),
             x,
@@ -129,8 +168,9 @@ pub fn plan_compound_seeps(
 
     let mut claimed = HashSet::new();
     let mut out = Vec::new();
+    let mut dests = 0usize;
     for (x, y, z, src, _) in sources {
-        if out.len() >= max_spreads {
+        if dests >= max_spreads {
             break;
         }
         let mut candidates = Vec::new();
@@ -145,12 +185,14 @@ pub fn plan_compound_seeps(
             if !seep_allowed(src, dest, *dx, *dy, *dz) {
                 continue;
             }
-            let conduit = is_pipe(dest.id) || is_wire(dest.id) || is_pump(dest.id);
-            candidates.push((conduit, nx, ny, nz, dest));
+            let prefer =
+                is_pipe(dest.id) || is_wire(dest.id) || is_pump(dest.id) || is_tank(dest.id);
+            candidates.push((prefer, is_tank(dest.id), nx, ny, nz, dest));
         }
-        candidates.sort_by_key(|&(conduit, ..)| !conduit);
-        for (_conduit, nx, ny, nz, dest) in candidates {
-            if out.len() >= max_spreads {
+        // Prefer tanks (buffers), then other conduits.
+        candidates.sort_by_key(|&(prefer, tank, ..)| (!tank, !prefer));
+        for (_prefer, _tank, nx, ny, nz, dest) in candidates {
+            if dests >= max_spreads {
                 break;
             }
             if !claimed.insert((nx, ny, nz)) {
@@ -160,8 +202,19 @@ pub fn plan_compound_seeps(
                 x: nx,
                 y: ny,
                 z: nz,
-                block: dest.with_fill(src.fill),
+                block: receive_fill(dest, src.fill),
             });
+            dests += 1;
+            if let Some(after) = tank_after_source(src) {
+                out.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: after,
+                });
+                // One unit out of a tank per pulse.
+                break;
+            }
         }
     }
     out
@@ -231,7 +284,7 @@ pub fn plan_pump_pushes(
         if input.fill == FILL_NONE {
             continue;
         }
-        if output.fill != FILL_NONE || !accepts(output, input.fill) {
+        if !can_receive(output, input.fill) {
             continue;
         }
         // Closed-valve pumps never appear here; powered outlet must accept.
@@ -239,8 +292,16 @@ pub fn plan_pump_pushes(
             x: ox,
             y: oy,
             z: oz,
-            block: output.with_fill(input.fill),
+            block: receive_fill(output, input.fill),
         });
+        if let Some(after) = tank_after_source(input) {
+            out.push(CellChange {
+                x: ix,
+                y: iy,
+                z: iz,
+                block: after,
+            });
+        }
     }
     out
 }
@@ -462,5 +523,49 @@ mod tests {
                 .all(|c| !(c.x == 2 && c.y == 1 && c.z == 1)),
             "pump must not accept fill from the outlet side"
         );
+    }
+
+    #[test]
+    fn tank_buffers_and_drawdown_on_seep() {
+        use crate::chunk::{tank_at, tank_level};
+        let mut cluster = world(&[
+            (2, 1, 2, tank_at(FILL_WATER, 3)),
+            (3, 1, 2, Block::new("pipe", 0)),
+        ]);
+        let planned = plan_compound_seeps(&cluster, [2, 1, 2], 8, 1);
+        assert_eq!(planned.len(), 2, "dest fill + tank drawdown");
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 2], 8, 1), 2);
+        assert_eq!(cluster.block_at(3, 1, 2).fill, FILL_WATER);
+        assert_eq!(tank_level(cluster.block_at(2, 1, 2)), 2);
+    }
+
+    #[test]
+    fn tank_accepts_units_until_full() {
+        use crate::chunk::{TANK_MAX, tank_at, tank_level};
+        let mut cluster = world(&[
+            (2, 1, 2, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (3, 1, 2, tank_at(FILL_WATER, TANK_MAX - 1)),
+        ]);
+        assert_eq!(apply_compound_seeps(&mut cluster, [2, 1, 2], 8, 1), 1);
+        assert_eq!(tank_level(cluster.block_at(3, 1, 2)), TANK_MAX);
+        // Full tank rejects more.
+        assert!(plan_compound_seeps(&cluster, [2, 1, 2], 8, 1)
+            .iter()
+            .all(|c| c.x != 3));
+    }
+
+    #[test]
+    fn seep_prefers_tank_buffer_over_pipe() {
+        use crate::chunk::tank_at;
+        let cluster = world(&[
+            (2, 1, 2, Block::new("copper_grate", 0).with_fill(FILL_WATER)),
+            (3, 1, 2, Block::new("pipe", 0)),
+            (2, 1, 3, Block::new("tank", 0)),
+        ]);
+        let planned = plan_compound_seeps(&cluster, [2, 1, 2], 8, 1);
+        assert_eq!(planned.len(), 1);
+        assert_eq!((planned[0].x, planned[0].z), (2, 3));
+        assert_eq!(planned[0].block.fill, FILL_WATER);
+        let _ = tank_at;
     }
 }

@@ -2041,11 +2041,25 @@ fn answer(
             {
                 return Ok(Answer::Bool(false));
             }
-            if current.fill == fill {
+            if current.fill == fill && !crate::chunk::is_tank(current.id) {
                 return Ok(Answer::Bool(true));
             }
             let before = current.fill;
-            let block = current.with_fill(fill);
+            let block = if crate::chunk::is_tank(current.id) {
+                if fill == crate::chunk::FILL_NONE {
+                    crate::chunk::Block::new("tank", 0)
+                } else if current.fill == fill {
+                    crate::chunk::tank_at(
+                        fill,
+                        (crate::chunk::tank_level(current) + crate::chunk::TANK_BUCKET)
+                            .min(crate::chunk::TANK_MAX),
+                    )
+                } else {
+                    crate::chunk::tank_at(fill, crate::chunk::TANK_BUCKET)
+                }
+            } else {
+                current.with_fill(fill)
+            };
             let wrote = world.set_block(x, y, z, block);
             if wrote {
                 writes.borrow_mut().push(crate::changes::CellChange {

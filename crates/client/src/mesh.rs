@@ -41,8 +41,8 @@ use std::collections::{HashMap, HashSet};
 
 use rebuild_world::{
     Block, CellBox, Chunk, Cluster, Emitter, FILL_EMBER, FILL_WATER, LIGHT_REACH, LightField, Pack,
-    Plane, Shape, compound_accepts, conduit_edge_tube, conduit_fill_span, conduit_links,
-    conduit_shell_boxes, conduit_span, shape_of,
+    Plane, Shape, TANK_MAX, compound_accepts, conduit_edge_tube, conduit_fill_span, conduit_links,
+    conduit_shell_boxes, conduit_span, shape_of, tank_level,
 };
 
 use crate::daylight;
@@ -1562,6 +1562,20 @@ fn mesh_partial_shapes(
                     }
                     continue;
                 }
+                if block.id == "tank" {
+                    let shape = shape_of(block);
+                    if !shape.is_empty() {
+                        mesh_cell(block, shape, cell, sample, light, sun, mesh);
+                        if !shape.faces().is_empty() {
+                            mesh_faces(block, shape, cell, sample, light, sun, mesh);
+                        }
+                    }
+                    if let Some((fill, boxes)) = tank_fill_boxes(block) {
+                        let fill_shape = Shape::from_boxes(&boxes);
+                        mesh_cell(fill, fill_shape, cell, sample, light, sun, mesh);
+                    }
+                    continue;
+                }
                 let shape = shape_of(block);
                 if shape.is_empty() && !block.has_fill() {
                     continue;
@@ -1642,6 +1656,29 @@ fn conduit_fill_boxes(block: Block, links: u8) -> Option<(Block, Vec<CellBox>)> 
     };
     let (lo, hi) = conduit_fill_span(block.id);
     Some((fill, conduit_shell_boxes(lo, hi, links, false)))
+}
+
+/// Reservoir fill rises with tank level inside the glass shell.
+fn tank_fill_boxes(block: Block) -> Option<(Block, Vec<CellBox>)> {
+    let level = tank_level(block);
+    if level == 0 {
+        return None;
+    }
+    let fill = match block.fill {
+        FILL_WATER => Block::new("water", 0),
+        FILL_EMBER => Block::new("magma", 0),
+        _ => return None,
+    };
+    // Interior 4..12 wide; height from floor (2) up toward lid (14).
+    let height = 2 + ((12u16 * u16::from(level)) / u16::from(TANK_MAX)) as u8;
+    let top = height.max(3).min(14);
+    Some((
+        fill,
+        vec![CellBox {
+            min: [4, 2, 4],
+            max: [12, top, 12],
+        }],
+    ))
 }
 
 fn mesh_cell(

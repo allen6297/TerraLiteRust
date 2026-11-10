@@ -25,6 +25,7 @@ pub fn span(id: &str) -> (u8, u8) {
     match id {
         "pipe" => (5, 11),
         "pump" => (4, 12),
+        "tank" => (3, 13),
         _ => (7, 9),
     }
 }
@@ -33,6 +34,7 @@ pub fn fill_span(id: &str) -> (u8, u8) {
     match id {
         "pipe" => (6, 10),
         "pump" => (5, 11),
+        "tank" => (4, 12),
         _ => (7, 9),
     }
 }

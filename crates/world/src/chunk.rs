@@ -69,6 +69,7 @@ pub fn compound_host(id: &str) -> bool {
             | "pipe"
             | "wire"
             | "pump"
+            | "tank"
             | "fence"
             | "fence_gate"
             | "slab"
@@ -120,6 +121,32 @@ pub fn is_pump(id: &str) -> bool {
     id == "pump"
 }
 
+/// True when `id` is a compound tank / buffer reservoir.
+pub fn is_tank(id: &str) -> bool {
+    id == "tank"
+}
+
+/// Max stored units in a tank (metadata `1..=TANK_MAX` while filled).
+pub const TANK_MAX: u8 = 8;
+
+/// Units added by one bucket / charge into a tank.
+pub const TANK_BUCKET: u8 = 4;
+
+/// Stored level for a tank cell. Empty tanks are `0`.
+pub fn tank_level(block: Block) -> u8 {
+    if !is_tank(block.id) || block.fill == FILL_NONE {
+        return 0;
+    }
+    let level = block.metadata & 0x0F;
+    level.clamp(1, TANK_MAX)
+}
+
+/// Tank block carrying `fill` at `level` units (`1..=TANK_MAX`).
+pub fn tank_at(fill: u8, level: u8) -> Block {
+    let level = level.clamp(1, TANK_MAX);
+    Block::new("tank", level).with_fill(fill)
+}
+
 /// Pump facing from metadata bits `0..=5`: +X -X +Y -Y +Z -Z.
 pub fn pump_dir(metadata: u8) -> [i32; 3] {
     match metadata & 7 {
@@ -163,15 +190,25 @@ pub fn compound_accepts_meta(id: &str, metadata: u8, fill: u8) -> bool {
     }
 }
 
-/// Neighbor link for pipe/wire/pump mesh arms.
+/// Neighbor link for pipe/wire/pump/tank mesh arms.
 ///
-/// Pipes join pipes/pumps and non-wire hosts; wires join wires/pumps and
-/// non-pipe hosts; pumps join any compound host.
+/// Pipes join pipes/pumps/tanks and non-wire hosts; wires join wires/pumps/tanks
+/// and non-pipe hosts; pumps and tanks join any compound host.
 pub fn conduit_links(a: &str, b: &str) -> bool {
     match a {
-        "pipe" => b == "pipe" || b == "pump" || (compound_host(b) && b != "wire"),
-        "wire" => b == "wire" || b == "pump" || (compound_host(b) && b != "pipe"),
-        "pump" => compound_host(b),
+        "pipe" => {
+            b == "pipe"
+                || b == "pump"
+                || b == "tank"
+                || (compound_host(b) && b != "wire")
+        }
+        "wire" => {
+            b == "wire"
+                || b == "pump"
+                || b == "tank"
+                || (compound_host(b) && b != "pipe")
+        }
+        "pump" | "tank" => compound_host(b),
         _ => false,
     }
 }

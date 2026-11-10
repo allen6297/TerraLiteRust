@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use bytemuck::bytes_of;
 use rebuild_world::{
     BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
-    PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, apply_compound_seeps,
-    apply_pump_pushes, compound_accepts_meta, compound_host, encode_bag, encode_break, encode_chat,
-    encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of,
-    is_pipe, is_pump, is_wire, load_dir, plan_compound_seeps, plan_pump_pushes, pump_meta, pump_on,
-    shape_of,
+    PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, TANK_BUCKET, TANK_MAX, apply_changes,
+    apply_compound_seeps, apply_pump_pushes, compound_accepts_meta, compound_host, encode_bag,
+    encode_break, encode_chat, encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind,
+    fill_name, held_light_of, is_pipe, is_pump, is_tank, is_wire, load_dir, plan_compound_seeps,
+    plan_pump_pushes, pump_meta, pump_on, shape_of, tank_at, tank_level,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -1039,6 +1039,8 @@ pub struct State {
     told_shape_pot: bool,
     /// Once: look at a pump — tip to toggle.
     told_pump: bool,
+    /// Once: look at a tank — tip that it buffers fill.
+    told_tank: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1994,6 +1996,7 @@ impl State {
             told_furnace_heat: false,
             told_shape_pot: false,
             told_pump: false,
+            told_tank: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3684,6 +3687,29 @@ impl State {
         self.gui.push_chat("use pump to toggle");
     }
 
+    /// Once: look at a tank — tip that it stores multiple fill units.
+    fn tell_tank(&mut self) {
+        if self.told_tank || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "tank" {
+            return;
+        }
+        self.told_tank = true;
+        let level = tank_level(block);
+        if level == 0 {
+            self.gui.push_chat("tank stores fill");
+        } else {
+            self.gui.push_chat(&format!("tank {level}/{TANK_MAX}"));
+        }
+    }
+
     /// Once: hold clay, look at a furnace — tip to use it.
     fn tell_furnace_heat(&mut self) {
         if self.told_furnace_heat
@@ -4947,11 +4973,25 @@ impl State {
         let host = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        if host.fill != FILL_NONE || !compound_accepts_meta(host.id, host.metadata, fill) {
+        let next = if is_tank(host.id) {
+            if !compound_accepts_meta(host.id, host.metadata, fill) {
+                return false;
+            }
+            if host.fill == FILL_NONE {
+                tank_at(fill, TANK_BUCKET)
+            } else if host.fill == fill && tank_level(host) < TANK_MAX {
+                tank_at(fill, (tank_level(host) + TANK_BUCKET).min(TANK_MAX))
+            } else {
+                // Let water_bucket fall through to pour a full water cell.
+                return false;
+            }
+        } else if host.fill != FILL_NONE || !compound_accepts_meta(host.id, host.metadata, fill)
+        {
             // Let water_bucket fall through to pour a full water cell.
             return false;
-        }
-        let next = host.with_fill(fill);
+        } else {
+            host.with_fill(fill)
+        };
         let slot = self.hotbar.selected();
         let (min, max) = body::player_box_bounds(self.camera.eye);
         self.send_edit(
@@ -4985,7 +5025,11 @@ impl State {
         if !compound_host(host.id) || host.fill == FILL_NONE {
             return true;
         }
-        let next = host.with_fill(FILL_NONE);
+        let next = if is_tank(host.id) {
+            Block::new("tank", 0)
+        } else {
+            host.with_fill(FILL_NONE)
+        };
         let slot = self.hotbar.selected();
         let (min, max) = body::player_box_bounds(self.camera.eye);
         self.send_edit(
@@ -6750,6 +6794,7 @@ impl State {
         let pipes = name.contains("pipe") || name.contains("wire");
         let connected = name.contains("connected");
         let pump_shot = name.contains("pump") || name.contains("valve");
+        let tank_shot = name.contains("tank") || name.contains("buffer");
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6762,8 +6807,11 @@ impl State {
         self.rebuild_zombie();
         self.rebuild_guests();
         // Ember / wire / pump shots at night so fill light reads; water stays day.
-        self.clock
-            .set_time_of_day(if ember || pipes || pump_shot { 0.88 } else { 0.42 });
+        self.clock.set_time_of_day(if ember || pipes || pump_shot {
+            0.88
+        } else {
+            0.42
+        });
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
@@ -6790,7 +6838,58 @@ impl State {
                 }
             }
         }
-        if pump_shot {
+        if tank_shot {
+            // Source grate → pipe → mid tank → outlet pipe run.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: tank_at(FILL_WATER, 5),
+            });
+            changes.push(CellChange {
+                x: gx + 3,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 4,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0),
+            });
+            // Ember tank on a side spur.
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz + 2,
+                block: tank_at(FILL_EMBER, 3),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz + 1,
+                block: Block::new("wire", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz + 2,
+                block: Block::new("glass", 0).with_fill(FILL_EMBER),
+            });
+        } else if pump_shot {
             // Intake grate → pipe → powered pump (+X) → empty pipe outlet.
             changes.push(CellChange {
                 x: gx,
@@ -6994,7 +7093,11 @@ impl State {
             });
         }
         apply_changes(&mut self.world, &changes);
-        if pump_shot {
+        if tank_shot {
+            for _ in 0..2 {
+                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
+            }
+        } else if pump_shot {
             for _ in 0..3 {
                 let _ = apply_pump_pushes(&mut self.world, [gx + 2, gy, gz], 8, 1);
                 let _ = apply_compound_seeps(&mut self.world, [gx + 3, gy, gz], 8, 1);
@@ -7026,7 +7129,18 @@ impl State {
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
         self.chunk_bake.touch(gx + 2, gz - 2);
-        let (eye, focus) = if pump_shot {
+        let (eye, focus) = if tank_shot {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 2.2 + body::EYE_HEIGHT,
+                    gz as f32 - 2.8,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.7, gz as f32 + 0.5),
+            )
+        } else if pump_shot {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("water_bucket");
             (
@@ -11530,6 +11644,7 @@ impl State {
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();
+        self.tell_tank();
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();
