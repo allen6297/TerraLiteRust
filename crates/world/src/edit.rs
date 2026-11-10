@@ -184,6 +184,10 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
     if fill_update || till {
         return true;
     }
+    if block.id == "rail" {
+        let below = world.block_at(x, y - 1, z);
+        return !below.is_air() && below.id != "rail" && below.id != "water";
+    }
     let shape = shape_of(block);
     if shape.is_empty() {
         return false;

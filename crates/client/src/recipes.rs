@@ -581,6 +581,7 @@ mod tests {
                 "magma".to_string(),
                 "map".to_string(),
                 "melon".to_string(),
+                "minecart".to_string(),
                 "mossy_cobblestone".to_string(),
                 "mossy_stone_bricks".to_string(),
                 "music_disc".to_string(),
@@ -604,6 +605,7 @@ mod tests {
                 "purpur".to_string(),
                 "purpur_pillar".to_string(),
                 "quartz".to_string(),
+                "rail".to_string(),
                 "red_nether_bricks".to_string(),
                 "red_sandstone".to_string(),
                 "respawn_anchor".to_string(),
@@ -1116,7 +1118,7 @@ mod tests {
         );
         assert_eq!(
             book.detail("oak_log"),
-            "used to make bed and boat and bookshelf and door and jukebox and lantern and leather tunic and note block and oak stairs and shelf and shield and sign and stick and wooden pickaxe"
+            "used to make bed and boat and bookshelf and door and jukebox and lantern and leather tunic and minecart and note block and oak stairs and shelf and shield and sign and stick and wooden pickaxe"
         );
         assert_eq!(
             book.match_grid(&["stick".into(), "tripwire".into()])

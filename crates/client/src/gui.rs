@@ -5377,6 +5377,10 @@ pub fn boat_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "row")
 }
 
+pub fn cart_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "ride")
+}
+
 pub fn chew_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "chew")
 }
@@ -6442,6 +6446,8 @@ fn tab_of(id: &str) -> &'static str {
             | "arrow"
             | "glass"
             | "ladder"
+            | "rail"
+            | "minecart"
             | "lever"
             | "note_block"
             | "painting"

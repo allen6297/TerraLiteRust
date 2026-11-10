@@ -126,6 +126,7 @@ pub fn break_for(id: &str) -> Sound {
     match id {
         "coal_ore" => Sound::BreakCoal,
         "iron_ore" => Sound::BreakIron,
+        "rail" => Sound::BreakIron,
         _ => Sound::Break,
     }
 }

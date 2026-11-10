@@ -336,6 +336,9 @@ pub const SHAFT_ANVIL: (i32, i32) = (SHAFT_CHEST.0 - 1, SHAFT_CHEST.1);
 /// Ladder on the pit's south wall, one block south of the mouth center.
 pub const SHAFT_LADDER: (i32, i32) = (SHAFT_MOUTH.0, SHAFT_MOUTH.1 - 1);
 
+/// Midpoint of the short rail spur east of the mine apron.
+pub const SHAFT_RAIL: (i32, i32) = (SHAFT_MOUTH.0 + 7, SHAFT_MOUTH.1);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Broken stone-brick shrine, southeast of the demo pad.
@@ -589,6 +592,23 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     let anvil_x = (SHAFT_ANVIL.0 - chunk_x * 16) as u8;
     let anvil_z = (SHAFT_ANVIL.1 - chunk_z * 16) as u8;
     blocks.push((anvil_x, floor, anvil_z, Block::new("anvil", 0)));
+    // East of the apron: a short rail spur for a minecart ride.
+    let rail_z = (SHAFT_MOUTH.1 - chunk_z * 16) as u8;
+    for dx in 4..=7 {
+        let lx = (SHAFT_MOUTH.0 + dx - chunk_x * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == rail_z && *y + 1 >= floor));
+        let top = blocks
+            .iter()
+            .filter(|(x, _, z, _)| *x == lx && *z == rail_z)
+            .map(|(_, y, _, _)| *y)
+            .max()
+            .unwrap_or(0);
+        for y in (top + 1)..floor.saturating_sub(1) {
+            blocks.push((lx, y, rail_z, Block::new("dirt", 0)));
+        }
+        blocks.push((lx, floor - 1, rail_z, Block::new("gravel", 0)));
+        blocks.push((lx, floor, rail_z, Block::new("rail", 0)));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1128,6 +1148,12 @@ mod tests {
         assert_eq!(
             (-2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z - 1)),
             SHAFT_LADDER
+        );
+        assert_eq!(shaft.block(local_x + 7, post, local_z).id, "rail");
+        assert_eq!(shaft.block(local_x + 4, post, local_z).id, "rail");
+        assert_eq!(
+            (-2 * 16 + i32::from(local_x + 7), 2 * 16 + i32::from(local_z)),
+            SHAFT_RAIL
         );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;

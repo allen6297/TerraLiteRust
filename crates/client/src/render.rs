@@ -885,6 +885,14 @@ pub struct State {
     boat_shot_eye: glam::Vec3,
     boat_shot_yaw: f32,
     boat_shot_pitch: f32,
+    /// One-shot idle cart vs riding FOV stitch, then quit.
+    cart_shot_path: Option<std::path::PathBuf>,
+    cart_shot_frames: u32,
+    cart_shot_phase: CartShotPhase,
+    cart_shot_idle: Option<CapturedRgba>,
+    cart_shot_eye: glam::Vec3,
+    cart_shot_yaw: f32,
+    cart_shot_pitch: f32,
     /// One-shot cooling vs ready attack crosshair stitch, then quit.
     attack_shot_path: Option<std::path::PathBuf>,
     attack_shot_frames: u32,
@@ -975,8 +983,13 @@ pub struct State {
     boat_kick: f32,
     /// HUD plate amount for the row cue, `0`..`1`.
     boat_show: f32,
+    /// `1` while the minecart is moving (eases). Widens the view a little.
+    cart_kick: f32,
+    /// HUD plate amount for the ride cue, `0`..`1`.
+    cart_show: f32,
     /// Seconds until the next paddle stroke while rowing.
     boat_stroke: f32,
+    cart_stroke: f32,
     /// `1` when a hit lands, then it fades. Tightens the view.
     hit_kick: f32,
     /// Red edge, `1` just hurt down to `0`.
@@ -1041,6 +1054,7 @@ pub struct State {
     found_scarecrow: bool,
     found_shrine: bool,
     found_mine: bool,
+    found_rails: bool,
     found_clay: bool,
     /// Once: walked up to the starter compound demo by the pad.
     found_compound: bool,
@@ -1210,6 +1224,9 @@ pub struct State {
     boat: crate::boat::Boat,
     boat_buf: Option<wgpu::Buffer>,
     boat_count: u32,
+    cart: crate::minecart::Minecart,
+    cart_buf: Option<wgpu::Buffer>,
+    cart_count: u32,
     others: Vec<crate::peers::Other>,
     peer_buf: Option<wgpu::Buffer>,
     peer_count: u32,
@@ -1937,6 +1954,13 @@ impl State {
             boat_shot_eye: glam::Vec3::ZERO,
             boat_shot_yaw: 0.0,
             boat_shot_pitch: 0.0,
+            cart_shot_path: None,
+            cart_shot_frames: 0,
+            cart_shot_phase: CartShotPhase::Idle,
+            cart_shot_idle: None,
+            cart_shot_eye: glam::Vec3::ZERO,
+            cart_shot_yaw: 0.0,
+            cart_shot_pitch: 0.0,
             attack_shot_path: None,
             attack_shot_frames: 0,
             attack_shot_phase: AttackShotPhase::Idle,
@@ -2006,6 +2030,9 @@ impl State {
             boat_kick: 0.0,
             boat_show: 0.0,
             boat_stroke: 0.0,
+            cart_kick: 0.0,
+            cart_show: 0.0,
+            cart_stroke: 0.0,
             hit_kick: 0.0,
             hurt_flash: 0.0,
             sip: 0.0,
@@ -2040,6 +2067,7 @@ impl State {
             found_scarecrow: false,
             found_shrine: false,
             found_mine: false,
+            found_rails: false,
             found_clay: false,
             found_compound: false,
             found_fireflies: false,
@@ -2163,6 +2191,9 @@ impl State {
             boat: crate::boat::Boat::new(),
             boat_buf: None,
             boat_count: 0,
+            cart: crate::minecart::Minecart::new(),
+            cart_buf: None,
+            cart_count: 0,
             others: Vec::new(),
             peer_buf: None,
             peer_count: 0,
@@ -2225,6 +2256,7 @@ impl State {
         state.rebuild_goat();
         state.rebuild_guests();
         state.rebuild_boat();
+        state.rebuild_minecart();
         state.note_sky();
         state.resize(state.window.inner_size());
         state.load_bag(&crate::net::world_file(&state.menu.world_name()));
@@ -2955,6 +2987,24 @@ impl State {
                 }),
         );
         self.boat_count = vertices.len() as u32;
+    }
+
+    fn rebuild_minecart(&mut self) {
+        let vertices = self.cart.vertices();
+        if vertices.is_empty() {
+            self.cart_buf = None;
+            self.cart_count = 0;
+            return;
+        }
+        self.cart_buf = Some(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("minecart"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+        );
+        self.cart_count = vertices.len() as u32;
     }
 
     fn rebuild_player(&mut self) {
@@ -3775,6 +3825,10 @@ impl State {
         if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
             self.found_mine = true;
             self.gui.push_chat("a mine — ladder into the pit");
+        }
+        if !self.found_rails && near(rebuild_world::SHAFT_RAIL.0, rebuild_world::SHAFT_RAIL.1) {
+            self.found_rails = true;
+            self.gui.push_chat("rails by the mine");
         }
         if !self.found_clay && near(rebuild_world::CLAY_BANK.0, rebuild_world::CLAY_BANK.1) {
             self.found_clay = true;
@@ -6068,6 +6122,107 @@ impl State {
         self.boat_stroke = 0.0;
     }
 
+    /// Place the held minecart on the looked-at rail, or pick a hull back up.
+    fn try_place_minecart(&mut self) -> bool {
+        let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+        let forward = self.camera.forward();
+        let forward = [forward.x, forward.y, forward.z];
+        if self.cart.aimed(eye, forward) && self.cart.take() {
+            if !self.hotbar.collect("minecart") {
+                self.bag.collect("minecart");
+                self.bag_dirty = true;
+            }
+            self.hotbar_dirty = true;
+            self.rebuild_minecart();
+            self.gui.push_chat("picked up");
+            return true;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_minecart(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "rail" {
+            self.gui.push_chat("need rail");
+            return true;
+        }
+        if self.cart.place(hit.block[0], hit.block[1], hit.block[2]) {
+            self.hotbar.consume_selected();
+            self.hotbar_dirty = true;
+            self.rebuild_minecart();
+            self.gui.push_chat("cart");
+        } else {
+            self.gui.push_chat("cart is out");
+        }
+        true
+    }
+
+    fn steer_minecart(&mut self, dt: f32) {
+        if self.cart_shot_path.is_some() {
+            if let Some(seat) = self.cart.seat() {
+                self.camera.eye = glam::Vec3::from(seat);
+                self.camera.velocity_y = 0.0;
+                self.camera.on_ground = true;
+            }
+            return;
+        }
+        let (forward, right) = self.camera.walk_axes();
+        let mut wish = glam::Vec3::ZERO;
+        if self.input.forward {
+            wish += forward;
+        }
+        if self.input.back {
+            wish -= forward;
+        }
+        if self.input.right {
+            wish += right;
+        }
+        if self.input.left {
+            wish -= right;
+        }
+        let riding = wish.length_squared() > 0.0;
+        if riding {
+            wish = wish.normalize() * crate::minecart::SPEED;
+        }
+        let moved = self.cart.steer(dt, wish.x, wish.z, &self.world);
+        if moved {
+            self.rebuild_minecart();
+        }
+        let goal = if moved || riding { 1.0 } else { 0.0 };
+        self.cart_kick += (goal - self.cart_kick) * (dt * 8.0).min(1.0);
+        self.cart_show += (goal - self.cart_show) * (dt * 10.0).min(1.0);
+        if moved {
+            self.cart_stroke -= dt;
+            if self.cart_stroke <= 0.0 {
+                self.cart_stroke = 0.36;
+                if let Some(origin) = self.cart.origin() {
+                    self.play_world(crate::audio::Sound::Step, origin);
+                }
+            }
+            self.bob_amount = (self.bob_amount + dt * 4.0).min(0.55);
+        } else {
+            self.cart_stroke = 0.0;
+        }
+        if let Some(seat) = self.cart.seat() {
+            self.camera.eye = glam::Vec3::from(seat);
+            self.camera.velocity_y = 0.0;
+            self.camera.on_ground = true;
+        }
+    }
+
+    fn clear_cart_feel(&mut self) {
+        self.cart_kick = 0.0;
+        self.cart_show = 0.0;
+        self.cart_stroke = 0.0;
+    }
+
     fn steer_pig(&mut self, dt: f32) {
         let (forward, right) = self.camera.walk_axes();
         let mut wish = glam::Vec3::ZERO;
@@ -6404,6 +6559,9 @@ impl State {
         if self.boat.aimed(eye, forward) {
             return Some("boat");
         }
+        if self.cart.aimed(eye, forward) {
+            return Some("minecart");
+        }
         None
     }
 
@@ -6559,6 +6717,7 @@ impl State {
             || self.try_compound_transfer()
             || self.try_bucket()
             || self.try_place_boat()
+            || self.try_place_minecart()
         {
             return;
         }
@@ -7480,6 +7639,109 @@ impl State {
         self.posed_yaw = self.swim_shot_yaw;
         self.posed_pitch = self.swim_shot_pitch;
         self.pose_dirty = true;
+    }
+
+    /// Idle aboard then riding FOV on the shaft rail spur, stitched side by side.
+    pub fn arm_minecart_shot(&mut self, path: std::path::PathBuf) {
+        self.cart_shot_path = Some(path);
+        self.cart_shot_frames = 0;
+        self.cart_shot_phase = CartShotPhase::WaitingIdle;
+        self.cart_shot_idle = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::SHAFT_RAIL;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "rail" {
+                cy = y;
+                break;
+            }
+        }
+        let _ = self.cart.take();
+        assert!(self.cart.place(cx, cy, cz));
+        assert!(self.cart.mount());
+        self.rebuild_minecart();
+        let seat = self
+            .cart
+            .seat()
+            .map(glam::Vec3::from)
+            .expect("cart seat");
+        let target = glam::Vec3::new(cx as f32 + 4.0, cy as f32 + 1.2, cz as f32 + 0.5);
+        self.camera = Camera::looking_at(seat, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.input.forward = false;
+        self.input.fast = false;
+        self.clear_cart_feel();
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cart_shot_eye = seat;
+        self.cart_shot_yaw = yaw;
+        self.cart_shot_pitch = pitch;
+        self.posed_eye = seat;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.found_mine = true;
+        self.found_rails = true;
+        self.gui.push_chat("ride");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("minecart");
+        self.hotbar_dirty = true;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_cart_shot_camera(&mut self) {
+        if self.cart_shot_path.is_none() {
+            return;
+        }
+        if !self.cart.aboard() {
+            let _ = self.cart.mount();
+        }
+        self.camera.restore(
+            self.cart_shot_eye,
+            self.cart_shot_yaw,
+            self.cart_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.cart_shot_eye;
+        self.posed_yaw = self.cart_shot_yaw;
+        self.posed_pitch = self.cart_shot_pitch;
+        self.pose_dirty = true;
+        match self.cart_shot_phase {
+            CartShotPhase::WaitingIdle | CartShotPhase::Idle => {
+                self.input.forward = false;
+                self.input.back = false;
+                self.input.left = false;
+                self.input.right = false;
+                self.cart_kick = 0.0;
+                self.cart_show = 0.0;
+                self.cart_stroke = 0.0;
+            }
+            CartShotPhase::WaitingRide => {
+                self.input.forward = true;
+                self.cart_kick = 1.0;
+                self.cart_show = 1.0;
+                self.cart_stroke = 0.2;
+                self.bob_amount = 0.45;
+            }
+        }
     }
 
     /// Idle aboard then rowing FOV from a marsh pool, stitched side by side.
@@ -11965,6 +12227,75 @@ impl State {
         }
     }
 
+    fn poll_cart_shot(&mut self) {
+        let Some(path) = self.cart_shot_path.clone() else {
+            return;
+        };
+        self.pin_cart_shot_camera();
+        self.cart_shot_frames = self.cart_shot_frames.saturating_add(1);
+        if self.cart_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.cart_shot_frames > 600 {
+                eprintln!("cart shot timed out");
+                self.cart_shot_path = None;
+                self.cart_shot_phase = CartShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.cart_shot_phase {
+            CartShotPhase::WaitingIdle => match capture_window_rgba(&self.window) {
+                Ok(idle) => {
+                    self.cart_shot_idle = Some(idle);
+                    self.cart_shot_frames = 0;
+                    self.cart_shot_phase = CartShotPhase::WaitingRide;
+                }
+                Err(err) => {
+                    eprintln!("cart idle capture failed: {err}");
+                    if self.cart_shot_frames > 400 {
+                        self.cart_shot_path = None;
+                        self.cart_shot_phase = CartShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            CartShotPhase::WaitingRide => {
+                let Some(idle) = self.cart_shot_idle.take() else {
+                    self.cart_shot_path = None;
+                    self.cart_shot_phase = CartShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(ride) => match stitch_held_light_proof(&idle, &ride, &path) {
+                        Ok(()) => {
+                            eprintln!("cart shot wrote {}", path.display());
+                            self.cart_shot_path = None;
+                            self.cart_shot_phase = CartShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("cart stitch failed: {err}");
+                            self.cart_shot_path = None;
+                            self.cart_shot_phase = CartShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("cart ride capture failed: {err}");
+                        self.cart_shot_idle = Some(idle);
+                        if self.cart_shot_frames > 400 {
+                            self.cart_shot_path = None;
+                            self.cart_shot_phase = CartShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            CartShotPhase::Idle => {}
+        }
+    }
+
     fn poll_attack_shot(&mut self) {
         let Some(path) = self.attack_shot_path.clone() else {
             return;
@@ -13183,6 +13514,14 @@ impl State {
                         self.play_world(sound, pos);
                     }
                     self.gui.push_chat("ashore");
+                } else if self.cart.aboard() {
+                    let seat = self.cart.seat();
+                    self.cart.dismount();
+                    self.clear_cart_feel();
+                    if let Some(pos) = seat.or_else(|| self.cart.origin()) {
+                        self.play_world(crate::audio::Sound::Step, pos);
+                    }
+                    self.gui.push_chat("off cart");
                 } else if self.pig.ridden() {
                     self.pig.dismount();
                     let right = self.camera.walk_axes().1;
@@ -13211,6 +13550,20 @@ impl State {
                     self.boat_show = 0.0;
                     self.boat_stroke = 0.0;
                     self.gui.push_chat("aboard");
+                } else if self
+                    .cart
+                    .near([self.camera.eye.x, self.camera.eye.y, self.camera.eye.z])
+                    && !self.looking_at_use()
+                {
+                    self.cart.mount();
+                    if let Some(seat) = self.cart.seat() {
+                        self.camera.eye = glam::Vec3::from(seat);
+                        self.camera.velocity_y = 0.0;
+                        self.camera.on_ground = true;
+                        self.play_world(crate::audio::Sound::Step, seat);
+                    }
+                    self.clear_cart_feel();
+                    self.gui.push_chat("aboard cart");
                 } else if self.pig.saddled()
                     && self
                         .pig
@@ -15181,6 +15534,7 @@ impl State {
         self.swap_kick = 0.0;
         self.break_kick = 0.0;
         self.clear_boat_feel();
+        self.clear_cart_feel();
         self.sync_pointer();
     }
 
@@ -15429,6 +15783,11 @@ impl State {
             self.boat_show = (self.boat_show - dt * 5.0).max(0.0);
             self.boat_stroke = 0.0;
         }
+        if !self.cart.aboard() {
+            self.cart_kick = (self.cart_kick - dt * 6.0).max(0.0);
+            self.cart_show = (self.cart_show - dt * 5.0).max(0.0);
+            self.cart_stroke = 0.0;
+        }
         self.bob_amount = (self.bob_amount - dt * 2.5).max(0.0);
         let crouch_goal = if self.input.crouch { 1.0 } else { 0.0 };
         self.crouch += (crouch_goal - self.crouch) * (dt * 10.0).min(1.0);
@@ -15464,6 +15823,7 @@ impl State {
         self.pin_sprint_shot_camera();
         self.pin_swim_shot_camera();
         self.pin_boat_shot_camera();
+        self.pin_cart_shot_camera();
         self.pin_attack_shot_camera();
         self.pin_hunger_shot_camera();
         self.pin_eat_shot_camera();
@@ -15506,6 +15866,12 @@ impl State {
         }
         if self.boat.aboard() {
             self.steer_boat(dt);
+            self.sprint_asked = false;
+            self.sprint_blocked = false;
+            self.sprint_run = 0.0;
+            self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
+        } else if self.cart.aboard() {
+            self.steer_minecart(dt);
             self.sprint_asked = false;
             self.sprint_blocked = false;
             self.sprint_run = 0.0;
@@ -15626,7 +15992,7 @@ impl State {
         let submerged = body::eye_in_water(self.camera.eye, &self.world);
         let water_goal = if submerged { 1.0 } else { 0.0 };
         self.water_sub += (water_goal - self.water_sub) * (dt * 8.0).min(1.0);
-        let aboard = self.boat.aboard() || self.pig.ridden();
+        let aboard = self.boat.aboard() || self.cart.aboard() || self.pig.ridden();
         let feet = [
             self.camera.eye.x,
             self.camera.eye.y - body::EYE_HEIGHT,
@@ -16044,7 +16410,7 @@ impl State {
             self.sprint_kick * bob_scale,
             self.hit_kick * bob_scale,
             water_fov,
-            self.boat_kick * bob_scale,
+            self.boat_kick.max(self.cart_kick) * bob_scale,
         ) + chew
             + jump
             + swap
@@ -16481,6 +16847,14 @@ impl State {
                     pass.draw(0..self.boat_count, 0..1);
                 }
             }
+            if let Some(cart) = &self.cart_buf {
+                if self.cart_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, cart.slice(..));
+                    pass.draw(0..self.cart_count, 0..1);
+                }
+            }
             if dig_count >= 3 {
                 let kept = f64::from(crate::dig::crack_light(dig_progress));
                 pass.set_pipeline(&self.dig_pipeline);
@@ -16552,6 +16926,9 @@ impl State {
         }
         if self.boat_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::boat_quads(gui_w, gui_h, self.boat_show));
+        }
+        if self.cart_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::cart_quads(gui_w, gui_h, self.cart_show));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));
@@ -16774,6 +17151,7 @@ impl State {
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
+        self.poll_cart_shot();
         self.poll_attack_shot();
         self.poll_hunger_shot();
         self.poll_eat_shot();
@@ -16814,6 +17192,13 @@ enum BoatShotPhase {
     Idle,
     WaitingIdle,
     WaitingRow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CartShotPhase {
+    Idle,
+    WaitingIdle,
+    WaitingRide,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
