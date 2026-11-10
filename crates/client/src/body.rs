@@ -504,6 +504,8 @@ pub fn crystal_reaches(eye: Vec3, at: [i32; 3]) -> bool {
 }
 
 /// Where a thrown pearl lands. A solid along the look stops it; open air rides the ray.
+/// Kept for ray-settle tests; gameplay throws a projectile then calls [`pearl_settle_at`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn pearl_landing(eye: Vec3, forward: Vec3, world: &Cluster) -> Option<Vec3> {
     if forward.length_squared() < 1.0e-8 {
         return None;
@@ -526,6 +528,28 @@ pub fn pearl_landing(eye: Vec3, forward: Vec3, world: &Cluster) -> Option<Vec3> 
         break;
     }
     settle_pearl(last_air?, world)
+}
+
+/// Stand the player near a pearl impact. Tries the hit cell, then neighbors.
+pub fn pearl_settle_at(at: [f32; 3], world: &Cluster) -> Option<Vec3> {
+    let cell = [at[0].floor() as i32, at[1].floor() as i32, at[2].floor() as i32];
+    const OFFSETS: [[i32; 3]; 7] = [
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ];
+    for offset in OFFSETS {
+        let next = [cell[0] + offset[0], cell[1] + offset[1], cell[2] + offset[2]];
+        if let Some(eye) = settle_pearl(next, world) {
+            return Some(eye);
+        }
+    }
+    // Last resort: stand at the impact with feet clearance assumed.
+    Some(Vec3::new(at[0], at[1] + EYE_HEIGHT, at[2]))
 }
 
 fn settle_pearl(cell: [i32; 3], world: &Cluster) -> Option<Vec3> {

@@ -1472,6 +1472,8 @@ pub struct State {
     arrows: crate::arrows::Arrows,
     /// In-flight splash potion bottles.
     splash: crate::splash::Splash,
+    /// In-flight ender pearls.
+    pearls: crate::pearls::Pearls,
     sheep: crate::sheep::Sheep,
     sheep_buf: Option<wgpu::Buffer>,
     sheep_count: u32,
@@ -2552,6 +2554,7 @@ impl State {
             xp: crate::xp::Xp::new(),
             arrows: crate::arrows::Arrows::new(),
             splash: crate::splash::Splash::new(),
+            pearls: crate::pearls::Pearls::new(),
             sheep: crate::sheep::Sheep::new(),
             sheep_buf: None,
             sheep_count: 0,
@@ -3015,6 +3018,96 @@ impl State {
         // Arrow mid-flight between the eye and the zombie.
         self.arrows.pin([8.5, 2.35, 11.2], [0.0, 0.2, -12.0]);
         self.player.tick(0.0, 0.0, -1.0, false, false, true);
+        self.rebuild_player();
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
+    /// Ender pearl mid-flight toward a landing pad with teal pop motes, then quit.
+    pub fn arm_ender_pearl_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("ender_pearl");
+        self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        self.third_person = false;
+        let eye = glam::Vec3::new(8.5, 1.55 + crate::body::EYE_HEIGHT, 13.2);
+        let focus = glam::Vec3::new(8.5, 1.4, 8.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.splash = crate::splash::Splash::new();
+        self.pearls = crate::pearls::Pearls::new();
+        self.bow_drawing = false;
+        self.bow_charge = 0.0;
+        self.bow_show = 0.0;
+        self.shield_raised = false;
+        self.shield_show = 0.0;
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        // Pearl mid-flight + teal pop near the landing pad ahead.
+        self.pearls.pin([8.5, 2.6, 10.5], [0.0, -1.0, -10.0]);
+        self.drops.pearl_pop([8.5, 1.4, 8.8]);
+        self.player.tick(0.0, 0.0, -1.0, false, false, false);
         self.rebuild_player();
         self.rebuild_drops();
         let _ = self.window.focus_window();
@@ -3970,6 +4063,7 @@ impl State {
         vertices.extend(self.xp.vertices());
         vertices.extend(self.arrows.vertices());
         vertices.extend(self.splash.vertices());
+        vertices.extend(self.pearls.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
             self.drop_count = 0;
@@ -6527,7 +6621,7 @@ impl State {
         true
     }
 
-    /// Throw the held pearl along the look. True when the selected slot is a pearl.
+    /// Throw the held pearl as an arcing projectile. True when the selected slot is a pearl.
     fn try_pearl(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -6535,17 +6629,41 @@ impl State {
         if !Pack::builtin().is_pearl(id) {
             return false;
         }
-        let forward = self.camera.forward();
-        if let Some(eye) = body::pearl_landing(self.camera.eye, forward, &self.world) {
+        let eye = self.camera.eye.to_array();
+        let forward = self.camera.forward().to_array();
+        self.hotbar.consume_selected();
+        self.hotbar_dirty = true;
+        self.pearls.throw(eye, forward);
+        self.play_world(crate::audio::Sound::Gust, eye);
+        self.gui.push_chat("throw");
+        self.hit_kick = self.hit_kick.max(0.16);
+        self.rebuild_drops();
+        true
+    }
+
+    /// Teleport to each pearl impact with a teal pop and a small survival hurt.
+    fn apply_pearl_landings(&mut self, landings: &[[f32; 3]]) {
+        for at in landings {
+            self.drops.pearl_pop(*at);
+            self.play_world(crate::audio::Sound::Gust, *at);
+            let Some(eye) = body::pearl_settle_at(*at, &self.world) else {
+                self.gui.push_chat("miss");
+                continue;
+            };
             self.camera.eye = eye;
             self.camera.velocity_y = 0.0;
             self.camera.on_ground = true;
-            self.hurt(1);
+            self.pose_dirty = true;
+            self.posed_eye = eye;
+            let (yaw, pitch) = self.camera.yaw_pitch();
+            self.posed_yaw = yaw;
+            self.posed_pitch = pitch;
+            self.wanted_focus = chunk_of(self.camera.eye);
+            if !self.menu.creative() {
+                self.hurt(crate::pearls::LAND_HURT);
+            }
             self.gui.push_chat("pearl");
         }
-        self.hotbar.consume_selected();
-        self.hotbar_dirty = true;
-        true
     }
 
     /// Throw a splash potion as an arcing bottle. True when the selected slot is one.
@@ -21786,6 +21904,14 @@ impl State {
             }
             if !bursts.is_empty() {
                 self.apply_splash_bursts(&bursts);
+                drops_dirty = true;
+            }
+            let (pearl_dirty, landings) = self.pearls.tick(dt, &self.world);
+            if pearl_dirty {
+                drops_dirty = true;
+            }
+            if !landings.is_empty() {
+                self.apply_pearl_landings(&landings);
                 drops_dirty = true;
             }
         }

@@ -375,6 +375,34 @@ impl Drops {
         }
     }
 
+    /// Teal pop when an ender pearl lands and teleports the thrower.
+    pub fn pearl_pop(&mut self, origin: [f32; 3]) {
+        const COLOR: [f32; 3] = [0.22, 0.72, 0.58];
+        const DIRS: [[f32; 3]; 8] = [
+            [0.85, 1.6, 0.15],
+            [-0.9, 1.4, 0.3],
+            [0.3, 1.9, -0.75],
+            [-0.35, 1.15, -0.9],
+            [1.0, 1.5, 0.8],
+            [-0.85, 1.75, 0.65],
+            [0.1, 2.2, 0.05],
+            [-0.5, 0.7, -0.25],
+        ];
+        for dir in DIRS {
+            self.motes.push(Mote {
+                center: [origin[0], origin[1] + 0.2, origin[2]],
+                velocity: dir,
+                color: COLOR,
+                block: COLOR,
+                life: 0.7,
+                rise: false,
+                hover: false,
+                tumble: true,
+                half: 0.05,
+            });
+        }
+    }
+
     /// Colored splash-potion burst motes at an impact point.
     pub fn splash_potion(&mut self, origin: [f32; 3], color: [f32; 3]) {
         const DIRS: [[f32; 3]; 10] = [
