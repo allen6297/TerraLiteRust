@@ -166,6 +166,8 @@ struct Args {
     shot_keybinds: Option<std::path::PathBuf>,
     /// Axolotl companion swim, then quit.
     shot_axolotl: Option<std::path::PathBuf>,
+    /// Frog on a marsh lily pad, then quit.
+    shot_frog: Option<std::path::PathBuf>,
     /// Dusk fireflies over water, then quit.
     shot_firefly: Option<std::path::PathBuf>,
     /// Wolf companion sit/follow, then quit.
@@ -326,6 +328,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
+        shot_frog: args.shot_frog,
         shot_firefly: args.shot_firefly,
         shot_wolf: args.shot_wolf,
         shot_cat: args.shot_cat,
@@ -403,6 +406,7 @@ struct App {
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
+    shot_frog: Option<std::path::PathBuf>,
     shot_firefly: Option<std::path::PathBuf>,
     shot_wolf: Option<std::path::PathBuf>,
     shot_cat: Option<std::path::PathBuf>,
@@ -561,6 +565,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_axolotl.take() {
                     state.arm_axolotl_shot(path);
+                }
+                if let Some(path) = self.shot_frog.take() {
+                    state.arm_frog_shot(path);
                 }
                 if let Some(path) = self.shot_firefly.take() {
                     state.arm_firefly_shot(path);
@@ -820,6 +827,7 @@ where
         shot_mine: None,
         shot_keybinds: None,
         shot_axolotl: None,
+        shot_frog: None,
         shot_firefly: None,
         shot_wolf: None,
         shot_cat: None,
@@ -1043,6 +1051,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-axolotl".to_string())?;
                 parsed.shot_axolotl = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-frog" | "--shot-lily" | "--shot-lily-pad" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-frog".to_string())?;
+                parsed.shot_frog = Some(std::path::PathBuf::from(value));
             }
             "--shot-firefly" | "--shot-fireflies" => {
                 let value = iter

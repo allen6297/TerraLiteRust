@@ -2449,11 +2449,16 @@ pub fn frog_food(id: &str) -> bool {
     id == "honey"
 }
 
-const FROG_HOME: [f32; 3] = [8.0, 4.0, 33.0];
+/// Thin lily top above marsh water at y = 3. Frog feet rest here.
+const FROG_PAD_Y: f32 = 4.0 + 2.0 / 16.0;
+const FROG_HOME: [f32; 3] = [8.0, FROG_PAD_Y, 33.0];
 const FROG_LEG: f32 = 1.2;
 const FROG_REST: u32 = 8;
 const FROG_STEPS: u32 = 6;
 const BUG_BACK: u32 = 80;
+/// World cells that hold lily pads under the frog hop square.
+pub const FROG_PAD: (i32, i32) = (8, 33);
+pub const FROG_PADS: [(i32, i32); 4] = [(8, 33), (9, 33), (9, 34), (8, 34)];
 
 pub struct Frog {
     origin: [f32; 3],
@@ -2462,6 +2467,8 @@ pub struct Frog {
     bug: bool,
     bug_back: u32,
     loose: u32,
+    /// Set when a hop lands back onto a lily; cleared by [`Frog::take_landed`].
+    landed: bool,
 }
 
 impl Frog {
@@ -2473,11 +2480,31 @@ impl Frog {
             bug: true,
             bug_back: 0,
             loose: 0,
+            landed: false,
         }
     }
 
     pub fn origin(&self) -> [f32; 3] {
         self.origin
+    }
+
+    /// Put the body on a pad for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.loose = 0;
+    }
+
+    /// True while the frog is resting between hops (perched on a lily).
+    pub fn perched(&self) -> bool {
+        let cycle = FROG_REST + FROG_STEPS;
+        (self.steps % cycle) < FROG_REST
+    }
+
+    /// True once after a hop lands on a lily. Clears the flag.
+    pub fn take_landed(&mut self) -> bool {
+        let hit = self.landed;
+        self.landed = false;
+        hit
     }
 
     /// Accept a treat. The caller hands over the slimeball.
@@ -2535,6 +2562,7 @@ impl Frog {
             }
             let from_x = self.origin[0];
             let from_z = self.origin[2];
+            let was_hopping = !self.perched();
             self.steps = self.steps.wrapping_add(1);
             let next = frog_spot(self.steps);
             slide_land(&mut self.origin, next, world, 1);
@@ -2547,6 +2575,9 @@ impl Frog {
                 self.bug = false;
                 self.bug_back = BUG_BACK;
                 ate = true;
+            }
+            if was_hopping && self.perched() {
+                self.landed = true;
             }
         }
         ate
@@ -3190,6 +3221,7 @@ fn is_soft(id: &str) -> bool {
     matches!(
         id,
         "flower"
+            | "lily_pad"
             | "button"
             | "lever"
             | "tripwire"
@@ -3275,6 +3307,13 @@ fn settle_land(origin: &mut [f32; 3], world: &Cluster) {
     let x = origin[0].floor() as i32;
     let z = origin[2].floor() as i32;
     let y = origin[1].floor() as i32;
+    if let Some(pad) = lily_pad_top(world, x, z, y) {
+        // Keep hops above the pad; only settle while near the leaf.
+        if origin[1] <= pad + 0.2 {
+            origin[1] = pad;
+        }
+        return;
+    }
     if let Some(top) = fluid_top(world, x, z, y) {
         if origin[1] < top - 0.05 {
             origin[1] = top;
@@ -3284,6 +3323,17 @@ fn settle_land(origin: &mut [f32; 3], world: &Cluster) {
     if cell_blocks(world, x, y, z) {
         origin[1] = y as f32 + 1.0;
     }
+}
+
+/// Top of a lily pad near `y`, in blocks. Pads sit one cell above marsh water.
+fn lily_pad_top(world: &Cluster, x: i32, z: i32, y: i32) -> Option<f32> {
+    for dy in [0, -1, 1] {
+        let yy = y + dy;
+        if (0..256).contains(&yy) && world.block_at(x, yy, z).id == "lily_pad" {
+            return Some(yy as f32 + 2.0 / 16.0);
+        }
+    }
+    None
 }
 
 /// A water mob holds just under the surface instead of resting on the floor.
@@ -5016,8 +5066,9 @@ mod tests {
         let mut frog = Frog::new();
         let home = frog.origin();
         assert!((home[0] - 8.0).abs() < 0.01);
-        assert!((home[1] - 4.0).abs() < 0.01);
+        assert!((home[1] - FROG_PAD_Y).abs() < 0.01);
         assert!((home[2] - 33.0).abs() < 0.01);
+        assert!(frog.perched());
         assert!(
             frog.vertices()
                 .iter()
@@ -5043,8 +5094,11 @@ mod tests {
         let ground = air_plot();
         assert!(!frog.tick(11, &ground));
         assert!(frog.origin()[1] > 4.3);
+        assert!(!frog.perched());
         assert!(frog.tick(3, &ground));
         assert!(frog.origin()[0] > 9.0);
+        assert!(frog.take_landed(), "hop should land on a lily");
+        assert!(frog.perched());
         assert!(
             !frog
                 .vertices()
@@ -5052,6 +5106,33 @@ mod tests {
                 .any(|vertex| vertex.color[1] > 0.8 && vertex.color[0] < 0.4)
         );
         assert!(frog.feed());
+    }
+
+    #[test]
+    fn a_frog_settles_on_a_lily_pad() {
+        let mut cells = Vec::new();
+        for &(wx, wz) in &FROG_PADS {
+            let x = wx as u8;
+            let z = (wz - 32) as u8;
+            cells.push((x, 2u16, z, Block::new("dirt", 0)));
+            cells.push((x, 3, z, Block::new("water", 0)));
+            cells.push((x, 4, z, Block::new("lily_pad", 0)));
+        }
+        let marsh = Cluster::try_from_chunks(
+            0,
+            0,
+            [Chunk::from_blocks(0, 2, cells).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(marsh.block_at(8, 4, 33).id, "lily_pad");
+        let mut frog = Frog::new();
+        frog.place_at([8.5, 4.5, 33.5]);
+        frog.tick(1, &marsh);
+        assert!(
+            (frog.origin()[1] - FROG_PAD_Y).abs() < 0.05,
+            "settles onto the lily top, y {}",
+            frog.origin()[1]
+        );
     }
 
     #[test]

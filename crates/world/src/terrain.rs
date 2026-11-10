@@ -154,7 +154,30 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
+    stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
+}
+
+/// Lily pads on marsh water under the frog's hop square.
+fn stamp_frog_pads(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != FROG_CHUNK {
+        return;
+    }
+    for &(wx, wz) in &FROG_PADS {
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (wz - chunk_z * 16) as u8;
+        let height = column_height(wx, wz, Biome::Marsh);
+        let pad_y = height + 1;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == pad_y));
+        // Keep a water cell under the leaf.
+        if !blocks
+            .iter()
+            .any(|(x, y, z, b)| *x == lx && *z == lz && *y == height && b.id == "water")
+        {
+            blocks.push((lx, height, lz, Block::new("water", 0)));
+        }
+        blocks.push((lx, pad_y, lz, Block::new("lily_pad", 0)));
+    }
 }
 
 /// Campfire block, just east and north of the demo pad.
@@ -201,6 +224,11 @@ pub const HORSE_STABLE_GATE: (i32, i32) = (17, 6);
 
 /// Inclusive world bounds of the meadow stable fence ring `[x0, x1, z0, z1]`.
 pub const HORSE_STABLE: (i32, i32, i32, i32) = (17, 22, 4, 8);
+
+/// Marsh lily pads under the frog hop square. Chunk `(0, 2)`.
+pub const FROG_PADS: [(i32, i32); 4] = [(8, 33), (9, 33), (9, 34), (8, 34)];
+
+const FROG_CHUNK: (i32, i32) = (0, 2);
 
 const CAMP_CHUNK: (i32, i32) = (2, -2);
 
@@ -1212,6 +1240,25 @@ mod tests {
             generate_chunk(2, 2).block(lx, height - 1, lz).id,
             "clay"
         );
+    }
+
+    #[test]
+    fn lily_pads_sit_under_the_frog_hop_square() {
+        let chunk = generate_chunk(FROG_CHUNK.0, FROG_CHUNK.1);
+        for &(wx, wz) in &FROG_PADS {
+            let lx = (wx - FROG_CHUNK.0 * 16) as u8;
+            let lz = (wz - FROG_CHUNK.1 * 16) as u8;
+            let height = column_height(wx, wz, Biome::Marsh);
+            assert_eq!(chunk.block(lx, height, lz).id, "water");
+            assert_eq!(
+                chunk.block(lx, height + 1, lz).id,
+                "lily_pad",
+                "pad at ({wx}, {wz})"
+            );
+        }
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(cluster.block_at(8, 4, 33).id, "lily_pad");
     }
 
     #[test]

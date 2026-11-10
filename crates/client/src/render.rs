@@ -1096,6 +1096,10 @@ pub struct State {
     found_horse: bool,
     found_hitch: bool,
     found_stable: bool,
+    /// Once: walked up to the marsh frog lily pads.
+    found_lily: bool,
+    /// Once: saw the frog land a hop on a lily.
+    found_perch: bool,
     /// Once: holding raw while looking at a campfire or smoker.
     told_cook_heat: bool,
     /// Once: holding blastable stone while looking at a blast furnace.
@@ -2127,6 +2131,8 @@ impl State {
             found_horse: false,
             found_hitch: false,
             found_stable: false,
+            found_lily: false,
+            found_perch: false,
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
@@ -3950,6 +3956,12 @@ impl State {
             self.found_stable = true;
             self.gui.push_chat("a stable");
         }
+        let (fx, fz) = crate::mobs::FROG_PAD;
+        if !self.found_lily && near(fx, fz) {
+            self.ensure_frog_pads();
+            self.found_lily = true;
+            self.gui.push_chat("lily pads");
+        }
     }
 
     /// Step the demo zombie back when it wanders near the camp scarecrow.
@@ -5732,6 +5744,37 @@ impl State {
             }
         }
         None
+    }
+
+    /// Stamp lily pads onto marsh water under the frog hop square.
+    fn ensure_frog_pads(&mut self) {
+        let mut changes = Vec::new();
+        for &(wx, wz) in &crate::mobs::FROG_PADS {
+            if self.world.block_at(wx, 4, wz).id == "lily_pad" {
+                continue;
+            }
+            if self.world.block_at(wx, 3, wz).id != "water" {
+                changes.push(CellChange {
+                    x: wx,
+                    y: 3,
+                    z: wz,
+                    block: Block::new("water", 0),
+                });
+            }
+            changes.push(CellChange {
+                x: wx,
+                y: 4,
+                z: wz,
+                block: Block::new("lily_pad", 0),
+            });
+        }
+        if changes.is_empty() {
+            return;
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
     }
 
     /// Stamp the meadow hitch post and stable fence ring onto empty wool cells.
@@ -9869,6 +9912,61 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// Frog perched on a marsh lily pad, then quit with a PNG.
+    pub fn arm_frog_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.ensure_frog_pads();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+
+        // Home lily rest pose — perched between hops.
+        self.frog = crate::mobs::Frog::new();
+        self.frog.place_at([8.4, 4.2, 33.2]);
+        self.frog.tick(1, &self.world);
+        let _ = self.frog.take_landed();
+        self.rebuild_frog();
+        self.found_lily = true;
+        self.found_perch = true;
+        self.gui.push_chat("perch");
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        let focus = glam::Vec3::from(self.frog.origin()) + glam::Vec3::new(0.0, 0.2, 0.0);
+        let eye = glam::Vec3::new(focus.x + 1.8, focus.y + 1.05 + body::EYE_HEIGHT, focus.z - 2.6);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for &(wx, wz) in &crate::mobs::FROG_PADS {
+            self.chunk_bake.touch(wx, wz);
+        }
         let _ = self.window.focus_window();
     }
 
@@ -17076,6 +17174,16 @@ impl State {
                 let spot = self.frog.origin();
                 self.play_world(crate::audio::Sound::Step, spot);
                 self.grant_slime();
+            }
+            if self.frog.take_landed() {
+                let spot = self.frog.origin();
+                self.drops.puff(spot, [0.45, 0.72, 0.85]);
+                self.rebuild_drops();
+                self.play_world(crate::audio::Sound::Step, spot);
+                if !self.found_perch {
+                    self.found_perch = true;
+                    self.gui.push_chat("perch");
+                }
             }
             self.rebuild_frog();
             self.axolotl.tick(steps, feet, &self.world);
