@@ -246,6 +246,9 @@ pub const SHRINE: (i32, i32) = (40, 40);
 /// The shrine chest one block south of the altar center.
 pub const SHRINE_CHEST: (i32, i32) = (SHRINE.0, SHRINE.1 - 1);
 
+/// The furnace two blocks east of the altar center.
+pub const SHRINE_FURNACE: (i32, i32) = (SHRINE.0 + 2, SHRINE.1);
+
 const SHRINE_CHUNK: (i32, i32) = (2, 2);
 
 /// A ruined stone-brick square with a chest. Only the shrine chunk gets one.
@@ -323,6 +326,12 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((local_x, floor, local_z - 1, Block::new("chest", 0)));
     blocks.push((local_x + 1, floor, local_z, Block::new("torch", 0)));
     blocks.push((local_x - 1, floor, local_z, mossy));
+    // East of the altar: hold clay and bake bricks in one use.
+    let furnace_x = (SHRINE_FURNACE.0 - chunk_x * 16) as u8;
+    let furnace_z = (SHRINE_FURNACE.1 - chunk_z * 16) as u8;
+    blocks.push((furnace_x, floor, furnace_z, Block::new("furnace", 0)));
+    // A clay block beside it so the bake loop is findable without creative give.
+    blocks.push((furnace_x, floor, furnace_z + 1, Block::new("clay", 0)));
 }
 
 /// A timbered hole. Only the shaft chunk gets one.
@@ -756,6 +765,12 @@ mod tests {
             (2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z - 1)),
             SHRINE_CHEST
         );
+        assert_eq!(shrine.block(local_x + 2, floor, local_z).id, "furnace");
+        assert_eq!(
+            (2 * 16 + i32::from(local_x + 2), 2 * 16 + i32::from(local_z)),
+            SHRINE_FURNACE
+        );
+        assert_eq!(shrine.block(local_x + 2, floor, local_z + 1).id, "clay");
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);
         assert_eq!(

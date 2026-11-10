@@ -87,6 +87,14 @@ fn blast_result(id: &str) -> Option<&'static str> {
     }
 }
 
+/// Furnace one-step lines that the blast furnace refuses (clay → bricks).
+fn furnace_result(id: &str) -> Option<&'static str> {
+    match id {
+        "clay" => Some("bricks"),
+        _ => None,
+    }
+}
+
 /// Plants and food a composter accepts. Bone meal itself does not go back in.
 pub fn is_compost(id: &str) -> bool {
     matches!(
@@ -1030,11 +1038,24 @@ impl Hotbar {
 
     /// One-step blast: hold cobble or stone, use a blast furnace, get the cook.
     pub fn blast_now(&mut self) -> &'static str {
+        self.heat_now(blast_result, "need blast")
+    }
+
+    /// One-step furnace: hold clay, use a furnace, get bricks.
+    pub fn furnace_now(&mut self) -> &'static str {
+        self.heat_now(furnace_result, "need clay")
+    }
+
+    fn heat_now(
+        &mut self,
+        result: fn(&str) -> Option<&'static str>,
+        need: &'static str,
+    ) -> &'static str {
         let Some(item) = self.item(self.selected) else {
-            return "need blast";
+            return need;
         };
-        let Some(out) = blast_result(item.id) else {
-            return "need blast";
+        let Some(out) = result(item.id) else {
+            return need;
         };
         let count = item.count;
         if count > 1 && !self.room_for(out) {
@@ -2453,6 +2474,19 @@ mod tests {
         assert!(bar.select_digit(2));
         assert_eq!(bar.blast_now(), "smooth_stone");
         assert_eq!(bar.slot(1), Some("smooth_stone"));
+        assert_eq!(bar.blast_now(), "need blast");
+    }
+
+    #[test]
+    fn a_furnace_bakes_clay_into_bricks_in_one_use() {
+        let mut bar = Hotbar::new();
+        assert_eq!(bar.furnace_now(), "need clay");
+        assert!(bar.collect("clay"));
+        assert!(bar.select_digit(2));
+        assert_eq!(bar.slot(1), Some("clay"));
+        assert_eq!(bar.furnace_now(), "bricks");
+        assert_eq!(bar.slot(1), Some("bricks"));
+        assert_eq!(bar.furnace_now(), "need clay");
         assert_eq!(bar.blast_now(), "need blast");
     }
 

@@ -147,6 +147,8 @@ struct Args {
     shot_camp_smoker: Option<std::path::PathBuf>,
     /// Blast furnace one-step, then quit.
     shot_blast: Option<std::path::PathBuf>,
+    /// Shrine furnace clay→bricks, then quit.
+    shot_furnace: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -240,6 +242,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_smoker_cook: args.shot_smoker_cook,
         shot_camp_smoker: args.shot_camp_smoker,
         shot_blast: args.shot_blast,
+        shot_furnace: args.shot_furnace,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -279,6 +282,7 @@ struct App {
     shot_smoker_cook: Option<std::path::PathBuf>,
     shot_camp_smoker: Option<std::path::PathBuf>,
     shot_blast: Option<std::path::PathBuf>,
+    shot_furnace: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -381,6 +385,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_blast.take() {
                     state.arm_blast_shot(path);
+                }
+                if let Some(path) = self.shot_furnace.take() {
+                    state.arm_furnace_shot(path);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -530,6 +537,7 @@ where
         shot_smoker_cook: None,
         shot_camp_smoker: None,
         shot_blast: None,
+        shot_furnace: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -670,6 +678,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-blast".to_string())?;
                 parsed.shot_blast = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-furnace" | "--shot-furnace-bake" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-furnace".to_string())?;
+                parsed.shot_furnace = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter
