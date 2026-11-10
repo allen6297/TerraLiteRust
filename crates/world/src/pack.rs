@@ -4467,6 +4467,26 @@ pub fn light_of(block: Block) -> Option<Light> {
     Pack::builtin().light_of(block)
 }
 
+/// Light a held placeable would cast around the player.
+///
+/// Uses the block the item places when it is a script placeable (`ember:ember`
+/// → `ember:glow_brick`). Only the default placed state counts, so an unlit
+/// candle or copper bulb stays dark in hand, while a torch, lantern, or
+/// glow brick lights the air.
+pub fn held_light_of(pack: &Pack, item_id: &str) -> Option<Light> {
+    if item_id.is_empty() || item_id == "air" {
+        return None;
+    }
+    let block_id = if pack.contains_block(item_id) {
+        item_id
+    } else if let Some(placed) = pack.placed_block(item_id) {
+        return pack.light_of(Block::new(&placed, 0));
+    } else {
+        return None;
+    };
+    pack.light_of(Block::new(block_id, 0))
+}
+
 fn parse_shapes(value: &Value) -> Result<Registry<ShapeEntry>, String> {
     let shapes = object(value, "shapes")?;
     let mut parsed = Registry::new();
@@ -5803,6 +5823,16 @@ mod tests {
         assert_eq!(pack.shape_of(Block::new("end_rod", 1)).boxes()[0].min[0], 0);
         assert!(pack.light_of(Block::new("stone", 0)).is_none());
         assert!(pack.light_of(Block::new(SIGN, 0)).is_none());
+        assert_eq!(held_light_of(&pack, "torch"), Some(torch));
+        assert_eq!(held_light_of(&pack, "lantern"), Some(lantern));
+        assert_eq!(held_light_of(&pack, "glowstone"), Some(glowstone));
+        assert_eq!(held_light_of(&pack, "sea_lantern"), Some(sea));
+        assert_eq!(held_light_of(&pack, "campfire"), Some(campfire));
+        assert_eq!(held_light_of(&pack, "end_rod"), Some(rod));
+        assert!(held_light_of(&pack, "stone").is_none());
+        assert!(held_light_of(&pack, "candle").is_none());
+        assert!(held_light_of(&pack, "pumpkin").is_none());
+        assert!(held_light_of(&pack, "").is_none());
         for (id, path) in [
             ("grass", "assets/terralite/textures/grass.png"),
             ("stone", "assets/terralite/textures/stone.png"),

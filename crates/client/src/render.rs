@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use bytemuck::bytes_of;
 use rebuild_world::{
-    BAG_SLOTS, Block, CellChange, Cluster, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK,
+    BAG_SLOTS, Block, CellChange, Cluster, Emitter, Hooks, Pack, PlayerBox, ScriptView, TAG_BREAK,
     TAG_PLACE, apply_changes, encode_bag, encode_break, encode_chat, encode_chest, encode_hotbar,
-    encode_place, encode_pose, load_dir, shape_of,
+    encode_place, encode_pose, held_light_of, load_dir, shape_of,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -819,6 +819,9 @@ pub struct State {
     /// One-shot capture of the Godot-style settings screen, then quit.
     settings_shot_path: Option<std::path::PathBuf>,
     settings_shot_frames: u32,
+    /// One-shot night cave with a held torch, then quit.
+    held_light_shot_path: Option<std::path::PathBuf>,
+    held_light_shot_frames: u32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1630,6 +1633,8 @@ impl State {
             shot_frames: 0,
             settings_shot_path: None,
             settings_shot_frames: 0,
+            held_light_shot_path: None,
+            held_light_shot_frames: 0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -4880,6 +4885,69 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Midnight stone cave, torch in hand — proof that held light uses block light.
+    pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
+        self.held_light_shot_path = Some(path);
+        self.held_light_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.0);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for y in 2..=7 {
+            for z in 18..=24 {
+                for x in 18..=24 {
+                    let wall = x == 18 || x == 24 || z == 18 || z == 24 || y == 2 || y == 7;
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: if wall {
+                            Block::new("stone", 0)
+                        } else {
+                            Block::AIR
+                        },
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let eye = glam::Vec3::new(21.0, 4.0 + body::EYE_HEIGHT, 21.0);
+        let target = glam::Vec3::new(21.0, 4.6, 18.6);
+        self.camera = Camera::looking_at(eye, target);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.posed_eye = self.camera.eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.select_digit(1);
+        let _ = self.hotbar.give_stack("torch");
+        self.hotbar_dirty = true;
+        self.sync_held_light();
+        let _ = self.window.focus_window();
+    }
+
+    /// Seed the mesh light field from the selected hotbar placeable, or clear it.
+    fn sync_held_light(&mut self) {
+        let pack = Pack::builtin();
+        let held = self.hotbar.slot(self.hotbar.selected()).and_then(|id| {
+            let light = held_light_of(&pack, id)?;
+            let [x, y, z] = eye_cell(self.camera.eye);
+            Some(Emitter { x, y, z, light })
+        });
+        self.chunk_bake.set_held(held);
+    }
+
     fn poll_zombie_shot(&mut self) {
         let Some(path) = self.shot_path.clone() else {
             return;
@@ -4925,6 +4993,32 @@ impl State {
                 eprintln!("settings shot failed: {err}");
                 if self.settings_shot_frames > 120 {
                     self.settings_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    fn poll_held_light_shot(&mut self) {
+        let Some(path) = self.held_light_shot_path.clone() else {
+            return;
+        };
+        self.held_light_shot_frames = self.held_light_shot_frames.saturating_add(1);
+        // Cave remesh + held torch light need a few dozen frames to land.
+        if self.held_light_shot_frames < 180 {
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("held-light shot wrote {}", path.display());
+                self.held_light_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("held-light shot failed: {err}");
+                if self.held_light_shot_frames > 360 {
+                    self.held_light_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -7341,6 +7435,7 @@ impl State {
             self.wanted_lookups = lookups;
             self.wanted_sun = light.direction;
         }
+        self.sync_held_light();
         self.service_meshes();
         self.note_sky();
         self.poll_server();
@@ -8454,6 +8549,7 @@ impl State {
         self.queue.present(surface_texture);
         self.poll_zombie_shot();
         self.poll_settings_shot();
+        self.poll_held_light_shot();
     }
 }
 

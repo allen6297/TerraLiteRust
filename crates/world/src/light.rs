@@ -11,11 +11,20 @@ use std::collections::VecDeque;
 
 use crate::chunk::Block;
 use crate::cluster::Cluster;
-use crate::pack::light_of;
+use crate::pack::{Light, light_of};
 use crate::shape_of;
 
 /// A level of 15 is the brightest pack light, and each step drops one.
-const LIGHT_REACH: i32 = 15;
+pub const LIGHT_REACH: i32 = 15;
+
+/// A light that is not stored as a block — a held torch, lantern, or similar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Emitter {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub light: Light,
+}
 /// Fixed point for one level. Dim channels stay in ratio with the peak
 /// instead of rounding to zero and leaving a pure red fringe.
 const UNIT: u16 = 256;
@@ -47,6 +56,14 @@ impl LightField {
     /// the field, so filling the small square does not allocate a 256-tall
     /// box over every chunk.
     pub fn solve(world: &Cluster) -> Self {
+        Self::solve_with(world, &[])
+    }
+
+    /// Like [`solve`](Self::solve), and also seeds `extras` (a held torch, etc.).
+    ///
+    /// Extra emitters still stop at full cubes and fall off like pack lights.
+    /// A world with no block lights still gets a field when something is held.
+    pub fn solve_with(world: &Cluster, extras: &[Emitter]) -> Self {
         let (world_min_x, world_max_x, world_min_z, world_max_z) = world.bounds();
         let mut min_x = world_max_x;
         let mut min_z = world_max_z;
@@ -65,7 +82,13 @@ impl LightField {
             max_x = max_x.max(x0 + 16);
             max_z = max_z.max(z0 + 16);
         }
-        if emitters.is_empty() {
+        for extra in extras {
+            min_x = min_x.min(extra.x);
+            min_z = min_z.min(extra.z);
+            max_x = max_x.max(extra.x + 1);
+            max_z = max_z.max(extra.z + 1);
+        }
+        if emitters.is_empty() && extras.is_empty() {
             return Self::vacant();
         }
         let min_x = (min_x - LIGHT_REACH).max(world_min_x);
@@ -83,6 +106,16 @@ impl LightField {
                     queue.push_back([x, y, z]);
                 }
             });
+        }
+        for extra in extras {
+            if field.raise(
+                extra.x,
+                extra.y,
+                extra.z,
+                emission_fp(extra.light.channels()),
+            ) {
+                queue.push_back([extra.x, extra.y, extra.z]);
+            }
         }
         field.spread(&mut queue, |x, y, z| world.block_at(x, y, z));
         field
@@ -544,5 +577,46 @@ mod tests {
         assert!(sign[0] > 0);
         assert!(sign[0] > far[0]);
         assert_eq!(far, [0, 0, 0]);
+    }
+
+    #[test]
+    fn a_held_torch_lights_air_with_no_placed_emitter() {
+        let cluster = world([(1, 1, 1, Block::new("stone", 0))]);
+        let dark = LightField::solve(&cluster);
+        assert_eq!(dark.channels(4, 2, 4), [0, 0, 0]);
+        let torch = light_of(Block::new("torch", 0)).expect("torch");
+        let held = LightField::solve_with(
+            &cluster,
+            &[Emitter {
+                x: 4,
+                y: 2,
+                z: 4,
+                light: torch,
+            }],
+        );
+        assert_eq!(held.channels(4, 2, 4), torch.channels());
+        let beside = held.channels(5, 2, 4);
+        assert!(
+            beside[0] > 0 && beside[0] < torch.channels()[0],
+            "air beside a held torch: {beside:?}"
+        );
+    }
+
+    #[test]
+    fn clearing_a_held_light_leaves_the_air_dark() {
+        let cluster = world([(8, 1, 8, Block::new("stone", 0))]);
+        let lantern = light_of(Block::new("lantern", 0)).expect("lantern");
+        let lit = LightField::solve_with(
+            &cluster,
+            &[Emitter {
+                x: 3,
+                y: 2,
+                z: 3,
+                light: lantern,
+            }],
+        );
+        assert!(lit.channels(3, 2, 3)[0] > 0);
+        let dark = LightField::solve_with(&cluster, &[]);
+        assert_eq!(dark.channels(3, 2, 3), [0, 0, 0]);
     }
 }

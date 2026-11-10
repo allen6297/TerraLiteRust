@@ -39,7 +39,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rebuild_world::{Block, Chunk, Cluster, LightField, Pack, Plane, Shape, shape_of};
+use rebuild_world::{
+    Block, Chunk, Cluster, Emitter, LIGHT_REACH, LightField, Pack, Plane, Shape, shape_of,
+};
 
 use crate::daylight;
 use crate::palette;
@@ -294,6 +296,8 @@ pub struct ChunkBake {
     previous: Option<[i32; 2]>,
     light: LightField,
     light_dirty: bool,
+    /// Held torch / lantern / glow brick — same field as placed block light.
+    held: Option<Emitter>,
     baked: HashSet<(i32, i32)>,
     pending: Vec<(i32, i32)>,
     queued: HashSet<(i32, i32)>,
@@ -313,6 +317,7 @@ impl ChunkBake {
             previous: None,
             light: LightField::solve(cluster),
             light_dirty: false,
+            held: None,
             baked: HashSet::new(),
             pending: Vec::new(),
             queued: HashSet::new(),
@@ -320,6 +325,41 @@ impl ChunkBake {
             inflight: HashSet::new(),
             epochs: HashMap::new(),
             ready: Vec::new(),
+        }
+    }
+
+    fn resolve_light(&self, cluster: &Cluster) -> LightField {
+        match self.held {
+            Some(extra) => LightField::solve_with(cluster, &[extra]),
+            None => LightField::solve(cluster),
+        }
+    }
+
+    /// Move or clear the held light. Remeshes chunks that the old or new glow reaches.
+    pub fn set_held(&mut self, held: Option<Emitter>) {
+        if self.held == held {
+            return;
+        }
+        if let Some(old) = self.held {
+            self.touch_light_reach(old.x, old.z);
+        }
+        self.held = held;
+        self.light_dirty = true;
+        if let Some(next) = held {
+            self.touch_light_reach(next.x, next.z);
+        }
+    }
+
+    /// Chunks a level-15 emitter can still touch from `(x, z)`.
+    fn touch_light_reach(&mut self, x: i32, z: i32) {
+        self.light_dirty = true;
+        let cx = x.div_euclid(16);
+        let cz = z.div_euclid(16);
+        let span = (LIGHT_REACH + 15) / 16;
+        for dz in -span..=span {
+            for dx in -span..=span {
+                self.enqueue(cx + dx, cz + dz, true);
+            }
         }
     }
 
@@ -378,7 +418,7 @@ impl ChunkBake {
     /// Empty slots are returned from [`Self::drain_ready`] instead.
     pub fn take_work(&mut self, cluster: &Cluster) -> Option<MeshWork> {
         if self.light_dirty {
-            self.light = LightField::solve(cluster);
+            self.light = self.resolve_light(cluster);
             self.light_dirty = false;
         }
         while let Some((x, z)) = self.take_next() {
@@ -501,7 +541,7 @@ impl ChunkBake {
             return Vec::new();
         }
         if self.light_dirty {
-            self.light = LightField::solve(cluster);
+            self.light = self.resolve_light(cluster);
             self.light_dirty = false;
         }
         let started = std::time::Instant::now();

@@ -57,7 +57,7 @@ pub use hooks::{
     AfterBreak, AfterPlace, BeforeBreak, BeforePlace, BreakVerdict, EntityClock, Hooks,
     PLAYER_SPAWN, TestHook, TestHookEvent, apply_authoritative,
 };
-pub use light::LightField;
+pub use light::{Emitter, LIGHT_REACH, LightField};
 pub use net::{
     BAG_SLOTS, CellUpdate, ClientRequest, DEFAULT_PORT, HOTBAR_SLOTS, MAX_FRAME, NetCell,
     PROTOCOL_VERSION, PeerPose, TAG_BAG, TAG_BREAK, TAG_CELL, TAG_CHAT, TAG_CHEST, TAG_HELLO,
@@ -69,8 +69,9 @@ pub use net::{
 };
 pub use pack::{
     BlockEntry, ItemDisplay, Light, Pack, ShapeEntry, asset_png, asset_text,
-    block_definitions_file, data_pack_root, for_each_collider, harvest_of, light_of,
-    load_data_pack, resource_pack_root, shape_of, shelf_facing, shelf_filled, shelf_meta,
+    block_definitions_file, data_pack_root, for_each_collider, harvest_of, held_light_of,
+    light_of, load_data_pack, resource_pack_root, shape_of, shelf_facing, shelf_filled,
+    shelf_meta,
 };
 pub use rebuild_rosegold::{GuiElement, GuiScreen, SettingOption};
 pub use region::{load_chunk_from_path, load_chunk_from_region};
