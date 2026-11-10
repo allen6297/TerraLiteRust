@@ -84,7 +84,7 @@ impl Clock {
         }
     }
 
-    #[cfg(test)]
+    /// Absolute seconds since spring start (wraps every four days).
     pub fn at(seconds: f32) -> Self {
         Self {
             seconds: seconds.rem_euclid(DAY_SECONDS * SEASON_DAYS),

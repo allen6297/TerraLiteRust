@@ -1247,6 +1247,8 @@ pub struct State {
     found_compound: bool,
     /// Once: dusk fireflies near water.
     found_fireflies: bool,
+    /// Once: saw daytime canopy leaves tumble down.
+    found_falling_leaves: bool,
     /// Once: walked up to the pad wolf.
     found_wolf: bool,
     /// Once: walked up to the pad cat.
@@ -1364,6 +1366,8 @@ pub struct State {
     rustle_wait: f32,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
+    /// Seconds until the next canopy leaf can tumble.
+    leaf_wait: f32,
     /// Seconds until the next rain splash mote near the player.
     splash_wait: f32,
     /// Once: saw rain splash on open ground.
@@ -2389,6 +2393,7 @@ impl State {
             found_clay: false,
             found_compound: false,
             found_fireflies: false,
+            found_falling_leaves: false,
             found_wolf: false,
             found_cat: false,
             found_parrot: false,
@@ -2449,6 +2454,7 @@ impl State {
             found_rustle: false,
             rustle_wait: 0.0,
             firefly_wait: 0.0,
+            leaf_wait: 0.0,
             splash_wait: 0.0,
             found_splashes: false,
             campfire_smoke_shot_path: None,
@@ -11332,6 +11338,196 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Autumn canopy with tumbling leaf motes, then quit with a PNG.
+    pub fn arm_falling_leaves_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.pig = crate::mobs::Pig::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.cat = crate::mobs::Cat::new();
+        self.wolf = crate::mobs::Wolf::new();
+        self.bee = crate::mobs::Bee::new();
+        self.axolotl = crate::mobs::Axolotl::new();
+        self.parrot = crate::mobs::Parrot::new();
+        self.frog = crate::mobs::Frog::new();
+        self.goat = crate::mobs::Goat::new();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Autumn midday so amber tint + day breeze read together.
+        self.clock = crate::daylight::Clock::at(crate::daylight::DAY_SECONDS * 2.48);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.wind_mix = 0.85;
+        self.dusk_show = 0.0;
+
+        let tx = 10;
+        let tz = 12;
+        let mut changes = Vec::new();
+        for z in (tz - 3)..=(tz + 3) {
+            for x in (tx - 3)..=(tx + 3) {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 1),
+                });
+                for y in 2..=8 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Grove to the north; open air south of canopy so leaves silhouette on sky.
+        for (ox, oz) in [(0, 1), (2, 2), (-2, 2)] {
+            let x = tx + ox;
+            let z = tz + oz;
+            for y in 2..=4 {
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::new("oak_log", 0),
+                });
+            }
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    changes.push(CellChange {
+                        x: x + dx,
+                        y: 5,
+                        z: z + dz,
+                        block: Block::new("leaves", 0),
+                    });
+                    changes.push(CellChange {
+                        x: x + dx,
+                        y: 6,
+                        z: z + dz,
+                        block: Block::new("leaves", 0),
+                    });
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        self.drops = crate::drops::Drops::new();
+        let tint = leaf_season_tint(crate::daylight::Season::Autumn);
+        // Mid-air volume between camera and canopy edge.
+        let air = [tx as f32 + 0.3, 3.9, tz as f32 - 0.2];
+        for offset in [
+            [0.0, 0.4, 0.0],
+            [0.8, 0.1, -0.5],
+            [-0.7, 0.55, 0.4],
+            [1.2, -0.1, 0.3],
+            [-1.1, 0.25, -0.4],
+            [0.4, 0.7, 0.8],
+            [-0.3, -0.15, -0.7],
+            [1.5, 0.35, -0.2],
+            [-1.4, 0.05, 0.6],
+            [0.6, 0.85, -0.9],
+            [-0.9, -0.05, 1.0],
+            [1.0, 0.5, 0.7],
+            [-0.5, 0.2, -0.25],
+            [0.2, 0.95, 0.35],
+            [1.3, -0.2, -0.7],
+            [-1.2, 0.6, -0.1],
+            [0.75, 0.15, 0.15],
+            [-0.15, 0.45, 0.85],
+            [0.5, -0.25, -0.55],
+            [-0.7, 0.8, 0.2],
+            [0.25, 0.3, 0.5],
+            [-0.55, 0.65, -0.6],
+            [1.1, 0.0, 0.9],
+            [-0.95, 0.4, 0.05],
+            [0.15, 1.05, -0.35],
+            [0.9, -0.3, -0.15],
+            [-0.25, 0.15, 0.25],
+            [0.35, 0.55, -1.0],
+        ] {
+            self.drops.leaf(
+                [
+                    air[0] + offset[0],
+                    air[1] + offset[1],
+                    air[2] + offset[2],
+                ],
+                tint,
+            );
+        }
+        let _ = self.drops.tick_motes(0.35);
+        self.rebuild_drops();
+        self.found_falling_leaves = true;
+        self.found_fireflies = false;
+        self.found_embers = false;
+        self.found_sway = false;
+        self.found_rustle = false;
+        self.note_shot_at = None;
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.cat_buf = None;
+        self.cat_count = 0;
+        self.wolf_buf = None;
+        self.wolf_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.axolotl_buf = None;
+        self.axolotl_count = 0;
+        self.parrot_buf = None;
+        self.parrot_count = 0;
+        self.frog_buf = None;
+        self.frog_count = 0;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("leaves");
+
+        // Look past open air toward the canopy so amber motes sit on sky + leaves.
+        let eye = glam::Vec3::new(tx as f32 - 0.2, 2.35 + body::EYE_HEIGHT, tz as f32 - 3.4);
+        let focus = glam::Vec3::new(tx as f32 + 0.6, 3.7, tz as f32 + 1.6);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Axolotl companion swimming beside you in a pool, then quit with a PNG.
     pub fn arm_axolotl_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -14555,10 +14751,16 @@ impl State {
         self.posed_pitch = self.cook_shot_pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
-        if self.found_fireflies {
-            // Keep night meadow quiet: no roaming animals, no tip stack, dusk plate on.
-            self.clock.set_time_of_day(0.92);
-            self.dusk_show = 1.0;
+        if self.found_fireflies || self.found_falling_leaves {
+            // Keep presence shots quiet: no roaming animals, no tip stack.
+            if self.found_fireflies {
+                self.clock.set_time_of_day(0.92);
+                self.dusk_show = 1.0;
+            } else {
+                // Autumn midday under canopy — amber leaves read best.
+                self.clock = crate::daylight::Clock::at(crate::daylight::DAY_SECONDS * 2.48);
+                self.dusk_show = 0.0;
+            }
             self.rain_mix = 0.0;
             let light = self.sun_light();
             self.wanted_sun = light.direction;
@@ -14600,7 +14802,11 @@ impl State {
             self.hotbar_dirty = true;
             self.gui.age_chat(60.0);
             if self.cook_shot_frames % 30 == 0 {
-                self.gui.push_chat("fireflies");
+                if self.found_fireflies {
+                    self.gui.push_chat("fireflies");
+                } else {
+                    self.gui.push_chat("leaves");
+                }
             }
         }
     }
@@ -14636,6 +14842,27 @@ impl State {
             } else if self.found_fireflies {
                 // Night meadow shot: keep the warm pool, do not inject camp smoke.
                 let _ = self.drops.tick_motes(0.08);
+            } else if self.found_falling_leaves {
+                // Keep amber leaves tumbling in front of the camera.
+                let tint = leaf_season_tint(crate::daylight::Season::Autumn);
+                let t = self.cook_shot_frames as f32;
+                let base = [
+                    self.cook_shot_eye.x + 0.5,
+                    self.cook_shot_eye.y + 0.55,
+                    self.cook_shot_eye.z + 1.6,
+                ];
+                for i in 0..3 {
+                    let phase = t * 0.09 + i as f32 * 1.7;
+                    self.drops.leaf(
+                        [
+                            base[0] + phase.sin() * 1.1,
+                            base[1] + 0.35 + (phase * 0.7).cos() * 0.45,
+                            base[2] + phase.cos() * 0.9,
+                        ],
+                        tint,
+                    );
+                }
+                let _ = self.drops.tick_motes(0.04);
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
                 if self.found_embers {
@@ -20132,6 +20359,7 @@ impl State {
         self.sway_wait = (self.sway_wait - dt).max(0.0);
         self.rustle_wait = (self.rustle_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
+        self.leaf_wait = (self.leaf_wait - dt).max(0.0);
         self.splash_wait = (self.splash_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
             // Smoke and embers stay campfire-only; furnaces crackle without sparks.
@@ -20210,6 +20438,66 @@ impl State {
         if self.gull_mix > 0.35 && !self.found_gull {
             self.found_gull = true;
             self.gui.push_chat("gull");
+        }
+        // Daytime canopy leaves tumble near the player under/beside leaf cover.
+        let day = (1.0 - night).clamp(0.0, 1.0);
+        let season = self.clock.season();
+        let leaf_tint = leaf_season_tint(season);
+        let leaf_rate: f32 = match season {
+            crate::daylight::Season::Spring => 0.85,
+            crate::daylight::Season::Summer => 0.55,
+            crate::daylight::Season::Autumn => 1.0,
+            crate::daylight::Season::Winter => 0.28,
+        };
+        let leaf_mood = (leaf_cover * day * (1.0 - wet * 0.55) * leaf_rate
+            * open.max(0.35))
+        .clamp(0.0, 1.0);
+        if self.playing
+            && !self.menu.is_open()
+            && !self.dead
+            && leaf_mood > 0.22
+            && self.shadows_shot_path.is_none()
+            && self.bounce_shot_path.is_none()
+            && self.water_shot_path.is_none()
+            && self.cloud_shot_path.is_none()
+            && self.splash_shot_path.is_none()
+            && self.grass_shot_path.is_none()
+        {
+            if self.leaf_wait <= 0.0 {
+                self.leaf_wait = 0.28 + (1.0 - leaf_mood) * 0.7;
+                let base = leaf_at.unwrap_or([
+                    eye[0],
+                    eye[1] + 1.6,
+                    eye[2],
+                ]);
+                let offsets = [
+                    [0.2, 0.1, 0.0],
+                    [1.1, -0.2, -0.6],
+                    [-0.9, 0.15, 0.8],
+                    [0.5, -0.1, 1.2],
+                    [-1.2, 0.05, -0.9],
+                    [1.6, 0.2, 0.4],
+                ];
+                let n = 1 + ((leaf_mood * 2.5) as usize).min(2);
+                let seed = ((eye[0] * 4.3 + eye[2] * 2.1 + self.clock.seconds()).abs() as usize)
+                    % offsets.len();
+                for i in 0..n {
+                    let offset = offsets[(seed + i * 2) % offsets.len()];
+                    self.drops.leaf(
+                        [
+                            base[0] + offset[0],
+                            base[1] + offset[1],
+                            base[2] + offset[2],
+                        ],
+                        leaf_tint,
+                    );
+                }
+                self.rebuild_drops();
+                if !self.found_falling_leaves && self.drops.leaf_count() > 0 {
+                    self.found_falling_leaves = true;
+                    self.gui.push_chat("leaves");
+                }
+            }
         }
         // Night meadow / forest fireflies (and shores). Dawn snuffs the pool.
         let biome = rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32);
@@ -22800,6 +23088,16 @@ fn cave_drip_mix(world: &Cluster, eye: [f32; 3]) -> f32 {
         return 0.0;
     }
     ((solids as f32 - 2.0) / 8.0).clamp(0.35, 1.0)
+}
+
+/// Seasonal leaf mote tint. Autumn reads warmest; winter stays muted brown.
+fn leaf_season_tint(season: crate::daylight::Season) -> [f32; 3] {
+    match season {
+        crate::daylight::Season::Spring => [0.42, 0.78, 0.32],
+        crate::daylight::Season::Summer => [0.28, 0.58, 0.22],
+        crate::daylight::Season::Autumn => [0.95, 0.52, 0.12],
+        crate::daylight::Season::Winter => [0.58, 0.45, 0.30],
+    }
 }
 
 /// Leaf canopy above the eye. Solid non-leaf roofs first count as cave, not trees.

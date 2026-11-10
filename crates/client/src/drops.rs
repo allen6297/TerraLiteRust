@@ -35,6 +35,8 @@ struct Mote {
     rise: bool,
     /// Dusk firefly: drifts and bobs, no gravity.
     hover: bool,
+    /// Forest leaf: tumbles down with a soft sway.
+    tumble: bool,
     half: f32,
 }
 
@@ -73,6 +75,7 @@ impl Drops {
                 life: 0.35,
                 rise: false,
                 hover: false,
+                tumble: false,
                 half: 0.04,
             });
         }
@@ -97,6 +100,7 @@ impl Drops {
                 life: 0.7,
                 rise: false,
                 hover: false,
+                tumble: false,
                 half: 0.04,
             });
         }
@@ -106,7 +110,7 @@ impl Drops {
     pub fn firefly_count(&self) -> usize {
         self.motes
             .iter()
-            .filter(|mote| mote.hover && !mote.rise)
+            .filter(|mote| mote.hover && !mote.rise && !mote.tumble)
             .count()
     }
 
@@ -133,6 +137,7 @@ impl Drops {
             life: 0.55,
             rise: false,
             hover: false,
+            tumble: false,
             half: 0.07,
         });
         self.motes.push(Mote {
@@ -143,6 +148,7 @@ impl Drops {
             life: 0.45,
             rise: false,
             hover: false,
+            tumble: false,
             half: 0.06,
         });
         // Flat ripples: both rise+hover marks rain splash (not smoke, not firefly).
@@ -172,6 +178,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: true,
+                tumble: false,
                 half: 0.08,
             });
         }
@@ -219,6 +226,7 @@ impl Drops {
             life,
             rise: false,
             hover: true,
+            tumble: false,
             // Tiny warm points — blink grows half in tick_motes.
             half: 0.035,
         });
@@ -229,7 +237,7 @@ impl Drops {
         let mut any = false;
         let fade = (dt * 3.2).max(0.0);
         for mote in &mut self.motes {
-            if mote.hover && !mote.rise {
+            if mote.hover && !mote.rise && !mote.tumble {
                 mote.life -= fade;
                 any = true;
             }
@@ -238,6 +246,44 @@ impl Drops {
             self.motes.retain(|mote| mote.life > 0.0);
         }
         any
+    }
+
+    /// How many forest leaf tumble motes are still falling.
+    pub fn leaf_count(&self) -> usize {
+        self.motes.iter().filter(|mote| mote.tumble).count()
+    }
+
+    /// A soft leaf that drifts and tumbles down from the canopy. `tint` is
+    /// seasonal (spring green through autumn amber). Capped so woods stay quiet.
+    pub fn leaf(&mut self, origin: [f32; 3], tint: [f32; 3]) {
+        const MAX_LEAVES: usize = 40;
+        if self.leaf_count() >= MAX_LEAVES {
+            return;
+        }
+        const DRIFTS: [([f32; 3], f32); 4] = [
+            ([0.28, -0.35, 0.12], 5.4),
+            ([-0.22, -0.28, 0.18], 4.8),
+            ([0.16, -0.42, -0.14], 5.8),
+            ([-0.3, -0.32, -0.1], 5.1),
+        ];
+        let seed = ((origin[0] * 2.3 + origin[2] * 1.7).abs() as usize) % DRIFTS.len();
+        let (vel, life) = DRIFTS[seed];
+        let wobble = (seed as f32) * 0.05;
+        self.motes.push(Mote {
+            center: [
+                origin[0] + wobble - 0.08,
+                origin[1] - 0.05,
+                origin[2] - wobble * 0.4,
+            ],
+            velocity: vel,
+            color: tint,
+            block: tint,
+            life,
+            rise: false,
+            hover: false,
+            tumble: true,
+            half: 0.055,
+        });
     }
 
     /// A red cork bobber that hovers on the water for a cast beat.
@@ -250,6 +296,7 @@ impl Drops {
             life: 0.7,
             rise: false,
             hover: true,
+            tumble: false,
             half: 0.08,
         });
         self.motes.push(Mote {
@@ -260,6 +307,7 @@ impl Drops {
             life: 0.65,
             rise: false,
             hover: true,
+            tumble: false,
             half: 0.05,
         });
     }
@@ -296,6 +344,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
+                tumble: false,
                 half: 0.035,
             });
         }
@@ -325,6 +374,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
+                tumble: false,
                 half: 0.06,
             });
         }
@@ -355,6 +405,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
+                tumble: false,
                 half: 0.07,
             });
         }
@@ -382,6 +433,7 @@ impl Drops {
                 life: 1.1,
                 rise: true,
                 hover: false,
+                tumble: false,
                 half: 0.08,
             });
         }
@@ -446,6 +498,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
+                tumble: false,
                 half: 0.05,
             });
         }
@@ -483,6 +536,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
+                tumble: false,
                 half: 0.055,
             });
         }
@@ -523,6 +577,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: false,
+                tumble: false,
                 half: 0.04,
             });
             n += 1;
@@ -585,6 +640,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
+                tumble: false,
                 half: 0.12,
             });
             smoke_n += 1;
@@ -634,6 +690,24 @@ impl Drops {
                     (mote.block[0] + (1.0 - mote.block[0]) * twinkle).min(1.0),
                     (mote.block[1] + (1.0 - mote.block[1]) * twinkle).min(1.0),
                     (mote.block[2] + (0.45 - mote.block[2]).max(0.0) * twinkle).min(1.0),
+                ];
+            } else if mote.tumble {
+                // Soft fall + sway so canopy leaves read as tumbling, not chips.
+                mote.velocity[1] -= 0.55 * step;
+                mote.velocity[1] = mote.velocity[1].max(-1.35);
+                let sway = (mote.life * 3.1).sin();
+                mote.velocity[0] += sway * 0.95 * step;
+                mote.velocity[2] += (mote.life * 2.4).cos() * 0.75 * step;
+                let damp = (1.0 - 0.12 * step).max(0.0);
+                mote.velocity[0] *= damp;
+                mote.velocity[2] *= damp;
+                let flip = (mote.life * 4.2).sin().abs();
+                mote.half = 0.028 + 0.038 * flip;
+                let fade = (mote.life * 0.32).clamp(0.4, 1.0);
+                mote.color = [
+                    (mote.block[0] * fade).min(1.0),
+                    (mote.block[1] * fade).min(1.0),
+                    (mote.block[2] * fade).min(1.0),
                 ];
             } else if mote.rise {
                 mote.velocity[1] += 0.28 * step;
@@ -1161,6 +1235,26 @@ mod tests {
         assert!(drops.firefly_count() <= 2);
         assert!(drops.dawn_fireflies(2.0));
         assert_eq!(drops.firefly_count(), 0);
+    }
+
+    #[test]
+    fn falling_leaves_tumble_and_cap() {
+        let mut drops = Drops::new();
+        let tint = [0.88, 0.48, 0.14];
+        drops.leaf([8.0, 5.0, 8.0], tint);
+        drops.leaf([8.4, 5.2, 7.6], tint);
+        assert_eq!(drops.leaf_count(), 2);
+        assert_eq!(drops.firefly_count(), 0);
+        let y0 = drops.motes[0].center[1];
+        assert!(drops.tick_motes(0.25));
+        assert!(drops.motes[0].center[1] < y0, "leaf should fall");
+        assert!(drops.motes[0].tumble);
+        for _ in 0..40 {
+            drops.leaf([8.0, 5.0, 8.0], tint);
+        }
+        assert!(drops.leaf_count() <= 40);
+        assert!(drops.tick_motes(8.0));
+        assert_eq!(drops.leaf_count(), 0);
     }
 
     #[test]
