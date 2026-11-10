@@ -1152,6 +1152,8 @@ pub struct State {
     found_gull: bool,
     /// Once: flipped a lever or pressed a button and heard the thunk.
     found_thunk: bool,
+    /// Once: opened a chest and heard the lid scrape.
+    found_scrape: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2191,6 +2193,7 @@ impl State {
             gull_mix: 0.0,
             found_gull: false,
             found_thunk: false,
+            found_scrape: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -4527,6 +4530,16 @@ impl State {
             self.chest_at = Some((hit.block[0], hit.block[1], hit.block[2]));
             if seeded {
                 self.chest_dirty = true;
+            }
+            let source = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 0.55,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.play_world(crate::audio::Sound::Scrape, source);
+            if !self.found_scrape {
+                self.found_scrape = true;
+                self.gui.push_chat("scrape");
             }
             self.clear_motion();
             self.set_capture(false);
@@ -10611,6 +10624,103 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Chest lid scrape plate, then quit with a PNG.
+    pub fn arm_chest_scrape_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 11;
+        let cy = 2;
+        let cz = 17;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 1)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: cy,
+            z: cz,
+            block: Block::new("chest", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            cy as f32 + 0.15 + body::EYE_HEIGHT,
+            cz as f32 - 2.3,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let source = [cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5];
+        self.drops = crate::drops::Drops::new();
+        self.rebuild_drops();
+        self.found_scrape = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("scrape");
+        self.play_world(crate::audio::Sound::Scrape, source);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Closed wooden door creak plate, then quit with a PNG.
     pub fn arm_door_creak_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -15022,6 +15132,10 @@ impl State {
             let inv_was = self.gui.player_inv_open();
             if self.gui.on_press(code) {
                 if chest_was && !self.gui.chest_open() {
+                    if let Some((x, y, z)) = self.chest_at {
+                        let source = [x as f32 + 0.5, y as f32 + 0.55, z as f32 + 0.5];
+                        self.play_world(crate::audio::Sound::Scrape, source);
+                    }
                     self.flush_chest();
                     self.chest_at = None;
                 }
