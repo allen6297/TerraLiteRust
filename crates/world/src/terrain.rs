@@ -338,6 +338,8 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((local_x, floor, local_z - 1, Block::new("chest", 0)));
     blocks.push((local_x + 1, floor, local_z, Block::new("torch", 0)));
     blocks.push((local_x - 1, floor, local_z, mossy));
+    // Offering on the altar: what bricks + clay make at the table.
+    blocks.push((local_x, floor + 1, local_z, Block::new("decorated_pot", 0)));
     // East of the altar: hold clay and bake bricks in one use.
     let furnace_x = (SHRINE_FURNACE.0 - chunk_x * 16) as u8;
     let furnace_z = (SHRINE_FURNACE.1 - chunk_z * 16) as u8;
@@ -803,6 +805,7 @@ mod tests {
         let floor = (0..16u16)
             .find(|y| shrine.block(local_x, *y, local_z).id == "chiseled_stone_bricks")
             .expect("altar");
+        assert_eq!(shrine.block(local_x, floor + 1, local_z).id, "decorated_pot");
         assert_eq!(shrine.block(local_x, floor, local_z - 1).id, "chest");
         assert_eq!(
             (2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z - 1)),
