@@ -1350,6 +1350,10 @@ pub struct State {
     found_mine: bool,
     /// Once: walked up to the northwest ruined portal.
     found_portal: bool,
+    /// Once: lit the ruined portal with flint and steel / fire charge.
+    found_portal_lit: bool,
+    /// Seconds left before another nether portal teleport can fire.
+    portal_cool: f32,
     /// Once: walked up to the east desert temple.
     found_temple: bool,
     /// Once: walked up to the west beach shipwreck.
@@ -2599,6 +2603,8 @@ impl State {
             found_shrine: false,
             found_mine: false,
             found_portal: false,
+            found_portal_lit: false,
+            portal_cool: 0.0,
             found_temple: false,
             found_wreck: false,
             found_village: false,
@@ -5312,6 +5318,215 @@ impl State {
             .is_some_and(|id| Pack::builtin().is_brush(id))
     }
 
+    fn holding_portal_lighter(&self) -> bool {
+        matches!(
+            self.hotbar.slot(self.hotbar.selected()),
+            Some("flint_and_steel" | "fire_charge")
+        )
+    }
+
+    /// Repair + light the ruined portal frame with flint and steel / fire charge.
+    ///
+    /// Always intercepts while a lighter is held so flint/fire charge never place as cubes.
+    fn try_light_portal(&mut self) -> bool {
+        if !self.holding_portal_lighter() {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if !matches!(
+            block.id,
+            "obsidian"
+                | "crying_obsidian"
+                | "nether_portal"
+                | "magma"
+                | "netherrack"
+                | "blackstone"
+                | "cracked_blackstone_bricks"
+                | "gilded_blackstone"
+        ) {
+            return true;
+        }
+        let (px, pz) = rebuild_world::RUINED_PORTAL;
+        let dx = hit.block[0] - px;
+        let dz = hit.block[2] - pz;
+        if dx.abs() > 6 || dz.abs() > 6 {
+            return true;
+        }
+        if !self.pending.is_empty() {
+            return true;
+        }
+        // Already lit — keep the lighter, don't place a cube.
+        let (cx, cz) = rebuild_world::RUINED_PORTAL;
+        let mut floor = 2;
+        for y in 0..80 {
+            let id = self.world.block_at(cx, y, cz).id;
+            if id == "obsidian" || id == "crying_obsidian" {
+                floor = y;
+                break;
+            }
+        }
+        if self.world.block_at(cx + 1, floor + 1, cz).id == "nether_portal" {
+            self.found_portal_lit = true;
+            return true;
+        }
+        let slot = self.hotbar.selected();
+        if self.hotbar.slot(slot) == Some("fire_charge") {
+            // Fire charges are single-use.
+            self.hotbar.consume_at(slot);
+        } else if !self.hotbar.wear_use(slot) {
+            // Flint may be a plain stack without durability — still spend one.
+            self.hotbar.consume_at(slot);
+        }
+        self.hotbar_dirty = true;
+        self.light_ruined_portal();
+        true
+    }
+
+    /// Complete the demo frame, fill purple planes, and ensure the nether pocket.
+    fn light_ruined_portal(&mut self) {
+        let (cx, cz) = rebuild_world::RUINED_PORTAL;
+        let mut floor = 2;
+        for y in 0..80 {
+            let id = self.world.block_at(cx, y, cz).id;
+            if id == "obsidian" || id == "crying_obsidian" {
+                floor = y;
+                break;
+            }
+        }
+        let mut changes = Vec::new();
+        for dy in 0..=4i32 {
+            for dx in 0..=3i32 {
+                let edge = dx == 0 || dx == 3 || dy == 0 || dy == 4;
+                if !edge {
+                    continue;
+                }
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: floor + dy,
+                    z: cz,
+                    block: Block::new("obsidian", 0),
+                });
+            }
+        }
+        for dy in 1..=3i32 {
+            for dx in 1..=2i32 {
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: floor + dy,
+                    z: cz,
+                    block: Block::new("nether_portal", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(
+                    rebuild_world::NETHER_PAD.0 + dx * 8,
+                    rebuild_world::NETHER_PAD.1 + dz * 8,
+                );
+            }
+        }
+        let source = [
+            cx as f32 + 1.5,
+            floor as f32 + 2.0,
+            cz as f32 + 0.5,
+        ];
+        self.play_world(crate::audio::Sound::Place, source);
+        self.drops.puff(source, [0.55, 0.18, 0.85]);
+        self.rebuild_drops();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.gui.push_chat("portal lit");
+        self.gui.push_chat("step through");
+    }
+
+    /// Walk into a purple plane to hop between the ruined portal and the nether pocket.
+    fn try_portal_travel(&mut self, dt: f32) {
+        if self.portal_cool > 0.0 {
+            self.portal_cool = (self.portal_cool - dt).max(0.0);
+            return;
+        }
+        if !self.playing || self.menu.is_open() || self.dead {
+            return;
+        }
+        // Still shots freeze travel so the armed pose stays readable.
+        if self.portal_shot_path.is_some() || self.cook_shot_path.is_some() {
+            return;
+        }
+        let feet = [
+            self.camera.eye.x.floor() as i32,
+            (self.camera.eye.y - body::EYE_HEIGHT + 0.1).floor() as i32,
+            self.camera.eye.z.floor() as i32,
+        ];
+        let id = self.world.block_at(feet[0], feet[1], feet[2]).id;
+        let id_up = self.world.block_at(feet[0], feet[1] + 1, feet[2]).id;
+        if id != "nether_portal" && id_up != "nether_portal" {
+            return;
+        }
+        let (ox, oz) = rebuild_world::RUINED_PORTAL_IN;
+        let (nx, nz) = rebuild_world::NETHER_PORTAL_IN;
+        let to_nether = (feet[0] - ox).abs() <= 2 && (feet[2] - oz).abs() <= 2;
+        let to_over = (feet[0] - nx).abs() <= 2 && (feet[2] - nz).abs() <= 2;
+        if !to_nether && !to_over {
+            return;
+        }
+        let (tx, tz, tip) = if to_nether {
+            let _ = self
+                .world
+                .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+            (nx, nz, "the nether")
+        } else {
+            (ox, oz, "overworld")
+        };
+        let mut ty = 5;
+        for y in (0..80).rev() {
+            let under = self.world.block_at(tx, y, tz).id;
+            let here = self.world.block_at(tx, y + 1, tz).id;
+            if under != "air"
+                && under != "nether_portal"
+                && under != "lava"
+                && (here == "air" || here == "nether_portal")
+            {
+                ty = y + 1;
+                break;
+            }
+        }
+        // Stand just south of the plane so we don't immediately re-enter.
+        let eye = glam::Vec3::new(
+            tx as f32 + 0.5,
+            ty as f32 + body::EYE_HEIGHT,
+            tz as f32 + 1.6,
+        );
+        self.camera.eye = eye;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = eye;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(eye);
+        self.portal_cool = 2.5;
+        self.gui.push_chat(tip);
+        self.play_world(
+            crate::audio::Sound::Place,
+            [tx as f32 + 0.5, ty as f32 + 1.0, tz as f32 + 0.5],
+        );
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(tx + dx * 8, tz + dz * 8);
+            }
+        }
+    }
+
     /// Sweep the looked-at soft block. True when a brush is aimed at one.
     fn try_brush(&mut self) -> bool {
         if !self.holding_brush() {
@@ -6245,6 +6460,7 @@ impl State {
         {
             self.found_portal = true;
             self.gui.push_chat("a ruined portal");
+            self.gui.push_chat("flint and steel");
         }
         if !self.found_temple
             && near(
@@ -10038,7 +10254,7 @@ impl State {
             self.set_capture(false);
             return;
         }
-        if self.try_mace() || self.try_horn() || self.try_brush() {
+        if self.try_mace() || self.try_horn() || self.try_brush() || self.try_light_portal() {
             return;
         }
         if self.holding_spyglass() {
@@ -13161,6 +13377,7 @@ impl State {
         self.found_portal = true;
         self.gui.age_chat(60.0);
         self.gui.push_chat("a ruined portal");
+        self.gui.push_chat("flint and steel");
 
         let (cx, cz) = rebuild_world::RUINED_PORTAL;
         let mut cy = 4;
@@ -13191,6 +13408,84 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Lit purple portal plane + flint in hand, then quit.
+    pub fn arm_portal_lit_shot(&mut self, path: std::path::PathBuf) {
+        // Reuse the cook-shot poller — same idle/capture loop as mineshaft / dungeon.
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -2));
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.38);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.light_ruined_portal();
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("portal lit");
+        self.gui.push_chat("step through");
+
+        let (cx, cz) = rebuild_world::RUINED_PORTAL;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "obsidian"
+                || self.world.block_at(cx, y, cz).id == "crying_obsidian"
+            {
+                cy = y;
+                break;
+            }
+        }
+        // Stand on the apron south-east of the frame (solid blackstone / netherrack).
+        let stand_x = cx + 5;
+        let stand_z = cz + 3;
+        let mut stand_y = cy;
+        for y in (0..80).rev() {
+            let id = self.world.block_at(stand_x, y, stand_z).id;
+            if id != "air" && id != "nether_portal" {
+                stand_y = y + 1;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(cx as f32 + 1.5, cy as f32 + 2.0, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            stand_x as f32 + 0.5,
+            stand_y as f32 + body::EYE_HEIGHT,
+            stand_z as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("flint_and_steel");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+                self.chunk_bake.touch(
+                    rebuild_world::NETHER_PAD.0 + dx * 8,
+                    rebuild_world::NETHER_PAD.1 + dz * 8,
+                );
             }
         }
         let _ = self.window.focus_window();
@@ -24824,6 +25119,7 @@ impl State {
         }
         self.gui.stoke(dt);
         self.gui.age_chat(dt);
+        self.try_portal_travel(dt);
         self.tick_compound_flow(dt);
         self.tell_landmarks();
         self.tell_cook_heat();

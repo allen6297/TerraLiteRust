@@ -1,0 +1,6 @@
+{
+  "elements": [
+    {"from": [4, 0, 4], "to": [12, 2, 12]}
+  ],
+  "texture": "assets/terralite/textures/flint_and_steel.png"
+}

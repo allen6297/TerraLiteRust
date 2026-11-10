@@ -5347,6 +5347,10 @@ pub fn for_each_collider(block: Block, mut visit: impl FnMut([f32; 3], [f32; 3])
         visit([0.0, 0.0, 0.0], [16.0, 16.0, 16.0]);
         return;
     }
+    // Portal planes are walk-through — travel detects the cell instead.
+    if block.id == "nether_portal" {
+        return;
+    }
     shape_of(block).for_each_solid(visit);
 }
 

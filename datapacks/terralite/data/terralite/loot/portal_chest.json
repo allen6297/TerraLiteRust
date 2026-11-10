@@ -1,4 +1,4 @@
 {
-  "drops": ["obsidian", "crying_obsidian", "magma", "netherrack", "torch"],
-  "omen": ["diamond_pickaxe", "crying_obsidian", "glowstone", "gilded_blackstone"]
+  "drops": ["flint_and_steel", "obsidian", "crying_obsidian", "magma", "netherrack", "torch"],
+  "omen": ["fire_charge", "diamond_pickaxe", "crying_obsidian", "glowstone", "gilded_blackstone"]
 }

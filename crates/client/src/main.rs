@@ -270,6 +270,8 @@ struct Args {
     shot_mine: Option<std::path::PathBuf>,
     /// Northwest ruined portal frame + chest, then quit.
     shot_portal: Option<std::path::PathBuf>,
+    /// Lit purple portal plane at the ruined frame, then quit.
+    shot_portal_lit: Option<std::path::PathBuf>,
     /// East desert temple remnant + chest, then quit.
     shot_temple: Option<std::path::PathBuf>,
     /// West beach shipwreck + chest, then quit.
@@ -551,6 +553,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_portal: args.shot_portal,
+        shot_portal_lit: args.shot_portal_lit,
         shot_temple: args.shot_temple,
         shot_wreck: args.shot_wreck,
         shot_village: args.shot_village,
@@ -709,6 +712,7 @@ struct App {
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_portal: Option<std::path::PathBuf>,
+    shot_portal_lit: Option<std::path::PathBuf>,
     shot_temple: Option<std::path::PathBuf>,
     shot_wreck: Option<std::path::PathBuf>,
     shot_village: Option<std::path::PathBuf>,
@@ -1039,6 +1043,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_portal.take() {
                     state.arm_ruined_portal_shot(path);
+                }
+                if let Some(path) = self.shot_portal_lit.take() {
+                    state.arm_portal_lit_shot(path);
                 }
                 if let Some(path) = self.shot_temple.take() {
                     state.arm_desert_temple_shot(path);
@@ -1432,6 +1439,7 @@ where
         shot_shrine: None,
         shot_mine: None,
         shot_portal: None,
+        shot_portal_lit: None,
         shot_temple: None,
         shot_wreck: None,
         shot_village: None,
@@ -1978,6 +1986,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-portal".to_string())?;
                 parsed.shot_portal = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-portal-lit" | "--shot-lit-portal" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-portal-lit".to_string())?;
+                parsed.shot_portal_lit = Some(std::path::PathBuf::from(value));
             }
             "--shot-temple" | "--shot-desert-temple" => {
                 let value = iter

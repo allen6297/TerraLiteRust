@@ -156,6 +156,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_mineshaft(&mut blocks, chunk_x, chunk_z);
     stamp_shrine(&mut blocks, chunk_x, chunk_z);
     stamp_ruined_portal(&mut blocks, chunk_x, chunk_z);
+    stamp_nether_pocket(&mut blocks, chunk_x, chunk_z);
     stamp_desert_temple(&mut blocks, chunk_x, chunk_z);
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
@@ -428,7 +429,17 @@ pub const RUINED_PORTAL: (i32, i32) = (-24, -24);
 /// Loot chest on the ruined portal apron, two blocks east of the SE foot.
 pub const RUINED_PORTAL_CHEST: (i32, i32) = (RUINED_PORTAL.0 + 2, RUINED_PORTAL.1 + 1);
 
+/// Hellish sister pad south of the ruined portal — return gate for a lit nether portal.
+pub const NETHER_PAD: (i32, i32) = (RUINED_PORTAL.0, RUINED_PORTAL.1 - 16);
+
+/// Interior standing cell of the nether pocket portal (one block inside the frame).
+pub const NETHER_PORTAL_IN: (i32, i32) = (NETHER_PAD.0 + 1, NETHER_PAD.1);
+
+/// Interior standing cell of the overworld ruined portal once lit.
+pub const RUINED_PORTAL_IN: (i32, i32) = (RUINED_PORTAL.0 + 1, RUINED_PORTAL.1);
+
 const PORTAL_CHUNK: (i32, i32) = (-2, -2);
+const NETHER_CHUNK: (i32, i32) = (-2, -3);
 
 /// Desert temple remnant, east of the demo pad.
 ///
@@ -618,6 +629,107 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((brew_x - 1, floor, brew_z, Block::new("nether_wart_block", 0)));
 }
 
+/// Complete upright obsidian ring (4×5) at `(cx, cz)` standing on `floor`.
+fn push_portal_frame(
+    blocks: &mut Vec<(u8, u16, u8, Block)>,
+    chunk_x: i32,
+    chunk_z: i32,
+    cx: i32,
+    cz: i32,
+    floor: u16,
+    lit: bool,
+) {
+    let obsidian = Block::new("obsidian", 0);
+    let portal = Block::new("nether_portal", 0);
+    // Outer ring.
+    for dy in 0..=4u16 {
+        for dx in 0..=3i32 {
+            let edge = dx == 0 || dx == 3 || dy == 0 || dy == 4;
+            if !edge {
+                continue;
+            }
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor + dy));
+            blocks.push((lx, floor + dy, lz, obsidian));
+        }
+    }
+    if lit {
+        for dy in 1..=3u16 {
+            for dx in 1..=2i32 {
+                let lx = (cx + dx - chunk_x * 16) as u8;
+                let lz = (cz - chunk_z * 16) as u8;
+                blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor + dy));
+                blocks.push((lx, floor + dy, lz, portal));
+            }
+        }
+    }
+}
+
+/// Hellish sister pocket south of the ruined portal — netherrack room + return gate.
+fn stamp_nether_pocket(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != NETHER_CHUNK {
+        return;
+    }
+    let (cx, cz) = NETHER_PAD;
+    let floor: u16 = 4;
+    let netherrack = Block::new("netherrack", 0);
+    let magma = Block::new("magma", 0);
+    let blackstone = Block::new("blackstone", 0);
+    let lava = Block::new("lava", 0);
+    let glow = Block::new("glowstone", 0);
+    // Hollow 9×9×5 chamber.
+    for dz in -4i32..=4 {
+        for dx in -4i32..=4 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 5)
+            });
+            let edge = dx.abs() == 4 || dz.abs() == 4;
+            blocks.push((
+                lx,
+                floor - 1,
+                lz,
+                if (dx + dz).rem_euclid(3) == 0 {
+                    magma
+                } else {
+                    netherrack
+                },
+            ));
+            if edge {
+                for dy in 0..4u16 {
+                    blocks.push((
+                        lx,
+                        floor + dy,
+                        lz,
+                        if dy == 0 { blackstone } else { netherrack },
+                    ));
+                }
+                blocks.push((lx, floor + 4, lz, netherrack));
+            } else {
+                blocks.push((lx, floor + 4, lz, netherrack));
+            }
+        }
+    }
+    // Lava pools in the corners.
+    for &(dx, dz) in &[(-3i32, -3), (3, -3), (-3, 3), (3, 3)] {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor - 1));
+        blocks.push((lx, floor - 1, lz, lava));
+    }
+    // Glowstone accents on the ceiling.
+    for &(dx, dz) in &[(0i32, 0), (-2, 2), (2, -2)] {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor + 4));
+        blocks.push((lx, floor + 4, lz, glow));
+    }
+    // Return portal — already lit so the trip home works.
+    push_portal_frame(blocks, chunk_x, chunk_z, cx, cz, floor, true);
+}
+
 /// Incomplete portal frame + apron + chest. Guaranteed in [`PORTAL_CHUNK`];
 /// rare copies in other non-reserved chunks.
 fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
@@ -631,6 +743,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | TEMPLE_CHUNK
             | WRECK_CHUNK
             | VILLAGE_CHUNK
+            | NETHER_CHUNK
             | (0, 0)
     );
     if !guaranteed {
@@ -735,6 +848,7 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | SHRINE_CHUNK
             | CLAY_CHUNK
             | PORTAL_CHUNK
+            | NETHER_CHUNK
             | WRECK_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
@@ -841,6 +955,7 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             | SHRINE_CHUNK
             | CLAY_CHUNK
             | PORTAL_CHUNK
+            | NETHER_CHUNK
             | TEMPLE_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
@@ -946,6 +1061,7 @@ fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, c
             | SHRINE_CHUNK
             | CLAY_CHUNK
             | PORTAL_CHUNK
+            | NETHER_CHUNK
             | TEMPLE_CHUNK
             | WRECK_CHUNK
             | (0, 0)
@@ -1864,6 +1980,32 @@ mod tests {
                 .id,
             "chest"
         );
+    }
+
+    #[test]
+    fn a_nether_pocket_holds_a_lit_return_portal() {
+        let pocket = generate_chunk(NETHER_CHUNK.0, NETHER_CHUNK.1);
+        let (cx, cz) = NETHER_PAD;
+        let lx = (cx - NETHER_CHUNK.0 * 16) as u8;
+        let lz = (cz - NETHER_CHUNK.1 * 16) as u8;
+        let floor = 4u16;
+        assert_eq!(
+            pocket.block(lx, floor, lz).id,
+            "obsidian",
+            "west foot of the return frame"
+        );
+        assert_eq!(
+            pocket.block(lx + 1, floor + 1, lz).id,
+            "nether_portal",
+            "lit portal plane inside the frame"
+        );
+        assert_eq!(
+            (cx + 1, cz),
+            NETHER_PORTAL_IN,
+            "interior standing cell"
+        );
+        assert_ne!(NETHER_CHUNK, PORTAL_CHUNK);
+        assert_ne!(NETHER_CHUNK, CAMP_CHUNK);
     }
 
     #[test]
