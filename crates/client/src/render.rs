@@ -1146,6 +1146,10 @@ pub struct State {
     found_hiss: bool,
     /// Once: swung a fence gate and heard the creak.
     found_creak: bool,
+    /// Eased dawn×shore gull mix, `0` elsewhere through `1` at peak.
+    gull_mix: f32,
+    /// Once: heard a dawn gull over the shore.
+    found_gull: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2182,6 +2186,8 @@ impl State {
             hiss_at: None,
             found_hiss: false,
             found_creak: false,
+            gull_mix: 0.0,
+            found_gull: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -10486,6 +10492,111 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Dawn shore pad with a gull cry, then quit with a PNG.
+    pub fn arm_dawn_gull_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        // Peak dawn chorus (~0.26) so gull_mix reads on the shore pad.
+        self.clock.set_time_of_day(0.26);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let mut changes = Vec::new();
+        for z in 20..=28 {
+            for x in 6..=12 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 1..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        for z in 22..=26 {
+            for x in 7..=11 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("water", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let shore = [9.5, 1.85, 24.5];
+        self.lap_at = Some(shore);
+        self.lap_mix = 1.0;
+        self.gull_mix = 1.0;
+        self.found_gull = true;
+        self.drops = crate::drops::Drops::new();
+        self.rebuild_drops();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("gull");
+        self.play_world(crate::audio::Sound::Gull, shore);
+
+        // Stand back on the grass bank, looking across the pool at dawn.
+        let eye = glam::Vec3::new(9.5, 1.0 + 1.35 + body::EYE_HEIGHT, 19.6);
+        let focus = glam::Vec3::new(9.5, 2.35, 25.2);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(9 + dx * 8, 24 + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Camp east fence plot with wheat, then quit with a PNG.
     pub fn arm_farm_plot_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17257,6 +17368,16 @@ impl State {
         let (shore_mix, shore_at) = nearest_water_edge(&self.world, eye);
         self.lap_mix += (shore_mix - self.lap_mix) * (dt * 2.2).min(1.0);
         self.lap_at = shore_at;
+        let gull = if sky_open {
+            (dawn * shore_mix).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.gull_mix += (gull - self.gull_mix) * (dt * 0.9).min(1.0);
+        if self.gull_mix > 0.35 && !self.found_gull {
+            self.found_gull = true;
+            self.gui.push_chat("gull");
+        }
         // Dusk / night fireflies drift near open-sky water.
         let firefly_mood = if sky_open {
             (night * (1.0 - wet * 0.7) * shore_mix.max(0.35)).clamp(0.0, 1.0)
@@ -17355,6 +17476,16 @@ impl State {
                     self.play_world_soft(crate::audio::Sound::Hiss, source, level);
                 }
             }
+            if let Some(level) = self.audio.gull_ready(dt, self.gull_mix) {
+                if let Some(source) = self.lap_at {
+                    self.play_world_soft(crate::audio::Sound::Gull, source, level);
+                } else {
+                    self.audio.play_heard(
+                        crate::audio::Sound::Gull,
+                        crate::audio::Hearing::even(level),
+                    );
+                }
+            }
         } else {
             let _ = self.audio.cricket_ready(dt, 0.0);
             let _ = self.audio.bird_ready(dt, 0.0);
@@ -17365,6 +17496,7 @@ impl State {
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
             let _ = self.audio.hiss_ready(dt, 0.0);
+            let _ = self.audio.gull_ready(dt, 0.0);
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);

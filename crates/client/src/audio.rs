@@ -71,6 +71,8 @@ pub enum Sound {
     Hiss,
     /// A soft wooden fence-gate / door creak.
     Creak,
+    /// A soft dawn gull cry over open shore.
+    Gull,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -277,6 +279,8 @@ pub struct Audio {
     rustle_left: f32,
     /// Seconds until the next lantern hiss.
     hiss_left: f32,
+    /// Seconds until the next dawn shore gull.
+    gull_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -307,6 +311,7 @@ impl Audio {
             drip_left: 0.0,
             rustle_left: 0.0,
             hiss_left: 0.0,
+            gull_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -524,6 +529,24 @@ impl Audio {
         Some(0.12 + mix * 0.22)
     }
 
+    /// Loudness for the next dawn shore gull, or `None` this frame.
+    ///
+    /// `mix` is dawn×shore amount (`0` elsewhere → `1` at peak).
+    pub fn gull_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.08 {
+            self.gull_left = 0.0;
+            return None;
+        }
+        self.gull_left -= dt;
+        if self.gull_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edge (~4.2s); steadier at peak dawn shore (~2.0s).
+        self.gull_left = 4.2 - mix * 2.2;
+        Some(0.14 + mix * 0.24)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -580,6 +603,7 @@ impl Audio {
             Sound::Rustle => leaf_rustle(),
             Sound::Hiss => lantern_hiss(),
             Sound::Creak => gate_creak(),
+            Sound::Gull => gull_cry(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -921,6 +945,15 @@ fn bird_tone(freq: f32, seconds: f32, volume: f32, seed: u32) -> Vec<i16> {
         let env = (t / 0.015).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((tone * 0.85 + n * 0.08) * volume * env * 32_767.0) as i16);
     }
+    samples
+}
+
+/// Soft two-note dawn gull cry. Lower and longer than a forest bird.
+fn gull_cry() -> Vec<i16> {
+    let mut samples = Vec::new();
+    samples.extend(bird_tone(780.0, 0.14, 0.13, 71));
+    samples.extend(vec![0i16; (22_050.0 * 0.06) as usize]);
+    samples.extend(bird_tone(1_050.0, 0.16, 0.11, 79));
     samples
 }
 
@@ -1323,6 +1356,22 @@ mod tests {
         audio.set_muted(true);
         audio.play(Sound::Creak);
         assert_eq!(audio.played, vec![Sound::Creak]);
+    }
+
+    #[test]
+    fn dawn_gull_waits_for_shore_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.gull_ready(0.1, 0.0).is_none());
+        let level = audio
+            .gull_ready(0.1, 1.0)
+            .expect("peak dawn shore calls on the first beat");
+        assert!(level > 0.3 && level <= 0.45);
+        assert!(audio.gull_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Gull, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Gull]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Gull, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Gull]);
     }
 
     #[test]
