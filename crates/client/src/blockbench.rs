@@ -1004,6 +1004,46 @@ mod tests {
     }
 
     #[test]
+    fn a_zombie_idle_walk_and_attack_move_the_arms() {
+        let figure = parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/zombie.bbmodel"
+        ))
+        .expect("zombie model");
+        let pants = |time: f32| {
+            let posed = mesh(&figure, "walk", time, 0.0, [0.0, 0.0, 0.0], &[]);
+            let legs: Vec<_> = posed
+                .into_iter()
+                .filter(|vertex| vertex.color[2] > vertex.color[1] && vertex.color[0] < 0.3)
+                .collect();
+            span_z(&legs)
+        };
+        let hands = |time: f32| {
+            mesh(&figure, "attack", time, 0.0, [0.0, 0.0, 0.0], &[])
+                .into_iter()
+                .filter(|vertex| {
+                    vertex.color[1] > vertex.color[0] && vertex.color[1] > 0.45
+                })
+                .map(|vertex| vertex.position[1])
+                .fold(f32::MIN, f32::max)
+        };
+        assert!(
+            pants(0.0) > pants(0.2) + 0.05,
+            "walk swings the feet apart, open {} closed {}",
+            pants(0.0),
+            pants(0.2)
+        );
+        let strike = (hands(0.15) - hands(0.0)).abs();
+        assert!(strike > 0.04, "attack pumps the arms, delta {strike}");
+        let verts = mesh(&figure, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        assert!(verts.len() > 36, "the body has several cubes");
+        let top = verts
+            .iter()
+            .map(|vertex| vertex.position[1])
+            .fold(f32::MIN, f32::max);
+        assert!(top > 1.7, "the figure stands near two blocks tall, top {top}");
+    }
+
+    #[test]
     fn an_axolotl_idle_opens_the_gills_and_a_swim_lifts_the_tail() {
         let figure = parse(include_str!(
             "../../../resourcepacks/terralite/assets/terralite/models/entity/axolotl.bbmodel"

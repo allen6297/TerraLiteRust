@@ -1,6 +1,9 @@
 //! A pig, a zombie, a breeze, a copper golem, a wolf, a cat, a parrot, a frog,
 //! an axolotl, a chicken, a bee, a fox, and a goat.
 //!
+//! The zombie body is `models/entity/zombie.bbmodel` with `textures/entity/zombie.png`,
+//! playing `idle`, `walk`, and `attack` the same way the chicken and player do.
+//!
 //! The entity tick runs `"pig"`, `"zombie"`, `"breeze"`, `"golem"`, `"wolf"`,
 //! `"cat"`, `"parrot"`, `"frog"`, `"bee"`, `"fox"`, and `"goat"` every 50 ms,
 //! the same way it runs `"sheep"`. The pig walks a square. The zombie bites.
@@ -386,6 +389,8 @@ impl Pig {
 
 const ZOMBIE_HEARTS: i32 = 4;
 const ZOMBIE_HOME: [f32; 3] = [11.0, 1.0, 13.0];
+/// Seconds the mesh stays red after a mace hit.
+const ZOMBIE_FLASH: f32 = 0.35;
 
 pub struct Zombie {
     origin: [f32; 3],
@@ -396,6 +401,14 @@ pub struct Zombie {
     down: f32,
     /// Entity ticks left before it walks again.
     loose: u32,
+    /// Blockbench clip clock, in seconds.
+    pose: f32,
+    /// True while the last step walked toward the player.
+    moving: bool,
+    /// True while in bite range with a clear line.
+    attacking: bool,
+    /// Seconds of red hit flash left on the mesh.
+    flash: f32,
 }
 
 impl Zombie {
@@ -407,6 +420,10 @@ impl Zombie {
             hearts: ZOMBIE_HEARTS,
             down: 0.0,
             loose: 0,
+            pose: 0.0,
+            moving: false,
+            attacking: false,
+            flash: 0.0,
         }
     }
 
@@ -489,6 +506,7 @@ impl Zombie {
         if self.hearts <= 0 || amount <= 0 {
             return false;
         }
+        self.flash = ZOMBIE_FLASH;
         self.hearts -= amount;
         if self.hearts > 0 {
             return false;
@@ -505,12 +523,22 @@ impl Zombie {
         self.down = 0.0;
         self.swing = 0;
         self.loose = 0;
+        self.pose = 0.0;
+        self.moving = false;
+        self.attacking = false;
+        self.flash = 0.0;
     }
 
-    /// Stand back up after a knockdown. True on the frame it rises.
+    /// Decay the hit flash, or stand back up after a knockdown.
+    ///
+    /// True while the mesh should rebuild: flash frames, or the rise frame.
     pub fn rest(&mut self, dt: f32) -> bool {
         if self.hearts > 0 {
-            return false;
+            if self.flash <= 0.0 {
+                return false;
+            }
+            self.flash = (self.flash - dt).max(0.0);
+            return true;
         }
         self.down -= dt;
         if self.down > 0.0 {
@@ -520,6 +548,10 @@ impl Zombie {
         self.origin = ZOMBIE_HOME;
         self.swing = 0;
         self.down = 0.0;
+        self.pose = 0.0;
+        self.moving = false;
+        self.attacking = false;
+        self.flash = 0.0;
         true
     }
 
@@ -535,13 +567,19 @@ impl Zombie {
     ) -> bool {
         if self.loose > 0 {
             self.loose = self.loose.saturating_sub(count);
+            self.moving = false;
+            self.attacking = false;
+            self.pose += 0.05 * count as f32;
             return false;
         }
         if self.hearts <= 0 {
             return false;
         }
         let mut bite = false;
+        let mut stepped = false;
+        let mut swinging = false;
         for _ in 0..count {
+            self.pose += 0.05;
             let feet_y = self.origin[1].floor() as i32;
             let dx = player[0] - self.origin[0];
             let dz = player[1] - self.origin[2];
@@ -554,9 +592,11 @@ impl Zombie {
                     face_forward(&mut self.yaw, next[0] - from[0], next[1] - from[1]);
                     self.origin[0] = next[0];
                     self.origin[2] = next[1];
+                    stepped = true;
                 }
             } else if clear {
                 face_forward(&mut self.yaw, dx, dz);
+                swinging = true;
                 self.swing = self.swing.wrapping_add(1);
                 if self.swing % BITE_EVERY == 0 {
                     bite = true;
@@ -564,6 +604,8 @@ impl Zombie {
             }
             settle_land(&mut self.origin, world);
         }
+        self.moving = stepped;
+        self.attacking = swinging;
         bite
     }
 
@@ -572,30 +614,52 @@ impl Zombie {
             return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
         }
         let [x, y, z] = self.origin;
-        ([x - 0.28, y, z - 0.28], [x + 0.28, y + 1.7, z + 0.28])
+        ([x - 0.28, y, z - 0.28], [x + 0.28, y + 1.95, z + 0.28])
+    }
+
+    fn clip(&self) -> &'static str {
+        if self.attacking {
+            "attack"
+        } else if self.moving {
+            "walk"
+        } else {
+            "idle"
+        }
     }
 
     pub fn vertices(&self) -> Vec<Vertex> {
         if self.hearts <= 0 {
             return Vec::new();
         }
-        let [x, y, z] = self.origin;
-        let mut out = Vec::new();
-        push_box(
-            &mut out,
-            [x, y + 0.7, z],
-            [0.28, 0.45, 0.16],
-            [0.36, 0.55, 0.28],
+        let mut out = crate::blockbench::mesh(
+            zombie_figure(),
+            self.clip(),
+            self.pose,
+            self.yaw,
+            self.origin,
+            &[],
         );
-        push_box(
-            &mut out,
-            [x, y + 1.35, z],
-            [0.2, 0.2, 0.18],
-            [0.28, 0.42, 0.22],
-        );
-        yaw_mesh(&mut out, self.origin, self.yaw);
+        if self.flash > 0.0 {
+            let heat = (self.flash / ZOMBIE_FLASH).clamp(0.0, 1.0);
+            for vertex in &mut out {
+                vertex.color[0] = (vertex.color[0] * (1.0 - heat) + heat).min(1.0);
+                vertex.color[1] *= 1.0 - 0.55 * heat;
+                vertex.color[2] *= 1.0 - 0.55 * heat;
+            }
+        }
         out
     }
+}
+
+fn zombie_figure() -> &'static crate::blockbench::Figure {
+    use std::sync::OnceLock;
+    static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
+    FIGURE.get_or_init(|| {
+        crate::blockbench::parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/zombie.bbmodel"
+        ))
+        .expect("zombie.bbmodel")
+    })
 }
 
 const BREEZE_HEARTS: i32 = 4;
@@ -4098,6 +4162,97 @@ mod tests {
         assert_eq!(ride.origin[0], stuck);
         ride.dismount();
         assert!(ride.seat().is_none());
+    }
+
+    #[test]
+    fn soft_render_zombie_preview_png() {
+        let path = match std::env::var("ZOMBIE_SHOT") {
+            Ok(path) if !path.is_empty() => path,
+            _ => return,
+        };
+        let width = 160usize;
+        let height = 240usize;
+        let vertices = Zombie::new().vertices();
+        assert!(vertices.len() > 36, "zombie mesh for preview");
+        let mut rgba = vec![0u8; width * height * 4];
+        let mut depth = vec![f32::INFINITY; width * height];
+        let yaw = 0.55_f32;
+        let (sy, cy) = (yaw.sin(), yaw.cos());
+        let scale = height as f32 * 0.42;
+        let cx = width as f32 * 0.5;
+        let cy_screen = height as f32 * 0.78;
+        let project = |p: [f32; 3]| -> (f32, f32, f32) {
+            let x = (p[0] - 11.0) * cy + (p[2] - 13.0) * sy;
+            let z = -(p[0] - 11.0) * sy + (p[2] - 13.0) * cy;
+            let sx = x * scale + cx;
+            let sy = (1.05 - (p[1] - 1.0)) * scale + cy_screen;
+            (sx, sy, z)
+        };
+        for tri in vertices.chunks_exact(3) {
+            let (ax, ay, az) = project(tri[0].position);
+            let (bx, by, bz) = project(tri[1].position);
+            let (cxp, cyp, cz) = project(tri[2].position);
+            let color = tri[0].color;
+            let min_x = ax.min(bx).min(cxp).floor().max(0.0) as usize;
+            let max_x = ax.max(bx).max(cxp).ceil().min(width as f32 - 1.0) as usize;
+            let min_y = ay.min(by).min(cyp).floor().max(0.0) as usize;
+            let max_y = ay.max(by).max(cyp).ceil().min(height as f32 - 1.0) as usize;
+            let area = (bx - ax) * (cyp - ay) - (cxp - ax) * (by - ay);
+            if area.abs() < 1.0e-5 {
+                continue;
+            }
+            for y in min_y..=max_y {
+                for x in min_x..=max_x {
+                    let px = x as f32 + 0.5;
+                    let py = y as f32 + 0.5;
+                    let w0 = ((bx - px) * (cyp - py) - (cxp - px) * (by - py)) / area;
+                    let w1 = ((cxp - px) * (ay - py) - (ax - px) * (cyp - py)) / area;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+                    let z = az * w0 + bz * w1 + cz * w2;
+                    let i = y * width + x;
+                    if z >= depth[i] {
+                        continue;
+                    }
+                    depth[i] = z;
+                    let o = i * 4;
+                    rgba[o] = (color[0] * 255.0) as u8;
+                    rgba[o + 1] = (color[1] * 255.0) as u8;
+                    rgba[o + 2] = (color[2] * 255.0) as u8;
+                    rgba[o + 3] = 255;
+                }
+            }
+        }
+        let opaque = rgba.chunks(4).filter(|px| px[3] > 0).count();
+        assert!(opaque > 200, "preview silhouette has pixels, got {opaque}");
+        let mut file = std::fs::File::create(&path).expect("create preview png");
+        let mut encoder = png::Encoder::new(&mut file, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("png header");
+        writer.write_image_data(&rgba).expect("png pixels");
+    }
+
+    #[test]
+    fn the_zombie_plays_attack_and_flashes_on_a_hit() {
+        let mut zombie = Zombie::new();
+        let ground = air_plot();
+        assert_eq!(zombie.clip(), "idle");
+        for _ in 0..BITE_EVERY {
+            zombie.tick_near(1, [zombie.origin[0], zombie.origin[2]], true, &ground);
+        }
+        assert_eq!(zombie.clip(), "attack");
+        assert!(!zombie.hurt(1));
+        assert!(
+            zombie
+                .vertices()
+                .iter()
+                .any(|vertex| vertex.color[0] > vertex.color[1]),
+            "a hit tints the mesh red"
+        );
+        assert!(zombie.rest(0.05));
     }
 
     #[test]

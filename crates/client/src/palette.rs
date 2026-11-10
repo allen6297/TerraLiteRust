@@ -68,6 +68,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "planks" | "oak_stairs" => [0.76, 0.61, 0.35],
         "sign" | "perch" => [0.86, 0.74, 0.48],
         "coin" => [0.93, 0.76, 0.28],
+        "zombie_spawn_egg" => [0.36, 0.55, 0.28],
         "hanging_sign" => [0.82, 0.70, 0.44],
         "oak_log" => [0.44, 0.33, 0.18],
         "leaves" => [0.08, 0.32, 0.12],

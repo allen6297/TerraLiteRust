@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "format_version": "4.10",
+    "model_format": "free"
+  },
+  "name": "zombie_spawn_egg",
+  "elements": [
+    {
+      "name": "shell",
+      "type": "cube",
+      "from": [
+        3,
+        1,
+        5
+      ],
+      "to": [
+        13,
+        15,
+        11
+      ],
+      "origin": [
+        8,
+        1,
+        8
+      ],
+      "color": [
+        0.22,
+        0.34,
+        0.18
+      ]
+    },
+    {
+      "name": "spot",
+      "type": "cube",
+      "from": [
+        5,
+        4,
+        4
+      ],
+      "to": [
+        11,
+        10,
+        5
+      ],
+      "origin": [
+        8,
+        1,
+        8
+      ],
+      "color": [
+        0.36,
+        0.55,
+        0.28
+      ]
+    },
+    {
+      "name": "spot2",
+      "type": "cube",
+      "from": [
+        6,
+        11,
+        4
+      ],
+      "to": [
+        10,
+        14,
+        5
+      ],
+      "origin": [
+        8,
+        1,
+        8
+      ],
+      "color": [
+        0.28,
+        0.42,
+        0.22
+      ]
+    }
+  ]
+}
