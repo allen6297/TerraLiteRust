@@ -178,6 +178,8 @@ struct Args {
     shot_rustle: Option<std::path::PathBuf>,
     /// Night lantern soft hiss, then quit.
     shot_hiss: Option<std::path::PathBuf>,
+    /// Shrine altar pot brush / pottery sherd, then quit.
+    shot_pottery: Option<std::path::PathBuf>,
     /// Camp farm fence-gate creak, then quit.
     shot_creak: Option<std::path::PathBuf>,
     /// Dawn shore gull cry, then quit.
@@ -362,6 +364,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_sway: args.shot_sway,
         shot_rustle: args.shot_rustle,
         shot_hiss: args.shot_hiss,
+        shot_pottery: args.shot_pottery,
         shot_creak: args.shot_creak,
         shot_gull: args.shot_gull,
         shot_thunk: args.shot_thunk,
@@ -454,6 +457,7 @@ struct App {
     shot_sway: Option<std::path::PathBuf>,
     shot_rustle: Option<std::path::PathBuf>,
     shot_hiss: Option<std::path::PathBuf>,
+    shot_pottery: Option<std::path::PathBuf>,
     shot_creak: Option<std::path::PathBuf>,
     shot_gull: Option<std::path::PathBuf>,
     shot_thunk: Option<std::path::PathBuf>,
@@ -639,6 +643,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_hiss.take() {
                     state.arm_lantern_hiss_shot(path);
+                }
+                if let Some(path) = self.shot_pottery.take() {
+                    state.arm_pottery_brush_shot(path);
                 }
                 if let Some(path) = self.shot_creak.take() {
                     state.arm_gate_creak_shot(path);
@@ -931,6 +938,7 @@ where
         shot_sway: None,
         shot_rustle: None,
         shot_hiss: None,
+        shot_pottery: None,
         shot_creak: None,
         shot_gull: None,
         shot_thunk: None,
@@ -1199,6 +1207,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-hiss".to_string())?;
                 parsed.shot_hiss = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-pottery" | "--shot-sherd" | "--shot-brush-pot" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-pottery".to_string())?;
+                parsed.shot_pottery = Some(std::path::PathBuf::from(value));
             }
             "--shot-creak" | "--shot-gate" | "--shot-fence-gate" => {
                 let value = iter

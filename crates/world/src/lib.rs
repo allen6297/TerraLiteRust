@@ -109,7 +109,7 @@ pub use terrain::{
     SHAFT_ANVIL, SHAFT_BLAST, SHAFT_CHEST, SHAFT_GRIND, SHAFT_LADDER, SHAFT_MOUTH, SHAFT_RAIL,
     SHAFT_SMITH,
     SHRINE, SHRINE_BELL, SHRINE_BREW, SHRINE_CHEST, SHRINE_ENCHANT, SHRINE_FURNACE, SHRINE_LECTERN,
-    SHRINE_TABLE, TerrainPump,
+    SHRINE_POT, SHRINE_TABLE, TerrainPump,
     biome_at,
     ensure_terrain, generate_chunk, seed_terrain_ring, sky_tint,
 };

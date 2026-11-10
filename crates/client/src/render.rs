@@ -1182,6 +1182,8 @@ pub struct State {
     found_grind: bool,
     /// Once: enchanted at the table and heard the chime.
     found_chime: bool,
+    /// Once: brushed a pottery sherd from the shrine altar pot.
+    found_sherd: bool,
     /// Seconds until the next campfire smoke puff.
     smoke_wait: f32,
     /// Seconds until the next campfire ember burst.
@@ -2236,6 +2238,7 @@ impl State {
             found_bubble: false,
             found_grind: false,
             found_chime: false,
+            found_sherd: false,
             smoke_wait: 0.0,
             ember_wait: 0.0,
             found_embers: false,
@@ -3440,7 +3443,19 @@ impl State {
         }
         self.hotbar_dirty = true;
         self.mark_brushed(hit.block, block.id, block.metadata);
+        let source = [
+            hit.block[0] as f32 + 0.5,
+            hit.block[1] as f32 + 0.55,
+            hit.block[2] as f32 + 0.5,
+        ];
+        self.play_world(crate::audio::Sound::Brush, source);
+        self.drops.puff(source, [0.78, 0.68, 0.48]);
+        self.rebuild_drops();
         self.gui.push_chat(&find.replace('_', " "));
+        if find == "pottery_sherd" && !self.found_sherd {
+            self.found_sherd = true;
+            self.gui.push_chat("sherd");
+        }
         if self.hotbar.slot(slot).is_none() {
             self.gui.push_chat("the brush breaks");
         }
@@ -4024,6 +4039,7 @@ impl State {
         if !self.found_shrine && near(rebuild_world::SHRINE.0, rebuild_world::SHRINE.1) {
             self.found_shrine = true;
             self.gui.push_chat("a shrine");
+            self.gui.push_chat("brush the altar pot");
         }
         if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
             self.found_mine = true;
@@ -11883,6 +11899,82 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Brush the shrine altar pot for a pottery sherd, then quit with a PNG.
+    pub fn arm_pottery_brush_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::SHRINE_POT;
+        let mut py = 5;
+        for y in 0..80 {
+            if self.world.block_at(px, y, pz).id == "decorated_pot" {
+                py = y;
+                break;
+            }
+        }
+        // Fresh unswept pot so the brush loop is visible.
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: px,
+                y: py,
+                z: pz,
+                block: Block::new("decorated_pot", 0),
+            }],
+        );
+        self.chunk_bake.touch(px, pz);
+
+        let focus = glam::Vec3::new(px as f32 + 0.5, py as f32 + 0.7, pz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            px as f32 + 2.4,
+            py as f32 + 0.85 + body::EYE_HEIGHT,
+            pz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let source = [px as f32 + 0.5, py as f32 + 0.55, pz as f32 + 0.5];
+        self.drops = crate::drops::Drops::new();
+        self.drops.puff(source, [0.78, 0.68, 0.48]);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Brush, source);
+        self.found_shrine = true;
+        self.found_sherd = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("brush");
+        let _ = self.hotbar.collect("pottery_sherd");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("brush the altar pot");
+        self.gui.push_chat("pottery sherd");
+        self.gui.push_chat("sherd");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shrine enchant panel mid-swirl with Efficiency tip, then quit with a PNG.
     pub fn arm_enchant_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -17350,7 +17442,8 @@ impl State {
 
     fn mark_pot(&mut self, at: [i32; 3], filled: bool) {
         let block = self.world.block_at(at[0], at[1], at[2]);
-        let want = u8::from(filled);
+        // Keep the brush-swept bit (4) when toggling the filled bit (1).
+        let want = (block.metadata & !1) | u8::from(filled);
         if block.id != "decorated_pot" || block.metadata == want || !self.pending.is_empty() {
             return;
         }
@@ -20615,7 +20708,13 @@ fn brush_mark(id: &str, metadata: u8) -> u8 {
 }
 
 /// One find from this column. The same cell always yields the same item.
+///
+/// The shrine altar pot always yields a pottery sherd so the archaeology loop
+/// is findable without luck.
 fn brush_find(x: i32, z: i32) -> &'static str {
+    if (x, z) == rebuild_world::SHRINE_POT {
+        return "pottery_sherd";
+    }
     const FINDS: [&str; 4] = ["pottery_sherd", "stick", "clay", "bone_meal"];
     let n = x
         .unsigned_abs()
@@ -21384,6 +21483,8 @@ mod tests {
             find,
             "pottery_sherd" | "stick" | "clay" | "bone_meal"
         ));
+        let (px, pz) = rebuild_world::SHRINE_POT;
+        assert_eq!(super::brush_find(px, pz), "pottery_sherd");
     }
 
     #[test]

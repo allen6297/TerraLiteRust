@@ -386,6 +386,8 @@ const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 /// The chunk is `(2, 2)`. Walk east past the pad, then south. A chest sits on
 /// the altar under the broken walls.
 pub const SHRINE: (i32, i32) = (40, 40);
+/// Decorated pot on the shrine altar pedestal (same column as [`SHRINE`]).
+pub const SHRINE_POT: (i32, i32) = SHRINE;
 
 /// The shrine chest one block south of the altar center.
 pub const SHRINE_CHEST: (i32, i32) = (SHRINE.0, SHRINE.1 - 1);

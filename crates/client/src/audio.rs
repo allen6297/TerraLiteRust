@@ -91,6 +91,8 @@ pub enum Sound {
     Grind,
     /// Soft enchanting-table chime.
     Chime,
+    /// Soft archaeology brush sweep.
+    Brush,
     /// A short jukebox disc melody.
     Disc,
 }
@@ -694,6 +696,7 @@ impl Audio {
             Sound::Bubble => brew_bubble(),
             Sound::Grind => grind_scrape(),
             Sound::Chime => enchant_chime(),
+            Sound::Brush => brush_sweep(),
             Sound::Disc => disc_melody(),
         }
     }
@@ -942,6 +945,23 @@ fn iron_ring() -> Vec<i16> {
         let ring = (t * 880.0 * std::f32::consts::TAU).sin() * (-t * 14.0).exp();
         let mixed = (click * 0.8 + ring * 0.55).clamp(-1.0, 1.0);
         samples.push((mixed * 30_000.0) as i16);
+    }
+    samples
+}
+
+/// Soft brush sweep. Dry dust scrape, quieter than a grindstone.
+fn brush_sweep() -> Vec<i16> {
+    let seconds = 0.18;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 269u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let dust = (t * 480.0 * std::f32::consts::TAU).sin() * 0.16;
+        let env = (t / 0.02).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.55 + dust) * 0.1 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1622,6 +1642,17 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Gull, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Gull]);
+    }
+
+    #[test]
+    fn brush_sweep_plays_and_respects_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Brush);
+        assert_eq!(audio.played, vec![Sound::Brush]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Brush);
+        assert_eq!(audio.played, vec![Sound::Brush]);
     }
 
     #[test]
