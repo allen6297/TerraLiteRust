@@ -1001,6 +1001,41 @@ impl Hotbar {
         "fletched"
     }
 
+    /// Make one decorated pot from bricks and clay on the bar.
+    ///
+    /// `"potted"` spends one of each. `"need bricks"` / `"need clay"` name the
+    /// first missing piece. `"no room"` means the bar cannot hold the pot.
+    pub fn shape_pot(&mut self) -> &'static str {
+        let Some(ingredients) = rebuild_world::Pack::builtin().pack_recipe("decorated_pot") else {
+            return "need bricks";
+        };
+        let ingredients = ingredients.to_vec();
+        let mut slots = Vec::with_capacity(ingredients.len());
+        for ingredient in &ingredients {
+            let Some(slot) = self.index_of(ingredient) else {
+                return match ingredient.as_str() {
+                    "bricks" => "need bricks",
+                    "clay" => "need clay",
+                    _ => "need bricks",
+                };
+            };
+            slots.push(slot);
+        }
+        let frees = slots
+            .iter()
+            .any(|slot| self.item(*slot).is_some_and(|item| item.count == 1));
+        if !self.room_for("decorated_pot") && !frees {
+            return "no room";
+        }
+        for slot in slots {
+            self.consume_at(slot);
+        }
+        if !self.collect("decorated_pot") {
+            return "no room";
+        }
+        "potted"
+    }
+
     /// Cook the selected raw food. The first Enter only heats it.
     ///
     /// `"cooking"` spends nothing. `"cooked"` spends one raw and gives one
@@ -2488,6 +2523,20 @@ mod tests {
         assert_eq!(bar.slot(1), Some("bricks"));
         assert_eq!(bar.furnace_now(), "need clay");
         assert_eq!(bar.blast_now(), "need blast");
+    }
+
+    #[test]
+    fn a_table_shapes_bricks_and_clay_into_a_decorated_pot() {
+        let mut bar = Hotbar::new();
+        assert_eq!(bar.shape_pot(), "need bricks");
+        assert!(bar.collect("bricks"));
+        assert_eq!(bar.shape_pot(), "need clay");
+        assert!(bar.collect("clay"));
+        assert_eq!(bar.shape_pot(), "potted");
+        assert!(bar.index_of("bricks").is_none());
+        assert!(bar.index_of("clay").is_none());
+        assert_eq!(bar.index_of("decorated_pot"), Some(1));
+        assert_eq!(bar.shape_pot(), "need bricks");
     }
 
     #[test]

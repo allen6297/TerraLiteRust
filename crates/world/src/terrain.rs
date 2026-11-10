@@ -250,6 +250,9 @@ pub const SHRINE_CHEST: (i32, i32) = (SHRINE.0, SHRINE.1 - 1);
 /// The furnace two blocks east of the altar center.
 pub const SHRINE_FURNACE: (i32, i32) = (SHRINE.0 + 2, SHRINE.1);
 
+/// The crafting table one block north of the shrine furnace.
+pub const SHRINE_TABLE: (i32, i32) = (SHRINE_FURNACE.0, SHRINE_FURNACE.1 - 1);
+
 const SHRINE_CHUNK: (i32, i32) = (2, 2);
 
 /// Marsh clay bank south of the demo pad, under the shallow water.
@@ -341,6 +344,10 @@ fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i
     blocks.push((furnace_x, floor, furnace_z, Block::new("furnace", 0)));
     // A clay block beside it so the bake loop is findable without creative give.
     blocks.push((furnace_x, floor, furnace_z + 1, Block::new("clay", 0)));
+    // North of the furnace: bricks + clay shape a decorated pot in one use.
+    let table_x = (SHRINE_TABLE.0 - chunk_x * 16) as u8;
+    let table_z = (SHRINE_TABLE.1 - chunk_z * 16) as u8;
+    blocks.push((table_x, floor, table_z, Block::new("crafting_table", 0)));
 }
 
 /// Clay under marsh water south of the pad. Only the clay chunk gets it.
@@ -807,6 +814,11 @@ mod tests {
             SHRINE_FURNACE
         );
         assert_eq!(shrine.block(local_x + 2, floor, local_z + 1).id, "clay");
+        assert_eq!(shrine.block(local_x + 2, floor, local_z - 1).id, "crafting_table");
+        assert_eq!(
+            (2 * 16 + i32::from(local_x + 2), 2 * 16 + i32::from(local_z - 1)),
+            SHRINE_TABLE
+        );
         let mut cluster = synthetic_cluster();
         seed_terrain_ring(&mut cluster);
         assert_eq!(

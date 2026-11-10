@@ -1023,6 +1023,8 @@ pub struct State {
     told_blast_heat: bool,
     /// Once: holding clay while looking at a furnace.
     told_furnace_heat: bool,
+    /// Once: holding bricks or clay at a crafting table with both on the bar.
+    told_shape_pot: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1972,6 +1974,7 @@ impl State {
             told_cook_heat: false,
             told_blast_heat: false,
             told_furnace_heat: false,
+            told_shape_pot: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3277,7 +3280,13 @@ impl State {
             return;
         }
         let opened = match block.id {
-            "crafting_table" => self.gui.open_craft(),
+            "crafting_table" => {
+                if self.try_shape_pot() {
+                    true
+                } else {
+                    self.gui.open_craft()
+                }
+            }
             "furnace" => {
                 if self.try_furnace_heat() {
                     true
@@ -3600,6 +3609,36 @@ impl State {
         self.gui.push_chat("use to bake");
     }
 
+    /// Once: hold bricks or clay with both on the bar at a crafting table.
+    fn tell_shape_pot(&mut self) {
+        if self.told_shape_pot || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead)
+        {
+            return;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return;
+        };
+        if id != "bricks" && id != "clay" {
+            return;
+        }
+        if !self.hotbar.holds("bricks", 1) || !self.hotbar.holds("clay", 1) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "crafting_table"
+        {
+            return;
+        }
+        self.told_shape_pot = true;
+        self.gui.push_chat("use to pot");
+    }
+
     /// True when `events.jump` keeps the player on the ground.
     ///
     /// The cell is where the feet are. A consumed jump still sends the first
@@ -3839,6 +3878,39 @@ impl State {
             return;
         }
         self.chest_dirty = false;
+    }
+
+    /// Hold bricks or clay and use a looked-at crafting table to shape a pot.
+    fn try_shape_pot(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if id != "bricks" && id != "clay" {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "crafting_table"
+        {
+            return false;
+        }
+        let word = self.hotbar.shape_pot();
+        self.gui.push_chat(word);
+        if word == "potted" {
+            self.hotbar_dirty = true;
+            let at = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 0.9,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.play_world(crate::audio::Sound::Place, at);
+        }
+        true
     }
 
     /// Hold clay and use a looked-at furnace to bake bricks in one step.
@@ -5224,6 +5296,7 @@ impl State {
             || self.try_cook_heat()
             || self.try_blast_heat()
             || self.try_furnace_heat()
+            || self.try_shape_pot()
             || self.try_eat()
             || self.try_key()
             || self.try_wind()
@@ -6382,6 +6455,59 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Hold a decorated pot after shaping bricks+clay at the shrine table.
+    pub fn arm_pot_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (tx, tz) = rebuild_world::SHRINE_TABLE;
+        let mut ty = 4;
+        for y in 0..80 {
+            if self.world.block_at(tx, y, tz).id == "crafting_table" {
+                ty = y;
+                break;
+            }
+        }
+        let _ = self.hotbar.collect("bricks");
+        let _ = self.hotbar.collect("clay");
+        let word = self.hotbar.shape_pot();
+        self.gui.push_chat(word);
+        self.hotbar_dirty = true;
+        let focus = glam::Vec3::new(tx as f32 + 0.5, ty as f32 + 1.0, tz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            tx as f32 - 1.0,
+            ty as f32 + 1.35 + body::EYE_HEIGHT,
+            tz as f32 + 4.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(tx + dx * 8, tz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -10705,6 +10831,7 @@ impl State {
         self.tell_cook_heat();
         self.tell_blast_heat();
         self.tell_furnace_heat();
+        self.tell_shape_pot();
         self.note_pose();
         if self.drops.tick_motes(dt) {
             self.rebuild_drops();

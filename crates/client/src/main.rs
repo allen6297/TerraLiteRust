@@ -151,6 +151,8 @@ struct Args {
     shot_furnace: Option<std::path::PathBuf>,
     /// Marsh clay bank, then quit.
     shot_clay: Option<std::path::PathBuf>,
+    /// Decorated pot craft at shrine table, then quit.
+    shot_pot: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -246,6 +248,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_blast: args.shot_blast,
         shot_furnace: args.shot_furnace,
         shot_clay: args.shot_clay,
+        shot_pot: args.shot_pot,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -287,6 +290,7 @@ struct App {
     shot_blast: Option<std::path::PathBuf>,
     shot_furnace: Option<std::path::PathBuf>,
     shot_clay: Option<std::path::PathBuf>,
+    shot_pot: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -395,6 +399,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_clay.take() {
                     state.arm_clay_shot(path);
+                }
+                if let Some(path) = self.shot_pot.take() {
+                    state.arm_pot_shot(path);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -546,6 +553,7 @@ where
         shot_blast: None,
         shot_furnace: None,
         shot_clay: None,
+        shot_pot: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -698,6 +706,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-clay".to_string())?;
                 parsed.shot_clay = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-pot" | "--shot-decorated-pot" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-pot".to_string())?;
+                parsed.shot_pot = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter
