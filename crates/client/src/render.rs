@@ -7941,8 +7941,17 @@ impl State {
                 self.dig.is_held(),
             );
         }
-        if self.hunger.tick(dt, moving, self.dig.is_held()) == crate::body::HungerTick::Hurt {
-            self.apply_damage(1);
+        match self
+            .hunger
+            .tick(dt, moving, self.dig.is_held(), self.hearts < body::HEARTS)
+        {
+            crate::body::HungerTick::Hurt => self.apply_damage(1),
+            crate::body::HungerTick::Heal => {
+                if self.hearts < body::HEARTS {
+                    self.hearts += 1;
+                }
+            }
+            crate::body::HungerTick::None => {}
         }
         let wet = body::in_water(self.camera.eye, &self.world);
         let aboard = self.boat.aboard() || self.pig.ridden();

@@ -230,11 +230,19 @@ pub const STARVE_EVERY: f32 = 4.0;
 /// Walk speed while hunger is empty.
 pub const STARVE_PACE: f32 = 0.5;
 
+/// Food needed before idle heart regen starts.
+pub const REGEN_FOOD: i32 = 8;
+
+/// Seconds of stillness at high food before one heart returns.
+pub const REGEN_EVERY: f32 = 4.0;
+
 /// What an empty stomach did this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HungerTick {
     None,
     Hurt,
+    /// Well-fed and idle long enough to restore one heart.
+    Heal,
 }
 
 /// Food points, plus the timers that spend them and then hearts.
@@ -243,6 +251,7 @@ pub struct Hunger {
     food: i32,
     work: f32,
     starve: f32,
+    regen: f32,
 }
 
 impl Hunger {
@@ -251,6 +260,7 @@ impl Hunger {
             food: HUNGER,
             work: 0.0,
             starve: 0.0,
+            regen: 0.0,
         }
     }
 
@@ -264,12 +274,14 @@ impl Hunger {
     }
 
     /// Drain while moving or mining. At zero, a heart is spent every few seconds.
-    pub fn tick(&mut self, dt: f32, moving: bool, mining: bool) -> HungerTick {
+    /// Well-fed, still, and wounded restores a heart and spends one food.
+    pub fn tick(&mut self, dt: f32, moving: bool, mining: bool, wounded: bool) -> HungerTick {
         if dt <= 0.0 {
             return HungerTick::None;
         }
         if self.food <= 0 {
             self.work = 0.0;
+            self.regen = 0.0;
             self.starve += dt;
             if self.starve >= STARVE_EVERY {
                 self.starve -= STARVE_EVERY;
@@ -279,8 +291,20 @@ impl Hunger {
         }
         self.starve = 0.0;
         if !moving && !mining {
+            if wounded && self.food >= REGEN_FOOD {
+                self.regen += dt;
+                if self.regen >= REGEN_EVERY {
+                    self.regen -= REGEN_EVERY;
+                    self.food -= 1;
+                    self.work = 0.0;
+                    return HungerTick::Heal;
+                }
+                return HungerTick::None;
+            }
+            self.regen = 0.0;
             return HungerTick::None;
         }
+        self.regen = 0.0;
         let per = if mining { WORK_HUNGER } else { WALK_HUNGER };
         self.work += dt;
         while self.work >= per && self.food > 0 {
@@ -1283,31 +1307,58 @@ mod tests {
         assert_eq!(hunger.pace(), 1.0);
         assert!(!hunger.eat(4));
         assert_eq!(
-            hunger.tick(WALK_HUNGER - 0.1, true, false),
+            hunger.tick(WALK_HUNGER - 0.1, true, false, false),
             HungerTick::None
         );
         assert_eq!(hunger.food(), HUNGER);
-        assert_eq!(hunger.tick(0.1, true, false), HungerTick::None);
+        assert_eq!(hunger.tick(0.1, true, false, false), HungerTick::None);
         assert_eq!(hunger.food(), HUNGER - 1);
-        assert_eq!(hunger.tick(20.0, false, false), HungerTick::None);
+        assert_eq!(hunger.tick(20.0, false, false, false), HungerTick::None);
         assert_eq!(hunger.food(), HUNGER - 1);
-        hunger.tick(WORK_HUNGER, false, true);
+        hunger.tick(WORK_HUNGER, false, true, false);
         assert_eq!(hunger.food(), HUNGER - 2);
         assert!(hunger.eat(4));
         assert_eq!(hunger.food(), HUNGER);
 
         let mut empty = Hunger::full();
-        empty.tick(WALK_HUNGER * HUNGER as f32, true, false);
+        empty.tick(WALK_HUNGER * HUNGER as f32, true, false, false);
         assert_eq!(empty.food(), 0);
         assert_eq!(empty.pace(), STARVE_PACE);
         assert_eq!(
-            empty.tick(STARVE_EVERY - 0.1, false, false),
+            empty.tick(STARVE_EVERY - 0.1, false, false, false),
             HungerTick::None
         );
-        assert_eq!(empty.tick(0.1, false, false), HungerTick::Hurt);
+        assert_eq!(empty.tick(0.1, false, false, false), HungerTick::Hurt);
         assert!(empty.eat(4));
         assert_eq!(empty.food(), 4);
-        assert_eq!(empty.tick(STARVE_EVERY, false, false), HungerTick::None);
+        assert_eq!(empty.tick(STARVE_EVERY, false, false, true), HungerTick::None);
+    }
+
+    #[test]
+    fn well_fed_idle_regen_returns_a_heart_and_spends_food() {
+        let mut hunger = Hunger::full();
+        assert_eq!(
+            hunger.tick(REGEN_EVERY - 0.1, false, false, true),
+            HungerTick::None
+        );
+        assert_eq!(hunger.food(), HUNGER);
+        assert_eq!(hunger.tick(0.1, false, false, true), HungerTick::Heal);
+        assert_eq!(hunger.food(), HUNGER - 1);
+        // Full health does not keep spending food.
+        assert_eq!(hunger.tick(REGEN_EVERY, false, false, false), HungerTick::None);
+        assert_eq!(hunger.food(), HUNGER - 1);
+        // Moving cancels the regen timer.
+        assert_eq!(hunger.tick(REGEN_EVERY, true, false, true), HungerTick::None);
+        // Below the threshold, idle time does not heal.
+        let mut low = Hunger::full();
+        while low.food() >= REGEN_FOOD {
+            low.tick(WALK_HUNGER, true, false, false);
+        }
+        assert!(low.food() < REGEN_FOOD);
+        assert_eq!(
+            low.tick(REGEN_EVERY * 2.0, false, false, true),
+            HungerTick::None
+        );
     }
 
     #[test]
@@ -1666,7 +1717,7 @@ mod tests {
         assert_eq!(super::cake_bite(4), super::CakeBite::Slice(5));
         assert_eq!(super::cake_bite(5), super::CakeBite::Finish);
         let mut hunger = Hunger::full();
-        hunger.tick(super::WALK_HUNGER, true, false);
+        hunger.tick(super::WALK_HUNGER, true, false, false);
         assert!(hunger.eat(super::CAKE_FOOD));
         assert_eq!(hunger.food(), super::HUNGER);
     }
