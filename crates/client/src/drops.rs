@@ -104,7 +104,77 @@ impl Drops {
 
     /// How many dusk fireflies are still drifting.
     pub fn firefly_count(&self) -> usize {
-        self.motes.iter().filter(|mote| mote.hover).count()
+        self.motes
+            .iter()
+            .filter(|mote| mote.hover && !mote.rise)
+            .count()
+    }
+
+    /// How many rain splash / ripple motes are still alive.
+    pub fn rain_splash_count(&self) -> usize {
+        self.motes
+            .iter()
+            .filter(|mote| mote.hover && mote.rise)
+            .count()
+    }
+
+    /// Tiny ground splash + expanding ripple when a raindrop hits open ground or a puddle.
+    pub fn rain_splash(&mut self, origin: [f32; 3]) {
+        const MAX_SPLASH: usize = 72;
+        if self.rain_splash_count() >= MAX_SPLASH {
+            return;
+        }
+        // Bright droplet pops (gravity) — sit clear of the ground to avoid Z-fight.
+        self.motes.push(Mote {
+            center: [origin[0], origin[1] + 0.18, origin[2]],
+            velocity: [0.1, 2.4, -0.08],
+            color: [0.95, 0.98, 1.0],
+            block: [0.95, 0.98, 1.0],
+            life: 0.55,
+            rise: false,
+            hover: false,
+            half: 0.07,
+        });
+        self.motes.push(Mote {
+            center: [origin[0] + 0.06, origin[1] + 0.16, origin[2] - 0.05],
+            velocity: [-0.12, 2.0, 0.1],
+            color: [0.9, 0.96, 1.0],
+            block: [0.9, 0.96, 1.0],
+            life: 0.45,
+            rise: false,
+            hover: false,
+            half: 0.06,
+        });
+        // Flat ripples: both rise+hover marks rain splash (not smoke, not firefly).
+        // Keep centers above the top face so expanding cubes do not Z-fight grass.
+        const RING: [([f32; 3], [f32; 3], f32); 5] = [
+            ([0.85, 0.02, 0.22], [0.92, 0.97, 1.0], 0.85),
+            ([-0.78, 0.01, 0.4], [0.88, 0.94, 1.0], 0.78),
+            ([0.35, 0.02, -0.85], [0.95, 0.98, 1.0], 0.9),
+            ([-0.5, 0.01, -0.55], [0.85, 0.92, 0.98], 0.72),
+            ([0.62, 0.02, -0.28], [0.9, 0.96, 1.0], 0.8),
+        ];
+        let seed = ((origin[0] * 5.3 + origin[2] * 2.1).abs() as usize) % RING.len();
+        for (i, (vel, color, life)) in RING.into_iter().enumerate() {
+            if self.rain_splash_count() >= MAX_SPLASH {
+                break;
+            }
+            let turn = ((seed + i) % RING.len()) as f32 * 0.04;
+            self.motes.push(Mote {
+                center: [
+                    origin[0] + turn - 0.05,
+                    origin[1] + 0.14,
+                    origin[2] - turn * 0.5,
+                ],
+                velocity: vel,
+                color,
+                block: color,
+                life,
+                rise: true,
+                hover: true,
+                half: 0.08,
+            });
+        }
     }
 
     /// Soft warm motes that drift near water at dusk. Capped so the air stays quiet.
@@ -187,7 +257,9 @@ impl Drops {
         let pollen_n = self
             .motes
             .iter()
-            .filter(|mote| mote.hover && mote.color[0] > 0.85 && mote.color[1] > 0.4)
+            .filter(|mote| {
+                mote.hover && !mote.rise && mote.color[0] > 0.85 && mote.color[1] > 0.4
+            })
             .count();
         if pollen_n >= 24 {
             return;
@@ -303,6 +375,7 @@ impl Drops {
             .iter()
             .filter(|mote| {
                 mote.hover
+                    && !mote.rise
                     && mote.color[0] > 0.75
                     && mote.color[1] > 0.55
                     && mote.color[1] < 0.82
@@ -316,7 +389,10 @@ impl Drops {
         self.motes
             .iter()
             .filter(|mote| {
-                mote.hover && mote.color[1] >= mote.color[0] && mote.color[2] < 0.4
+                mote.hover
+                    && !mote.rise
+                    && mote.color[1] >= mote.color[0]
+                    && mote.color[2] < 0.4
             })
             .count()
     }
@@ -438,7 +514,11 @@ impl Drops {
     /// Soft gray puffs that float up from a campfire. Cheap and capped.
     pub fn smoke(&mut self, origin: [f32; 3]) {
         const MAX_SMOKE: usize = 28;
-        let mut smoke_n = self.motes.iter().filter(|mote| mote.rise).count();
+        let mut smoke_n = self
+            .motes
+            .iter()
+            .filter(|mote| mote.rise && !mote.hover)
+            .count();
         if smoke_n >= MAX_SMOKE {
             return;
         }
@@ -504,7 +584,21 @@ impl Drops {
             mote.center[0] += mote.velocity[0] * step;
             mote.center[1] += mote.velocity[1] * step;
             mote.center[2] += mote.velocity[2] * step;
-            if mote.hover {
+            if mote.hover && mote.rise {
+                // Rain ripple: expand on the surface, stay flat, fade cool.
+                mote.velocity[1] = 0.0;
+                let damp = (1.0 - 1.6 * step).max(0.0);
+                mote.velocity[0] *= damp;
+                mote.velocity[2] *= damp;
+                // Cap growth so ripples stay above the ground plane.
+                mote.half = (mote.half + 0.18 * step).min(0.12);
+                let fade = (mote.life * 1.6).clamp(0.45, 1.0);
+                mote.color = [
+                    (mote.block[0] * fade).min(1.0),
+                    (mote.block[1] * fade).min(1.0),
+                    (mote.block[2] * fade.min(1.08)).min(1.0),
+                ];
+            } else if mote.hover {
                 // Sin bob + twinkle so dusk flies read against the night sky.
                 let bob = (mote.life * 2.9).sin() * 0.75;
                 mote.velocity[1] += (bob - mote.velocity[1]) * (2.4 * step).min(1.0);
@@ -1062,7 +1156,14 @@ mod tests {
         for _ in 0..20 {
             drops.smoke([8.0, start_y, 8.0]);
         }
-        assert!(drops.motes.iter().filter(|mote| mote.rise).count() <= 28);
+        assert!(
+            drops
+                .motes
+                .iter()
+                .filter(|mote| mote.rise && !mote.hover)
+                .count()
+                <= 28
+        );
         assert!(drops.tick_motes(3.0));
         assert!(drops.motes.iter().all(|mote| !mote.rise));
     }
@@ -1168,6 +1269,28 @@ mod tests {
         assert!(drops.chaff_count() <= 30);
         assert!(drops.tick_motes(3.0));
         assert_eq!(drops.chaff_count(), 0);
+    }
+
+    #[test]
+    fn rain_splash_pops_and_ripples_on_the_ground() {
+        let mut drops = Drops::new();
+        drops.rain_splash([8.0, 2.0, 8.0]);
+        assert!(drops.rain_splash_count() >= 4);
+        assert!(drops.motes.iter().any(|mote| !mote.rise && !mote.hover));
+        assert!(drops
+            .motes
+            .iter()
+            .any(|mote| mote.rise && mote.hover && mote.color[2] > mote.color[0]));
+        let before = drops.rain_splash_count();
+        for _ in 0..40 {
+            drops.rain_splash([8.0, 2.0, 8.0]);
+        }
+        assert!(drops.rain_splash_count() <= 72);
+        assert!(drops.rain_splash_count() >= before);
+        assert!(drops.tick_motes(0.08));
+        assert!(drops.rain_splash_count() > 0);
+        assert!(drops.tick_motes(1.5));
+        assert_eq!(drops.rain_splash_count(), 0);
     }
 
     #[test]

@@ -982,6 +982,12 @@ pub struct State {
     cloud_shot_eye: glam::Vec3,
     cloud_shot_yaw: f32,
     cloud_shot_pitch: f32,
+    /// One-shot rain splash motes on open ground, then quit.
+    splash_shot_path: Option<std::path::PathBuf>,
+    splash_shot_frames: u32,
+    splash_shot_eye: glam::Vec3,
+    splash_shot_yaw: f32,
+    splash_shot_pitch: f32,
     /// One-shot walk FOV vs sprint FOV stitch, then quit.
     sprint_shot_path: Option<std::path::PathBuf>,
     sprint_shot_frames: u32,
@@ -1326,6 +1332,10 @@ pub struct State {
     rustle_wait: f32,
     /// Seconds until the next dusk firefly can spawn.
     firefly_wait: f32,
+    /// Seconds until the next rain splash mote near the player.
+    splash_wait: f32,
+    /// Once: saw rain splash on open ground.
+    found_splashes: bool,
     /// One-shot campfire smoke proof PNG, then quit.
     campfire_smoke_shot_path: Option<std::path::PathBuf>,
     campfire_smoke_shot_frames: u32,
@@ -2180,6 +2190,11 @@ impl State {
             cloud_shot_eye: glam::Vec3::ZERO,
             cloud_shot_yaw: 0.0,
             cloud_shot_pitch: 0.0,
+            splash_shot_path: None,
+            splash_shot_frames: 0,
+            splash_shot_eye: glam::Vec3::ZERO,
+            splash_shot_yaw: 0.0,
+            splash_shot_pitch: 0.0,
             sprint_shot_path: None,
             sprint_shot_frames: 0,
             sprint_shot_phase: SprintShotPhase::Idle,
@@ -2396,6 +2411,8 @@ impl State {
             found_rustle: false,
             rustle_wait: 0.0,
             firefly_wait: 0.0,
+            splash_wait: 0.0,
+            found_splashes: false,
             campfire_smoke_shot_path: None,
             campfire_smoke_shot_frames: 0,
             campfire_smoke_shot_eye: glam::Vec3::ZERO,
@@ -8308,6 +8325,165 @@ impl State {
         self.chicken_buf = None;
         self.chicken_count = 0;
         self.bee = crate::mobs::Bee::new();
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.guests.clear();
+    }
+
+    /// Peak rain over open grass + a puddle: splash motes on ground, then quit.
+    pub fn arm_rain_splash_shot(&mut self, path: std::path::PathBuf) {
+        self.splash_shot_path = Some(path);
+        self.splash_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Peak afternoon rain mood (~0.70).
+        self.clock.set_time_of_day(0.70);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.bee = crate::mobs::Bee::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.found_splashes = true;
+        self.rain_mix = 1.0;
+        self.splash_wait = 0.0;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("rain: splash");
+
+        let mut changes = Vec::new();
+        for z in 5..=15 {
+            for x in 4..=13 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Shallow puddle so water hits also splash.
+        for z in 9..=11 {
+            for x in 7..=9 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("water", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        // Seed a ring of splashes so the first frames already show motes.
+        let seeds = [
+            [6.3, 2.05, 8.2],
+            [8.5, 2.05, 7.4],
+            [10.2, 2.05, 9.1],
+            [7.6, 2.02, 10.4],
+            [9.1, 2.02, 10.8],
+            [5.8, 2.05, 11.2],
+            [8.0, 2.02, 9.5],
+            [10.6, 2.05, 11.5],
+            [6.8, 2.05, 12.0],
+            [9.4, 2.05, 8.0],
+        ];
+        for at in seeds {
+            self.drops.rain_splash(at);
+        }
+        self.rebuild_drops();
+
+        // Look down across the wet lawn / puddle.
+        let eye = glam::Vec3::new(6.4, 2.15 + body::EYE_HEIGHT, 12.8);
+        let target = glam::Vec3::new(8.2, 1.85, 9.4);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.splash_shot_eye = eye;
+        self.splash_shot_yaw = yaw;
+        self.splash_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_splash_shot_camera(&mut self) {
+        if self.splash_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(0.70);
+        self.dusk_show = 0.0;
+        self.rain_mix = 1.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.splash_shot_eye,
+            self.splash_shot_yaw,
+            self.splash_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.splash_shot_eye;
+        self.posed_yaw = self.splash_shot_yaw;
+        self.posed_pitch = self.splash_shot_pitch;
+        self.pose_dirty = true;
+        self.sheep = crate::sheep::Sheep::new();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
         self.bee_buf = None;
         self.bee_count = 0;
         self.guests.clear();
@@ -16605,6 +16781,88 @@ impl State {
         }
     }
 
+    fn poll_splash_shot(&mut self) {
+        let Some(path) = self.splash_shot_path.clone() else {
+            return;
+        };
+        self.pin_splash_shot_camera();
+        self.splash_shot_frames = self.splash_shot_frames.saturating_add(1);
+        // Keep seeding motes while we wait so the PNG catches live ripples.
+        if self.splash_shot_frames % 5 == 0 {
+            let eye = self.splash_shot_eye.to_array();
+            for (i, off) in [
+                [0.8, -1.1],
+                [-1.4, 0.5],
+                [1.6, 1.2],
+                [-0.3, 1.8],
+                [2.0, -0.4],
+                [-0.9, -1.6],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let px = eye[0] + off[0] + (i as f32) * 0.12;
+                let pz = eye[2] + off[1];
+                if let Some(y) = rain_hit_surface(&self.world, px, pz, eye[1]) {
+                    self.drops.rain_splash([px, y, pz]);
+                }
+            }
+            let _ = self.drops.tick_motes(0.05);
+            self.rebuild_drops();
+        }
+        if self.splash_shot_frames < 160 || !self.chunk_bake.is_idle() {
+            if self.splash_shot_frames > 800 {
+                eprintln!("splash shot timed out");
+                self.splash_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        // Fresh dense burst on grass around the puddle so the PNG reads motes.
+        {
+            let eye = self.splash_shot_eye.to_array();
+            let burst = [
+                [5.6, 8.2],
+                [5.8, 10.5],
+                [6.2, 12.0],
+                [10.5, 8.0],
+                [11.0, 10.2],
+                [10.8, 12.0],
+                [7.0, 7.2],
+                [9.2, 7.0],
+                [6.4, 11.5],
+                [9.6, 11.8],
+                [8.0, 12.4],
+                [5.4, 9.4],
+            ];
+            for [px, pz] in burst {
+                // Prefer grass tops; skip deep water hits for proof contrast.
+                if let Some(y) = rain_hit_surface(&self.world, px, pz, eye[1]) {
+                    if y >= 1.5 {
+                        self.drops.rain_splash([px, y, pz]);
+                    }
+                }
+            }
+            let _ = self.drops.tick_motes(0.12);
+            self.rebuild_drops();
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("splash shot wrote {}", path.display());
+                self.splash_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("splash shot failed: {err}");
+                if self.splash_shot_frames > 280 {
+                    self.splash_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_bed_sleep_shot(&mut self) {
         let Some(path) = self.bed_sleep_shot_path.clone() else {
             return;
@@ -19546,6 +19804,7 @@ impl State {
         self.sway_wait = (self.sway_wait - dt).max(0.0);
         self.rustle_wait = (self.rustle_wait - dt).max(0.0);
         self.firefly_wait = (self.firefly_wait - dt).max(0.0);
+        self.splash_wait = (self.splash_wait - dt).max(0.0);
         if self.playing && !self.menu.is_open() && !self.dead {
             // Smoke and embers stay campfire-only; furnaces crackle without sparks.
             if fire_mix > 0.05 {
@@ -19638,6 +19897,7 @@ impl State {
             && self.bounce_shot_path.is_none()
             && self.water_shot_path.is_none()
             && self.cloud_shot_path.is_none()
+            && self.splash_shot_path.is_none()
         {
             if self.firefly_wait <= 0.0 {
                 self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
@@ -19669,10 +19929,62 @@ impl State {
                 }
             }
         }
+        // Rain splash motes on open ground / puddles near the player.
+        if self.playing
+            && !self.menu.is_open()
+            && !self.dead
+            && self.rain_mix > 0.28
+            && sky_open
+            && self.shadows_shot_path.is_none()
+            && self.bounce_shot_path.is_none()
+            && self.water_shot_path.is_none()
+            && self.cloud_shot_path.is_none()
+        {
+            if self.splash_wait <= 0.0 || self.splash_shot_path.is_some() {
+                let burst = if self.splash_shot_path.is_some() {
+                    self.splash_wait = 0.05;
+                    4
+                } else {
+                    self.splash_wait = 0.07 + (1.0 - self.rain_mix) * 0.16;
+                    1 + ((self.rain_mix * 2.5) as usize).min(2)
+                };
+                let offsets = [
+                    [1.2, -0.8],
+                    [-1.5, 0.6],
+                    [0.4, 1.8],
+                    [-2.1, -1.2],
+                    [2.4, 0.3],
+                    [-0.6, 2.5],
+                    [1.8, 1.4],
+                    [-1.1, -2.0],
+                ];
+                let seed = ((eye[0] * 7.1 + eye[2] * 3.3 + self.clock.seconds() * 11.0).abs()
+                    as usize)
+                    % offsets.len();
+                let mut spawned = 0usize;
+                for i in 0..burst {
+                    let off = offsets[(seed + i * 3) % offsets.len()];
+                    let px = eye[0] + off[0];
+                    let pz = eye[2] + off[1];
+                    if let Some(y) = rain_hit_surface(&self.world, px, pz, eye[1]) {
+                        self.drops.rain_splash([px, y, pz]);
+                        spawned += 1;
+                    }
+                }
+                if spawned > 0 {
+                    self.rebuild_drops();
+                    if !self.found_splashes {
+                        self.found_splashes = true;
+                        self.gui.push_chat("splash");
+                    }
+                }
+            }
+        }
         if self.shadows_shot_path.is_some()
             || self.bounce_shot_path.is_some()
             || self.water_shot_path.is_some()
             || self.cloud_shot_path.is_some()
+            || self.splash_shot_path.is_some()
         {
             self.dusk_show = 0.0;
         } else if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0
@@ -20099,6 +20411,7 @@ impl State {
                 && self.bounce_shot_path.is_none()
                 && self.water_shot_path.is_none()
                 && self.cloud_shot_path.is_none()
+                && self.splash_shot_path.is_none()
             {
                 self.sheep.tick_near(steps, feet, &self.world);
                 self.rebuild_sheep();
@@ -20360,6 +20673,7 @@ impl State {
                 || self.bounce_shot_path.is_some()
                 || self.water_shot_path.is_some()
                 || self.cloud_shot_path.is_some()
+                || self.splash_shot_path.is_some()
             {
                 self.fox_buf = None;
                 self.fox_count = 0;
@@ -20384,6 +20698,7 @@ impl State {
                 && self.bounce_shot_path.is_none()
                 && self.water_shot_path.is_none()
                 && self.cloud_shot_path.is_none()
+                && self.splash_shot_path.is_none()
             {
                 if let Some(ram) = self.goat.tick(steps, feet_at, &self.world) {
                     self.goat_ram(ram);
@@ -21347,6 +21662,7 @@ impl State {
         self.poll_bounce_shot();
         self.poll_water_shot();
         self.poll_cloud_shot();
+        self.poll_splash_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
@@ -22048,6 +22364,34 @@ fn mine_cell(x: i32, z: i32) -> bool {
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
+}
+
+/// Top of open ground or a water puddle under `x,z`, for rain splash motes.
+fn rain_hit_surface(world: &Cluster, x: f32, z: f32, eye_y: f32) -> Option<f32> {
+    let xi = x.floor() as i32;
+    let zi = z.floor() as i32;
+    let top = eye_y.floor() as i32 + 3;
+    let bottom = (eye_y.floor() as i32 - 10).max(0);
+    for y in (bottom..=top).rev() {
+        let block = world.block_at(xi, y, zi);
+        if block.id == "water" {
+            // Need open air above so the hit reads on the puddle surface.
+            if world.block_at(xi, y + 1, zi).id == "air" {
+                return Some(y as f32 + 0.98);
+            }
+            continue;
+        }
+        if shape_of(block).is_full_cube() {
+            let above = world.block_at(xi, y + 1, zi);
+            if above.id == "air" {
+                return Some(y as f32 + 1.04);
+            }
+            if above.id == "water" && world.block_at(xi, y + 2, zi).id == "air" {
+                return Some((y + 1) as f32 + 0.98);
+            }
+        }
+    }
+    None
 }
 
 /// True when the column above the eye is clear of full cubes (~open sky).

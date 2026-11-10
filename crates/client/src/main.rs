@@ -184,6 +184,8 @@ struct Args {
     shot_water_reflection: Option<std::path::PathBuf>,
     /// Drifting cloud ground darken, then quit.
     shot_cloud_shadow: Option<std::path::PathBuf>,
+    /// Rain splash motes on open ground, then quit.
+    shot_rain_splash: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -397,6 +399,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_bounce_interior: args.shot_bounce_interior,
         shot_water_reflection: args.shot_water_reflection,
         shot_cloud_shadow: args.shot_cloud_shadow,
+        shot_rain_splash: args.shot_rain_splash,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -506,6 +509,7 @@ struct App {
     shot_bounce_interior: Option<std::path::PathBuf>,
     shot_water_reflection: Option<std::path::PathBuf>,
     shot_cloud_shadow: Option<std::path::PathBuf>,
+    shot_rain_splash: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -714,6 +718,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_cloud_shadow.take() {
                     state.arm_cloud_shadow_shot(path);
+                }
+                if let Some(path) = self.shot_rain_splash.take() {
+                    state.arm_rain_splash_shot(path);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -1048,6 +1055,7 @@ where
         shot_bounce_interior: None,
         shot_water_reflection: None,
         shot_cloud_shadow: None,
+        shot_rain_splash: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -1347,6 +1355,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-cloud-shadow".to_string())?;
                 parsed.shot_cloud_shadow = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-rain-splash" | "--shot-splash-ground" | "--shot-rain-ground" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-rain-splash".to_string())?;
+                parsed.shot_rain_splash = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter
