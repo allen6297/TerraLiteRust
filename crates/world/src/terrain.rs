@@ -8,7 +8,8 @@
 //! in deepslate, so the dark hole reads from the surface. The bottom layer stays stone, so a cave never drops
 //! through the finite square. One camp sits in the chunk just east and north
 //! of the demo pad: ruined cobblestone, a campfire, and a chest. A timbered
-//! mine mouth sits west and south of the pad. Marsh columns hold a water block on top of the
+//! mine mouth sits west and south of the pad. A ruined stone-brick shrine sits
+//! southeast of the pad with a loot chest. Marsh columns hold a water block on top of the
 //! dirt. The surface stays in the bottom section. A pump fills one chunk per
 //! call, so a large square does not hitch a frame.
 
@@ -151,6 +152,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     }
     stamp_camp(&mut blocks, chunk_x, chunk_z);
     stamp_shaft(&mut blocks, chunk_x, chunk_z);
+    stamp_shrine(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
 }
 
@@ -222,6 +224,94 @@ fn stamp_camp(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32
 pub const SHAFT_MOUTH: (i32, i32) = (-24, 40);
 
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
+
+/// Broken stone-brick shrine, southeast of the demo pad.
+///
+/// The chunk is `(2, 2)`. Walk east past the pad, then south. A chest sits on
+/// the altar under the broken walls.
+pub const SHRINE: (i32, i32) = (40, 40);
+
+/// The shrine chest one block south of the altar center.
+pub const SHRINE_CHEST: (i32, i32) = (SHRINE.0, SHRINE.1 - 1);
+
+const SHRINE_CHUNK: (i32, i32) = (2, 2);
+
+/// A ruined stone-brick square with a chest. Only the shrine chunk gets one.
+fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != SHRINE_CHUNK {
+        return;
+    }
+    let (cx, cz) = SHRINE;
+    let floor = column_height(cx, cz, biome_at(cx, cz));
+    let x0 = 5u8;
+    let x1 = 11u8;
+    let z0 = 5u8;
+    let z1 = 11u8;
+    blocks
+        .retain(|(x, y, z, _)| !(*x >= x0 && *x <= x1 && *z >= z0 && *z <= z1 && *y + 1 >= floor));
+    for lz in z0..=z1 {
+        for lx in x0..=x1 {
+            let top = blocks
+                .iter()
+                .filter(|(x, _, z, _)| *x == lx && *z == lz)
+                .map(|(_, y, _, _)| *y)
+                .max()
+                .unwrap_or(0);
+            for y in (top + 1)..floor.saturating_sub(1) {
+                blocks.push((lx, y, lz, Block::new("dirt", 0)));
+            }
+            blocks.push((lx, floor - 1, lz, Block::new("grass", 0)));
+        }
+    }
+    let brick = Block::new("stone_bricks", 0);
+    let mossy = Block::new("mossy_stone_bricks", 0);
+    let cracked = Block::new("cracked_stone_bricks", 0);
+    let chisel = Block::new("chiseled_stone_bricks", 0);
+    // Paved floor.
+    for lz in (z0 + 1)..=(z1 - 1) {
+        for lx in (x0 + 1)..=(x1 - 1) {
+            let tile = if (u16::from(lx) + u16::from(lz)) % 3 == 0 {
+                mossy
+            } else {
+                brick
+            };
+            blocks.push((lx, floor - 1, lz, tile));
+        }
+    }
+    // Broken ring walls, taller at the corners.
+    for lz in z0..=z1 {
+        for lx in x0..=x1 {
+            let edge = lx == x0 || lx == x1 || lz == z0 || lz == z1;
+            if !edge {
+                continue;
+            }
+            let gate = lz == z1 && (lx == 7 || lx == 8);
+            let missing = (u16::from(lx) * 3 + u16::from(lz)) % 7 == 0;
+            if gate || missing {
+                continue;
+            }
+            let corner = (lx == x0 || lx == x1) && (lz == z0 || lz == z1);
+            let tall = if corner { 3u16 } else { 2 };
+            for dy in 0..tall {
+                let block = if dy == 0 && corner {
+                    chisel
+                } else if (u16::from(lx) + dy) % 2 == 0 {
+                    cracked
+                } else {
+                    brick
+                };
+                blocks.push((lx, floor + dy, lz, block));
+            }
+        }
+    }
+    // Altar pedestal and chest.
+    let local_x = (cx - chunk_x * 16) as u8;
+    let local_z = (cz - chunk_z * 16) as u8;
+    blocks.push((local_x, floor, local_z, chisel));
+    blocks.push((local_x, floor, local_z - 1, Block::new("chest", 0)));
+    blocks.push((local_x + 1, floor, local_z, Block::new("torch", 0)));
+    blocks.push((local_x - 1, floor, local_z, mossy));
+}
 
 /// A timbered hole. Only the shaft chunk gets one.
 fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
@@ -604,6 +694,54 @@ mod tests {
             cluster.block_at(CAMP_FIRE.0, i32::from(y), CAMP_FIRE.1).id,
             "campfire"
         );
+    }
+
+    #[test]
+    fn a_shrine_stands_southeast_of_the_pad() {
+        let shrine = generate_chunk(2, 2);
+        let mut chest = false;
+        let mut brick = false;
+        let mut chisel = false;
+        for local_z in 0..16u8 {
+            for local_x in 0..16u8 {
+                for y in 0..16u16 {
+                    match shrine.block(local_x, y, local_z).id {
+                        "chest" => chest = true,
+                        "stone_bricks" | "mossy_stone_bricks" | "cracked_stone_bricks" => {
+                            brick = true
+                        }
+                        "chiseled_stone_bricks" => chisel = true,
+                        "campfire" => panic!("shrine is not the camp"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert!(chest, "a chest sits in the shrine");
+        assert!(brick, "stone bricks form the ruin");
+        assert!(chisel, "chiseled brick marks the altar");
+        let (cx, cz) = SHRINE;
+        let local_x = (cx - 2 * 16) as u8;
+        let local_z = (cz - 2 * 16) as u8;
+        assert_eq!((local_x, local_z), (8, 8));
+        let floor = (0..16u16)
+            .find(|y| shrine.block(local_x, *y, local_z).id == "chiseled_stone_bricks")
+            .expect("altar");
+        assert_eq!(shrine.block(local_x, floor, local_z - 1).id, "chest");
+        assert_eq!(
+            (2 * 16 + i32::from(local_x), 2 * 16 + i32::from(local_z - 1)),
+            SHRINE_CHEST
+        );
+        let mut cluster = synthetic_cluster();
+        seed_terrain_ring(&mut cluster);
+        assert_eq!(
+            cluster
+                .block_at(SHRINE_CHEST.0, i32::from(floor), SHRINE_CHEST.1)
+                .id,
+            "chest"
+        );
+        assert_ne!(SHRINE_CHUNK, CAMP_CHUNK);
+        assert_ne!(SHRINE_CHUNK, SHAFT_CHUNK);
     }
 
     #[test]

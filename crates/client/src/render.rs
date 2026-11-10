@@ -1028,6 +1028,12 @@ pub struct State {
     campfire_smoke_shot_eye: glam::Vec3,
     campfire_smoke_shot_yaw: f32,
     campfire_smoke_shot_pitch: f32,
+    /// One-shot shrine ruin proof PNG, then quit.
+    shrine_shot_path: Option<std::path::PathBuf>,
+    shrine_shot_frames: u32,
+    shrine_shot_eye: glam::Vec3,
+    shrine_shot_yaw: f32,
+    shrine_shot_pitch: f32,
     /// Eased open-day wind mix, `0` night/cave through `1` under noon sky.
     wind_mix: f32,
     /// Eased water-edge proximity, `0` far through `1` at the surface.
@@ -1941,6 +1947,11 @@ impl State {
             campfire_smoke_shot_eye: glam::Vec3::ZERO,
             campfire_smoke_shot_yaw: 0.0,
             campfire_smoke_shot_pitch: 0.0,
+            shrine_shot_path: None,
+            shrine_shot_frames: 0,
+            shrine_shot_eye: glam::Vec3::ZERO,
+            shrine_shot_yaw: 0.0,
+            shrine_shot_pitch: 0.0,
             wind_mix: 0.0,
             lap_mix: 0.0,
             lap_at: None,
@@ -3538,7 +3549,9 @@ impl State {
             (has_record, slots)
         };
         let mut seeded = false;
-        if let Some(mut find) = fresh_camp(has_record, hit.block[0], hit.block[2], self.omen) {
+        let fresh = fresh_camp(has_record, hit.block[0], hit.block[2], self.omen)
+            .or_else(|| fresh_shrine(has_record, hit.block[0], hit.block[2], self.omen));
+        if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
             if let Some(next) = self.hooks.loot(
@@ -5787,6 +5800,105 @@ impl State {
     }
 
     /// Idle FOV then break FOV from the stairs overlook, stitched side by side.
+    /// Look at the southeast stone-brick shrine, then quit with a PNG.
+    pub fn arm_shrine_shot(&mut self, path: std::path::PathBuf) {
+        self.shrine_shot_path = Some(path);
+        self.shrine_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        // Force the shrine chunk so a stale save cannot hide it.
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (sx, sz) = rebuild_world::SHRINE;
+        let mut sy = 4;
+        for y in 0..80 {
+            if self.world.block_at(sx, y, sz).id == "chiseled_stone_bricks"
+                || self.world.block_at(sx, y, sz - 1).id == "chest"
+            {
+                sy = y;
+                break;
+            }
+        }
+        let focus = glam::Vec3::new(sx as f32 + 0.5, sy as f32 + 1.2, sz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            sx as f32 + 0.5,
+            sy as f32 + 1.4 + body::EYE_HEIGHT,
+            sz as f32 + 5.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.shrine_shot_eye = eye;
+        self.shrine_shot_yaw = yaw;
+        self.shrine_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(sx + dx * 8, sz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_shrine_shot_camera(&mut self) {
+        if self.shrine_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.shrine_shot_eye,
+            self.shrine_shot_yaw,
+            self.shrine_shot_pitch,
+        );
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.shrine_shot_eye;
+        self.posed_yaw = self.shrine_shot_yaw;
+        self.posed_pitch = self.shrine_shot_pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+    }
+
+    fn poll_shrine_shot(&mut self) {
+        let Some(path) = self.shrine_shot_path.clone() else {
+            return;
+        };
+        self.pin_shrine_shot_camera();
+        self.shrine_shot_frames = self.shrine_shot_frames.saturating_add(1);
+        if self.shrine_shot_frames < 110 || !self.chunk_bake.is_idle() {
+            if self.shrine_shot_frames > 600 {
+                eprintln!("shrine shot timed out");
+                self.shrine_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("shrine shot wrote {}", path.display());
+                self.shrine_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("shrine shot failed: {err}");
+                if self.shrine_shot_frames > 250 {
+                    self.shrine_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     /// Look at a lit campfire with rising smoke puffs, then quit with a PNG.
     pub fn arm_campfire_smoke_shot(&mut self, path: std::path::PathBuf) {
         self.campfire_smoke_shot_path = Some(path);
@@ -11249,6 +11361,7 @@ impl State {
         self.poll_jump_shot();
         self.poll_place_shot();
         self.poll_campfire_smoke_shot();
+        self.poll_shrine_shot();
         self.poll_swap_shot();
         self.poll_break_shot();
     }
@@ -11879,6 +11992,11 @@ fn camp_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::CAMP_CHEST
 }
 
+/// The southeast shrine chest.
+fn shrine_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::SHRINE_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -12009,6 +12127,28 @@ fn fresh_camp(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
         return None;
     }
     camp_loot(x, z, omen)
+}
+
+/// One drop from the shrine chest, read from the data pack.
+fn shrine_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !shrine_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_shrine_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the shrine chest.
+fn fresh_shrine(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    shrine_loot(x, z, omen)
 }
 
 /// One drop from this chest, read from the data pack. The same cell always
@@ -12402,6 +12542,24 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_camp(true, x, z, false).is_none());
         assert!(super::fresh_camp(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_shrine_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::SHRINE_CHEST;
+        assert!(super::shrine_cell(x, z));
+        assert!(!super::shrine_cell(
+            rebuild_world::SHRINE.0,
+            rebuild_world::SHRINE.1
+        ));
+        assert!(!super::camp_cell(x, z));
+        let table = crate::loot::load_shrine_chest().unwrap();
+        let paid = super::fresh_shrine(false, x, z, false).unwrap();
+        let rich = super::fresh_shrine(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_shrine(true, x, z, false).is_none());
+        assert!(super::fresh_shrine(false, 0, 0, false).is_none());
     }
 
     #[test]

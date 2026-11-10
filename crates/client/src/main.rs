@@ -138,6 +138,8 @@ struct Args {
     shot_break: Option<std::path::PathBuf>,
     /// Campfire smoke puffs, then quit.
     shot_campfire_smoke: Option<std::path::PathBuf>,
+    /// Southeast shrine ruin, then quit.
+    shot_shrine: Option<std::path::PathBuf>,
 }
 
 enum Parsed {
@@ -221,6 +223,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_swap: args.shot_swap,
         shot_break: args.shot_break,
         shot_campfire_smoke: args.shot_campfire_smoke,
+        shot_shrine: args.shot_shrine,
         state: None,
         last_frame: Instant::now(),
     };
@@ -253,6 +256,7 @@ struct App {
     shot_swap: Option<std::path::PathBuf>,
     shot_break: Option<std::path::PathBuf>,
     shot_campfire_smoke: Option<std::path::PathBuf>,
+    shot_shrine: Option<std::path::PathBuf>,
     state: Option<State>,
     last_frame: Instant,
 }
@@ -340,6 +344,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_campfire_smoke.take() {
                     state.arm_campfire_smoke_shot(path);
+                }
+                if let Some(path) = self.shot_shrine.take() {
+                    state.arm_shrine_shot(path);
                 }
                 state.window().request_redraw();
                 self.last_frame = Instant::now();
@@ -496,6 +503,7 @@ where
         shot_swap: None,
         shot_break: None,
         shot_campfire_smoke: None,
+        shot_shrine: None,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -609,6 +617,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-campfire-smoke".to_string())?;
                 parsed.shot_campfire_smoke = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-shrine" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-shrine".to_string())?;
+                parsed.shot_shrine = Some(std::path::PathBuf::from(value));
             }
             other => return Err(format!("unknown argument: {other}\n{USAGE}")),
         }
