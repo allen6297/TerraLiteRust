@@ -3416,7 +3416,7 @@ impl State {
                     self.gui.open_furnace()
                 }
             }
-            "anvil" => self.gui.open_anvil(),
+            "anvil" => self.gui.open_anvil(hit.block),
             "enchanting_table" => self.gui.open_enchanting(hit.block),
             "brewing_stand" => self.gui.open_brewing(hit.block),
             "grindstone" => self.gui.open_grind(hit.block),
@@ -8676,6 +8676,78 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shaft anvil panel mid-clang after a repair, then quit with a PNG.
+    pub fn arm_anvil_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (ax, az) = rebuild_world::SHAFT_ANVIL;
+        let mut ay = 4;
+        for y in 0..80 {
+            if self.world.block_at(ax, y, az).id == "anvil" {
+                ay = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(ax, az);
+        let focus = glam::Vec3::new(ax as f32 + 0.5, ay as f32 + 0.85, az as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            ax as f32 + 2.6,
+            ay as f32 + 1.35 + body::EYE_HEIGHT,
+            az as f32 + 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let clang_at = [ax as f32 + 0.5, ay as f32 + 0.95, az as f32 + 0.5];
+        self.note_shot_at = Some(clang_at);
+        self.note_shot_pitch = 1;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(clang_at, [0.72, 0.72, 0.78]);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(1), clang_at);
+        let _ = self.gui.open_anvil([ax, ay, az]);
+        self.gui.note_anvil("repaired");
+        self.gui.push_chat("repaired");
+        self.found_mine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        // Wear it, then refill so the tip reads as a freshly repaired pick.
+        for _ in 0..8 {
+            let _ = self.hotbar.wear_use(0);
+        }
+        let _ = self.hotbar.collect("iron_ore");
+        let _ = self.hotbar.repair_pick();
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(ax + dx * 8, az + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shaft smith panel mid-spark after an iron upgrade, then quit with a PNG.
     pub fn arm_smith_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12328,6 +12400,14 @@ impl State {
         self.gui.note_anvil(word);
         self.gui.push_chat(word);
         self.hotbar_dirty = true;
+        if word == "repaired" {
+            if let Some(at) = self.gui.anvil_at() {
+                let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                self.play_world(crate::audio::Sound::Note(1), source);
+                self.drops.puff(source, [0.72, 0.72, 0.78]);
+                self.rebuild_drops();
+            }
+        }
     }
 
     /// False from `events.repair` keeps the iron ore. A refused repair sends

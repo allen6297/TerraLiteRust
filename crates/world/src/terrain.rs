@@ -274,6 +274,9 @@ pub const SHAFT_GRIND: (i32, i32) = (SHAFT_CHEST.0, SHAFT_CHEST.1 - 1);
 /// Smithing table on the apron, one block east of the chest.
 pub const SHAFT_SMITH: (i32, i32) = (SHAFT_CHEST.0 + 1, SHAFT_CHEST.1);
 
+/// Anvil on the apron, one block west of the chest (toward the pit).
+pub const SHAFT_ANVIL: (i32, i32) = (SHAFT_CHEST.0 - 1, SHAFT_CHEST.1);
+
 const SHAFT_CHUNK: (i32, i32) = (-2, 2);
 
 /// Broken stone-brick shrine, southeast of the demo pad.
@@ -517,6 +520,10 @@ fn stamp_shaft(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i3
     blocks.push((smith_x, floor, smith_z, Block::new("smithing_table", 0)));
     // Iron ore beside it so the upgrade loop is findable without creative give.
     blocks.push((smith_x, floor, smith_z + 1, Block::new("iron_ore", 0)));
+    // West of the chest: repair a worn pick for one iron ore.
+    let anvil_x = (SHAFT_ANVIL.0 - chunk_x * 16) as u8;
+    let anvil_z = (SHAFT_ANVIL.1 - chunk_z * 16) as u8;
+    blocks.push((anvil_x, floor, anvil_z, Block::new("anvil", 0)));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1031,6 +1038,11 @@ mod tests {
             SHAFT_SMITH
         );
         assert_eq!(shaft.block(11, post, local_z + 1).id, "iron_ore");
+        assert_eq!(shaft.block(9, post, local_z).id, "anvil");
+        assert_eq!(
+            (-2 * 16 + 9, 2 * 16 + i32::from(local_z)),
+            SHAFT_ANVIL
+        );
         let camp = generate_chunk(2, -2);
         let mut campfire = false;
         for lz in 0..16u8 {

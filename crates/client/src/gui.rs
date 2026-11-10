@@ -687,6 +687,8 @@ pub struct Gui {
     anvil_open: bool,
     /// The line under the anvil title. Enter replaces it with the repair word.
     anvil_note: String,
+    /// The anvil the panel is repairing at.
+    anvil_at: Option<[i32; 3]>,
     enchant_open: bool,
     /// The line under the enchant title. Enter replaces it with the enchant word.
     enchant_note: String,
@@ -853,6 +855,7 @@ impl Gui {
                 blast: false,
                 anvil_open: false,
                 anvil_note: String::new(),
+                anvil_at: None,
                 enchant_open: false,
                 enchant_note: String::new(),
                 enchant_at: None,
@@ -970,6 +973,7 @@ impl Gui {
                     blast: false,
                     anvil_open: false,
                     anvil_note: String::new(),
+                    anvil_at: None,
                     enchant_open: false,
                     enchant_note: String::new(),
                     enchant_at: None,
@@ -1097,6 +1101,7 @@ impl Gui {
             blast: false,
             anvil_open: false,
             anvil_note: String::new(),
+            anvil_at: None,
             enchant_open: false,
             enchant_note: String::new(),
             enchant_at: None,
@@ -1575,6 +1580,7 @@ impl Gui {
         self.smoker = false;
         self.blast = false;
         self.anvil_open = false;
+        self.anvil_at = None;
         self.enchant_open = false;
         self.enchant_at = None;
         self.brew_open = false;
@@ -1860,10 +1866,11 @@ impl Gui {
     }
 
     /// A repair panel. Other screens keep it closed.
-    pub fn open_anvil(&mut self) -> bool {
+    pub fn open_anvil(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
+        self.anvil_at = Some(at);
         self.anvil_note = "enter spends one iron ore".to_string();
         self.anvil_open = true;
         true
@@ -1871,6 +1878,10 @@ impl Gui {
 
     pub fn anvil_open(&self) -> bool {
         self.anvil_open
+    }
+
+    pub fn anvil_at(&self) -> Option<[i32; 3]> {
+        self.anvil_at
     }
 
     /// The word the last repair left on the panel.
@@ -3126,6 +3137,7 @@ impl Gui {
     fn on_anvil(&mut self, code: KeyCode) -> bool {
         if code == KeyCode::KeyF || code == KeyCode::Escape {
             self.anvil_open = false;
+            self.anvil_at = None;
             return true;
         }
         code == KeyCode::Enter
@@ -8187,6 +8199,7 @@ mod tests {
             blast: false,
             anvil_open: false,
             anvil_note: String::new(),
+            anvil_at: None,
             enchant_open: false,
             enchant_note: String::new(),
             enchant_at: None,
@@ -8719,14 +8732,16 @@ mod tests {
         assert_eq!(gui.pointer_click(304), Click::TakeChest);
         assert!(gui.on_press(KeyCode::Escape));
 
-        assert!(gui.open_anvil());
+        assert!(gui.open_anvil([5, 1, 5]));
         assert!(gui.is_open());
         assert_eq!(gui.screen_id(), "anvil");
+        assert_eq!(gui.anvil_at(), Some([5, 1, 5]));
         assert!(!gui.quads(1280.0, 720.0).is_empty());
         assert!(gui.on_press(KeyCode::Enter));
         assert!(gui.anvil_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.anvil_open());
+        assert_eq!(gui.anvil_at(), None);
 
         assert!(gui.open_enchanting([6, 1, 6]));
         assert_eq!(gui.screen_id(), "enchanting");
