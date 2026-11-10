@@ -53,6 +53,8 @@ pub enum Sound {
     Breath,
     /// A short finish cue after chewing food.
     Burp,
+    /// A soft night cricket chirp. Louder and more often in deep night.
+    Cricket,
 }
 
 /// Seconds before the same horn can sound again.
@@ -237,6 +239,8 @@ pub struct Audio {
     muted: bool,
     step_left: f32,
     stroke_left: f32,
+    /// Seconds until the next night cricket chirp.
+    cricket_left: f32,
     step_wave: Vec<i16>,
     dirt_wave: Vec<i16>,
     stone_wave: Vec<i16>,
@@ -258,6 +262,7 @@ impl Audio {
             muted: false,
             step_left: 0.0,
             stroke_left: 0.0,
+            cricket_left: 0.0,
             step_wave: thud(140.0, 0.07, 0.28),
             dirt_wave: dirt_step(),
             stone_wave: stone_step(),
@@ -312,6 +317,25 @@ impl Audio {
         false
     }
 
+    /// Loudness for the next cricket chirp, or `None` this frame.
+    ///
+    /// `mix` is night amount (`0` day → `1` deep night). Day resets the timer.
+    /// Full night chirps more often; dusk/dawn stay sparse and quiet.
+    pub fn cricket_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.cricket_left = 0.0;
+            return None;
+        }
+        self.cricket_left -= dt;
+        if self.cricket_left > 0.0 {
+            return None;
+        }
+        // Edge of night ~2.5s apart; deep night ~1.2s.
+        self.cricket_left = 2.5 - mix * 1.3;
+        Some(0.12 + mix * 0.28)
+    }
+
     pub fn play(&mut self, sound: Sound) {
         self.play_heard(sound, Hearing::even(1.0));
     }
@@ -359,6 +383,7 @@ impl Audio {
             Sound::Sip => sip(),
             Sound::Breath => breath(),
             Sound::Burp => burp(),
+            Sound::Cricket => cricket_chirp(),
         }
     }
 }
@@ -667,6 +692,32 @@ fn breath() -> Vec<i16> {
     samples
 }
 
+/// Two soft high chirps. Quiet enough to sit under footsteps.
+fn cricket_chirp() -> Vec<i16> {
+    let mut samples = Vec::new();
+    samples.extend(chirp_pulse(71));
+    samples.extend(vec![0i16; (22_050.0 * 0.08) as usize]);
+    samples.extend(chirp_pulse(83));
+    samples
+}
+
+fn chirp_pulse(seed: u32) -> Vec<i16> {
+    let seconds = 0.055;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = seed;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let tone = (t * 4_800.0 * std::f32::consts::TAU).sin() * 0.55
+            + (t * 7_200.0 * std::f32::consts::TAU).sin() * 0.25;
+        let env = (t / 0.008).min(1.0) * (1.0 - t / seconds).max(0.0);
+        samples.push(((n * 0.2 + tone) * 0.11 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
 /// A short low finish after a food chew. Softer than a bite crunch.
 fn burp() -> Vec<i16> {
     let seconds = 0.16;
@@ -851,6 +902,24 @@ mod tests {
 
     fn ahead(z: f32) -> [f32; 3] {
         [8.0, 1.5, z]
+    }
+
+    #[test]
+    fn night_crickets_wait_for_dusk_and_respect_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.cricket_ready(0.1, 0.0).is_none());
+        let level = audio
+            .cricket_ready(0.1, 1.0)
+            .expect("deep night chirps on the first beat");
+        assert!(level > 0.3 && level <= 0.45);
+        assert!(audio.cricket_ready(0.1, 1.0).is_none());
+        audio.play_heard(Sound::Cricket, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Cricket]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Cricket, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Cricket]);
+        let edge = audio.cricket_ready(10.0, 0.2).expect("dusk edge still chirps");
+        assert!(edge < level);
     }
 
     #[test]

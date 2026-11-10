@@ -1006,6 +1006,8 @@ pub struct State {
     jump_kick: f32,
     /// Seconds until the next rain patter while fog is up.
     rain_wait: f32,
+    /// Eased night cricket mix, `0` day through `1` deep night.
+    cricket_mix: f32,
     /// Seconds until a held mace can swing again.
     mace_wait: f32,
     /// The next trial key pays a richer drop.
@@ -1900,6 +1902,7 @@ impl State {
             splash_kick: 0.0,
             jump_kick: 0.0,
             rain_wait: 0.0,
+            cricket_mix: 0.0,
             mace_wait: 0.0,
             omen: false,
             trial_at: None,
@@ -9615,6 +9618,19 @@ impl State {
         {
             self.rain_wait = 1.6;
             self.audio.play(crate::audio::Sound::Rain);
+        }
+        // Night insects ease with the sky; muted master volume stays silent.
+        let night = crate::daylight::night_fog(self.clock.time_of_day());
+        self.cricket_mix += (night - self.cricket_mix) * (dt * 0.7).min(1.0);
+        if self.playing && !self.menu.is_open() && !self.dead {
+            if let Some(level) = self.audio.cricket_ready(dt, self.cricket_mix) {
+                self.audio.play_heard(
+                    crate::audio::Sound::Cricket,
+                    crate::audio::Hearing::even(level),
+                );
+            }
+        } else {
+            let _ = self.audio.cricket_ready(dt, 0.0);
         }
         self.mace_wait = (self.mace_wait - dt).max(0.0);
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
