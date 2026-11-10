@@ -839,6 +839,12 @@ pub struct State {
     bed_sleep_shot_eye: glam::Vec3,
     bed_sleep_shot_yaw: f32,
     bed_sleep_shot_pitch: f32,
+    /// One-shot sneak at a cliff edge, then quit.
+    crouch_shot_path: Option<std::path::PathBuf>,
+    crouch_shot_frames: u32,
+    crouch_shot_eye: glam::Vec3,
+    crouch_shot_yaw: f32,
+    crouch_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1671,6 +1677,11 @@ impl State {
             bed_sleep_shot_eye: glam::Vec3::ZERO,
             bed_sleep_shot_yaw: 0.0,
             bed_sleep_shot_pitch: 0.0,
+            crouch_shot_path: None,
+            crouch_shot_frames: 0,
+            crouch_shot_eye: glam::Vec3::ZERO,
+            crouch_shot_yaw: 0.0,
+            crouch_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -5135,6 +5146,96 @@ impl State {
         self.pose_dirty = true;
     }
 
+    /// Cliff edge under a crawlspace slab: sneak label, lowered view, cling.
+    pub fn arm_crouch_shot(&mut self, path: std::path::PathBuf) {
+        self.crouch_shot_path = Some(path);
+        self.crouch_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.35);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        // Stone pier ending at z=12, with a 1.5-high crawl slab over the end.
+        let mut changes = Vec::new();
+        for z in 8..=12 {
+            for x in 7..=9 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+            }
+        }
+        for x in 7..=9 {
+            changes.push(CellChange {
+                x,
+                y: 3,
+                z: 12,
+                block: Block::new("slab", 1),
+            });
+        }
+        // Drop beyond the pier so the edge reads.
+        for z in 13..=16 {
+            for x in 6..=10 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::AIR,
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let eye = glam::Vec3::new(8.5, 2.0 + body::EYE_HEIGHT, 11.55);
+        let target = glam::Vec3::new(8.5, 1.2, 14.5);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        self.input.crouch = true;
+        self.crouch = 1.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.crouch_shot_eye = eye;
+        self.crouch_shot_yaw = yaw;
+        self.crouch_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_crouch_shot_camera(&mut self) {
+        if self.crouch_shot_path.is_none() {
+            return;
+        }
+        self.input.crouch = true;
+        self.crouch = 1.0;
+        self.camera.restore(
+            self.crouch_shot_eye,
+            self.crouch_shot_yaw,
+            self.crouch_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.crouch_shot_eye;
+        self.posed_yaw = self.crouch_shot_yaw;
+        self.posed_pitch = self.crouch_shot_pitch;
+        self.pose_dirty = true;
+    }
+
     /// Midnight stone corridor: dirt (dark) then torch (lit), stitched side by side.
     pub fn arm_held_light_shot(&mut self, path: std::path::PathBuf) {
         self.held_light_shot_path = Some(path);
@@ -5296,6 +5397,37 @@ impl State {
                 eprintln!("night-spawn shot failed: {err}");
                 if self.night_spawn_shot_frames > 250 {
                     self.night_spawn_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
+    fn poll_crouch_shot(&mut self) {
+        let Some(path) = self.crouch_shot_path.clone() else {
+            return;
+        };
+        self.pin_crouch_shot_camera();
+        self.crouch_shot_frames = self.crouch_shot_frames.saturating_add(1);
+        if self.crouch_shot_frames < 120 || !self.chunk_bake.is_idle() {
+            if self.crouch_shot_frames > 600 {
+                eprintln!("crouch shot timed out");
+                self.crouch_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("crouch shot wrote {}", path.display());
+                self.crouch_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("crouch shot failed: {err}");
+                if self.crouch_shot_frames > 250 {
+                    self.crouch_shot_path = None;
                     self.quit = true;
                 }
             }
@@ -7836,6 +7968,7 @@ impl State {
         }
         self.pin_held_light_shot_camera();
         self.pin_night_spawn_shot_camera();
+        self.pin_crouch_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -8996,6 +9129,7 @@ impl State {
         self.poll_held_light_shot();
         self.poll_night_spawn_shot();
         self.poll_bed_sleep_shot();
+        self.poll_crouch_shot();
     }
 }
 

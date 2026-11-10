@@ -2,7 +2,7 @@
 //!
 //! WASD moves on the horizontal plane. Space jumps, then gravity brings the
 //! player back down onto the top of a solid box. Shift crouches: the view
-//! drops and the walk slows. The body stays the standing height.
+//! drops, the walk slows, the hitbox shortens, and solid edges cling.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -72,7 +72,7 @@ pub struct MoveInput {
     pub right: bool,
     pub jump: bool,
     pub fast: bool,
-    /// Shift. The view drops and the walk slows. The body box stays standing.
+    /// Shift. The view drops, the walk slows, and the hitbox shortens.
     pub crouch: bool,
 }
 
@@ -258,8 +258,10 @@ pub fn nibble(amount: f32) -> f32 {
 }
 
 /// How far the view drops while crouching, in blocks. `1` is fully down.
+///
+/// Matches standing eye (`1.62`) down to sneak eye (`1.27`).
 pub fn crouch_drop(amount: f32) -> f32 {
-    amount.clamp(0.0, 1.0) * 0.3
+    amount.clamp(0.0, 1.0) * (body::EYE_HEIGHT - body::CROUCH_EYE)
 }
 
 /// Sprint widens the view for a moment. A hit tightens it. A spyglass stays narrow.
@@ -372,8 +374,9 @@ mod tests {
         );
         assert_eq!(compass_mark(STAIRS_XZ[0], STAIRS_XZ[1], 0.0), [0.0, 0.0]);
         assert_eq!(crouch_drop(0.0), 0.0);
-        assert!((crouch_drop(1.0) - 0.3).abs() < 1e-4);
-        assert!((crouch_drop(0.5) - 0.15).abs() < 1e-4);
+        let full = body::EYE_HEIGHT - body::CROUCH_EYE;
+        assert!((crouch_drop(1.0) - full).abs() < 1e-4);
+        assert!((crouch_drop(0.5) - full * 0.5).abs() < 1e-4);
     }
 
     #[test]

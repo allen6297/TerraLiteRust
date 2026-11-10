@@ -5131,7 +5131,7 @@ pub fn crouch_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     if amount <= 0.02 || width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
-    let label = "crouch";
+    let label = "sneak";
     let text_w = measure(label, 1.0);
     let plate_w = text_w + 16.0;
     let plate_h = 18.0;

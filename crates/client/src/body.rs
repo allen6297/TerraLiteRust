@@ -17,6 +17,10 @@ use crate::camera::{Camera, MoveInput};
 pub const HALF_WIDTH: f32 = 0.3;
 pub const HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;
+/// Hitbox height while sneaking (Minecraft-like).
+pub const CROUCH_HEIGHT: f32 = 1.5;
+/// View eye height while sneaking, relative to the feet.
+pub const CROUCH_EYE: f32 = 1.27;
 
 const GRAVITY: f32 = 28.0;
 const JUMP_SPEED: f32 = 8.6;
@@ -28,7 +32,7 @@ pub const COBWEB_DRAG: f32 = 0.25;
 /// Half speed is a lighter drag than a cobweb's quarter.
 pub const SOUL_SAND_DRAG: f32 = 0.5;
 /// Horizontal speed while crouching, as a fraction of a normal walk.
-pub const CROUCH_DRAG: f32 = 0.45;
+pub const CROUCH_DRAG: f32 = 0.3;
 /// Fastest fall, in blocks per second, while the body is inside a cobweb.
 pub const COBWEB_FALL: f32 = 1.2;
 /// How quickly a walk on ice eases toward full speed, in blocks per second squared.
@@ -89,7 +93,9 @@ pub fn step_paced(
         })
         .collect();
     let dt = dt.clamp(0.0, 0.05);
-    let body_now = player_box(camera.eye);
+    // Stay crouched under a low ceiling even after Shift is released.
+    let crouch = input.crouch || !can_stand_with(camera.eye, world, &extras);
+    let body_now = player_box(camera.eye, crouch);
     let wet = overlaps_water(&body_now, world);
     let deep = deep_water(&body_now, world);
     let webbed = inside_cobweb(&body_now, world);
@@ -97,6 +103,8 @@ pub fn step_paced(
     let climbing = touches_climb(&body_now, world);
     // A jump frame leaves the ground instead of auto-stepping into the wall.
     let can_step = camera.on_ground && !input.jump && !wet && !climbing;
+    // Sneak cling: do not walk off a solid edge into open air.
+    let cling = crouch && camera.on_ground && !wet && !climbing;
     if climbing {
         let climb = if input.forward || input.jump {
             CLIMB_SPEED
@@ -141,7 +149,7 @@ pub fn step_paced(
         wish -= right;
     }
     if wish.length_squared() > 0.0 {
-        let speed = if input.crouch {
+        let speed = if crouch {
             WALK_SPEED * CROUCH_DRAG
         } else if input.fast {
             FAST_SPEED
@@ -169,7 +177,7 @@ pub fn step_paced(
         wish
     };
     let mut eye = camera.eye;
-    let mut body = player_box(eye);
+    let mut body = player_box(eye, crouch);
     let mut rise_left = if can_step { STEP_HEIGHT } else { 0.0 };
     rise_left = move_horizontal(
         &mut body,
@@ -177,6 +185,7 @@ pub fn step_paced(
         0,
         glide.x * dt,
         rise_left,
+        cling,
         world,
         &extras,
     );
@@ -186,6 +195,7 @@ pub fn step_paced(
         2,
         glide.z * dt,
         rise_left,
+        cling,
         world,
         &extras,
     );
@@ -670,7 +680,7 @@ pub fn feet_y(eye_y: f32) -> f32 {
 
 /// True when any part of the body overlaps a water block.
 pub fn in_water(eye: Vec3, world: &Cluster) -> bool {
-    overlaps_water(&player_box(eye), world)
+    overlaps_water(&player_box(eye, false), world)
 }
 
 /// The block the feet are on. Water at the soles wins over the floor beneath.
@@ -693,7 +703,7 @@ pub fn ground_jump(camera: &Camera, world: &Cluster) -> bool {
     if !camera.on_ground {
         return false;
     }
-    let body = player_box(camera.eye);
+    let body = player_box(camera.eye, false);
     !overlaps_water(&body, world) && !touches_climb(&body, world)
 }
 
@@ -778,18 +788,43 @@ pub fn cactus_poke(touching: bool, left: f32, dt: f32) -> (f32, bool) {
 }
 
 pub fn player_box_bounds(eye: Vec3) -> ([f32; 3], [f32; 3]) {
-    let body = player_box(eye);
+    player_box_bounds_at(eye, false)
+}
+
+/// Standing or crouched body extents under the camera eye.
+pub fn player_box_bounds_at(eye: Vec3, crouch: bool) -> ([f32; 3], [f32; 3]) {
+    let body = player_box(eye, crouch);
     (
         [body.min.x, body.min.y, body.min.z],
         [body.max.x, body.max.y, body.max.z],
     )
 }
 
-fn player_box(eye: Vec3) -> Aabb {
+/// True when a standing body fits where a crouched one already stands.
+pub fn can_stand(eye: Vec3, world: &Cluster, obstacles: &[([f32; 3], [f32; 3])]) -> bool {
+    let extras: Vec<Aabb> = obstacles
+        .iter()
+        .map(|bounds| Aabb {
+            min: Vec3::from(bounds.0),
+            max: Vec3::from(bounds.1),
+        })
+        .collect();
+    can_stand_with(eye, world, &extras)
+}
+
+fn can_stand_with(eye: Vec3, world: &Cluster, extra: &[Aabb]) -> bool {
+    let crouched = player_box(eye, true);
+    let rise = HEIGHT - CROUCH_HEIGHT;
+    let up = clip(&crouched, 1, rise, world, extra);
+    up >= rise - 1.0e-3
+}
+
+fn player_box(eye: Vec3, crouch: bool) -> Aabb {
     let feet = feet_y(eye.y);
+    let height = if crouch { CROUCH_HEIGHT } else { HEIGHT };
     Aabb {
         min: Vec3::new(eye.x - HALF_WIDTH, feet, eye.z - HALF_WIDTH),
-        max: Vec3::new(eye.x + HALF_WIDTH, feet + HEIGHT, eye.z + HALF_WIDTH),
+        max: Vec3::new(eye.x + HALF_WIDTH, feet + height, eye.z + HALF_WIDTH),
     }
 }
 
@@ -799,17 +834,28 @@ fn move_horizontal(
     axis: usize,
     delta: f32,
     rise_left: f32,
+    cling: bool,
     world: &Cluster,
     extra: &[Aabb],
 ) -> f32 {
-    if let Some((climb, along)) = try_step(body, axis, delta, rise_left, world, extra) {
+    let before = *body;
+    let before_eye = *eye;
+    let left = if let Some((climb, along)) = try_step(body, axis, delta, rise_left, world, extra)
+    {
         shift(body, eye, 1, climb);
         shift(body, eye, axis, along);
-        return (rise_left - climb).max(0.0);
+        (rise_left - climb).max(0.0)
+    } else {
+        let moved = clip(body, axis, delta, world, extra);
+        shift(body, eye, axis, moved);
+        rise_left
+    };
+    if cling && !stands_on_platform(body, world, extra) {
+        *body = before;
+        *eye = before_eye;
+        return rise_left;
     }
-    let moved = clip(body, axis, delta, world, extra);
-    shift(body, eye, axis, moved);
-    rise_left
+    left
 }
 
 fn shift(body: &mut Aabb, eye: &mut Vec3, axis: usize, delta: f32) {
@@ -2502,7 +2548,92 @@ mod tests {
             low < open * (super::CROUCH_DRAG + 0.08),
             "crouch stays slow even with sprint held, open {open} low {low}"
         );
-        assert!(low > 0.4, "a crouch still moves, moved {low}");
+        assert!(low > 0.25, "a crouch still moves, moved {low}");
+    }
+
+    #[test]
+    fn a_crouch_fits_under_a_low_ceiling_and_stands_when_clear() {
+        let mut blocks = Vec::new();
+        for z in 0..6u8 {
+            blocks.push((0, 0, z, Block::new("stone", 0)));
+        }
+        // Crawlspace: floor top at y=1, top slab at y=2 → ceiling at 2.5 (1.5 clearance).
+        for z in 0..3u8 {
+            blocks.push((0, 2, z, Block::new("slab", 1)));
+        }
+        let world =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap();
+        let eye = Vec3::new(0.5, 1.0 + EYE_HEIGHT, 1.5);
+        assert!(
+            !super::can_stand(eye, &world, &[]),
+            "standing body should hit the slab ceiling"
+        );
+        let (_, stand_max) = super::player_box_bounds_at(eye, false);
+        let (_, crouch_max) = super::player_box_bounds_at(eye, true);
+        assert!(stand_max[1] > 2.5, "standing reaches into the slab");
+        assert!(
+            (crouch_max[1] - 2.5).abs() < 1.0e-3,
+            "crouch fills the 1.5 crawlspace, top {}",
+            crouch_max[1]
+        );
+        let open = Vec3::new(0.5, 1.0 + EYE_HEIGHT, 4.5);
+        assert!(super::can_stand(open, &world, &[]));
+    }
+
+    #[test]
+    fn a_crouch_clings_to_a_block_edge() {
+        let mut blocks = Vec::new();
+        // Platform only covers z=2..4; air beyond toward -Z.
+        for z in 2..5u8 {
+            blocks.push((0, 0, z, Block::new("stone", 0)));
+        }
+        let world =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap();
+        let eye = Vec3::new(0.5, 1.0 + EYE_HEIGHT, 2.4);
+        let mut camera = Camera::looking_at(eye, Vec3::new(0.5, 1.4, 0.0));
+        // Settle onto the platform.
+        for _ in 0..20 {
+            step(&mut camera, 1.0 / 60.0, &idle(), &world);
+        }
+        assert!(camera.on_ground);
+        let start_z = camera.eye.z;
+        let mut sneak = idle();
+        sneak.forward = true;
+        sneak.crouch = true;
+        for _ in 0..90 {
+            step(&mut camera, 1.0 / 60.0, &sneak, &world);
+        }
+        assert!(
+            camera.on_ground,
+            "sneak should stay on the platform, z {}",
+            camera.eye.z
+        );
+        assert!(
+            camera.eye.z >= 2.0 - HALF_WIDTH - 0.05,
+            "sneak should cling near the north edge, z {} started {start_z}",
+            camera.eye.z
+        );
+        assert!(
+            camera.eye.z < start_z + 0.01,
+            "sneak should edge toward the drop, z {} started {start_z}",
+            camera.eye.z
+        );
+        // Without sneak, the same walk falls off.
+        let mut camera = Camera::looking_at(eye, Vec3::new(0.5, 1.4, 0.0));
+        for _ in 0..20 {
+            step(&mut camera, 1.0 / 60.0, &idle(), &world);
+        }
+        let mut walk = idle();
+        walk.forward = true;
+        for _ in 0..90 {
+            step(&mut camera, 1.0 / 60.0, &walk, &world);
+        }
+        assert!(
+            camera.eye.z < 1.5 || !camera.on_ground,
+            "a walk should leave the platform, z {} ground {}",
+            camera.eye.z,
+            camera.on_ground
+        );
     }
 
     #[test]
