@@ -45,6 +45,10 @@ const WATER_GRAVITY: f32 = 6.0;
 const BUOYANCY: f32 = 14.0;
 const SWIM_UP: f32 = 4.5;
 const WALK_SPEED: f32 = 6.0;
+/// Creative flight horizontal speed (a touch under sprint).
+const FLY_SPEED: f32 = 12.0;
+/// Creative flight vertical speed while holding Space / Shift.
+const FLY_VERT: f32 = 8.0;
 /// Vertical speed while the body overlaps a ladder or a vine, in blocks per second.
 const CLIMB_SPEED: f32 = 4.0;
 const FAST_SPEED: f32 = 16.0;
@@ -213,6 +217,73 @@ pub fn step_paced(
     }
     if climbing {
         camera.on_ground = true;
+    }
+    camera.eye = eye;
+}
+
+/// Creative flight: no gravity, Space rises, Shift sinks, WASD glides.
+///
+/// Collision still stops the body against solids so you cannot clip through
+/// walls. The hitbox stays standing height (Shift is vertical only).
+pub fn step_fly(
+    camera: &mut Camera,
+    dt: f32,
+    input: &MoveInput,
+    world: &Cluster,
+    obstacles: &[([f32; 3], [f32; 3])],
+) {
+    let extras: Vec<Aabb> = obstacles
+        .iter()
+        .map(|bounds| Aabb {
+            min: Vec3::from(bounds.0),
+            max: Vec3::from(bounds.1),
+        })
+        .collect();
+    let dt = dt.clamp(0.0, 0.05);
+    camera.on_ground = false;
+    camera.velocity_y = if input.jump {
+        FLY_VERT
+    } else if input.crouch {
+        -FLY_VERT
+    } else {
+        0.0
+    };
+
+    let (forward, right) = camera.walk_axes();
+    let mut wish = Vec3::ZERO;
+    if input.forward {
+        wish += forward;
+    }
+    if input.back {
+        wish -= forward;
+    }
+    if input.right {
+        wish += right;
+    }
+    if input.left {
+        wish -= right;
+    }
+    if wish.length_squared() > 0.0 {
+        let speed = if input.fast {
+            FAST_SPEED
+        } else {
+            FLY_SPEED
+        };
+        wish = wish.normalize() * speed;
+    }
+    camera.slide = Vec3::ZERO;
+
+    let mut eye = camera.eye;
+    let mut body = player_box(eye, false);
+    let _ = move_horizontal(&mut body, &mut eye, 0, wish.x * dt, 0.0, false, world, &extras);
+    let _ = move_horizontal(&mut body, &mut eye, 2, wish.z * dt, 0.0, false, world, &extras);
+    let wanted_y = camera.velocity_y * dt;
+    let dy = clip(&body, 1, wanted_y, world, &extras);
+    eye.y += dy;
+    if wanted_y > 0.0 && dy < wanted_y - 1.0e-4 {
+        camera.velocity_y = 0.0;
+    } else if wanted_y < 0.0 && dy > wanted_y + 1.0e-4 {
+        camera.velocity_y = 0.0;
     }
     camera.eye = eye;
 }
@@ -1677,6 +1748,37 @@ mod tests {
         let feet = feet_y(camera.eye.y);
         assert!((feet - 1.0).abs() < 0.02, "landed at {feet}");
         assert!(camera.on_ground);
+    }
+
+    #[test]
+    fn creative_flight_rises_and_holds_without_gravity() {
+        let world = stone_path(&[]);
+        let mut camera = Camera::looking_at(
+            Vec3::new(0.5, 1.0 + EYE_HEIGHT, 0.5),
+            Vec3::new(0.5, 1.0 + EYE_HEIGHT, -1.0),
+        );
+        camera.on_ground = true;
+        let mut up = idle();
+        up.jump = true;
+        step_fly(&mut camera, 1.0 / 60.0, &up, &world, &[]);
+        let risen = camera.eye.y;
+        assert!(risen > 1.0 + EYE_HEIGHT + 0.05, "space should lift {risen}");
+        assert!(!camera.on_ground);
+        let held = camera.eye.y;
+        for _ in 0..90 {
+            step_fly(&mut camera, 1.0 / 60.0, &idle(), &world, &[]);
+        }
+        assert!(
+            (camera.eye.y - held).abs() < 0.08,
+            "no gravity while flying, y {} vs {}",
+            camera.eye.y,
+            held
+        );
+        let mut down = idle();
+        down.crouch = true;
+        let before = camera.eye.y;
+        step_fly(&mut camera, 1.0 / 60.0, &down, &world, &[]);
+        assert!(camera.eye.y < before, "shift should sink");
     }
 
     fn stone_path(extra: &[(u8, u16, u8)]) -> Cluster {

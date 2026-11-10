@@ -188,6 +188,10 @@ struct Args {
     shot_rain_splash: Option<std::path::PathBuf>,
     /// Tall grass / wheat wind sway, then quit.
     shot_grass_wind: Option<std::path::PathBuf>,
+    /// Creative flight mid-air, then quit.
+    shot_creative_flight: Option<std::path::PathBuf>,
+    /// Start with creative mode on (double-tap Space to fly).
+    creative: bool,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -405,6 +409,8 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_cloud_shadow: args.shot_cloud_shadow,
         shot_rain_splash: args.shot_rain_splash,
         shot_grass_wind: args.shot_grass_wind,
+        shot_creative_flight: args.shot_creative_flight,
+        creative: args.creative,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -517,6 +523,8 @@ struct App {
     shot_cloud_shadow: Option<std::path::PathBuf>,
     shot_rain_splash: Option<std::path::PathBuf>,
     shot_grass_wind: Option<std::path::PathBuf>,
+    shot_creative_flight: Option<std::path::PathBuf>,
+    creative: bool,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -732,6 +740,12 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_grass_wind.take() {
                     state.arm_grass_wind_shot(path);
+                }
+                if let Some(path) = self.shot_creative_flight.take() {
+                    state.arm_creative_flight_shot(path);
+                }
+                if self.creative {
+                    state.enable_creative();
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -1071,6 +1085,8 @@ where
         shot_cloud_shadow: None,
         shot_rain_splash: None,
         shot_grass_wind: None,
+        shot_creative_flight: None,
+        creative: false,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -1383,6 +1399,15 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-grass-wind".to_string())?;
                 parsed.shot_grass_wind = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-creative-flight" | "--shot-fly" | "--shot-flight" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-creative-flight".to_string())?;
+                parsed.shot_creative_flight = Some(std::path::PathBuf::from(value));
+            }
+            "--creative" | "--creative-mode" => {
+                parsed.creative = true;
             }
             "--shot-shrine" => {
                 let value = iter

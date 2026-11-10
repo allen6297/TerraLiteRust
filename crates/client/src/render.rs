@@ -1113,6 +1113,12 @@ pub struct State {
     entity_time: f32,
     air_peak: f32,
     airborne: bool,
+    /// Creative flight engaged (only while `menu.creative()`).
+    flying: bool,
+    /// Seconds left to count a second Space press as a double-tap.
+    jump_tap_left: f32,
+    /// Soft FOV whoosh when flight engages.
+    fly_kick: f32,
     /// This Space hold already asked `events.jump`.
     jump_asked: bool,
     /// That ask returned false, so Space stays on the ground until release.
@@ -1249,6 +1255,8 @@ pub struct State {
     found_fireflies: bool,
     /// Once: saw daytime canopy leaves tumble down.
     found_falling_leaves: bool,
+    /// Once: engaged creative flight.
+    found_flight: bool,
     /// Once: walked up to the pad wolf.
     found_wolf: bool,
     /// Once: walked up to the pad cat.
@@ -2319,6 +2327,9 @@ impl State {
             entity_time: 0.0,
             air_peak,
             airborne: false,
+            flying: false,
+            jump_tap_left: 0.0,
+            fly_kick: 0.0,
             jump_asked: false,
             jump_blocked: false,
             sprint_asked: false,
@@ -2394,6 +2405,7 @@ impl State {
             found_compound: false,
             found_fireflies: false,
             found_falling_leaves: false,
+            found_flight: false,
             found_wolf: false,
             found_cat: false,
             found_parrot: false,
@@ -4616,6 +4628,32 @@ impl State {
         }
         self.told_shape_pot = true;
         self.gui.push_chat("use to pot");
+    }
+
+    /// Turn creative mode on (CLI `--creative` / flight shot).
+    pub fn enable_creative(&mut self) {
+        self.menu.set_creative(true);
+    }
+
+    /// Double-tap Space in creative: engage or cancel flight with a soft whoosh.
+    fn toggle_creative_flight(&mut self) {
+        if !self.menu.creative() {
+            self.flying = false;
+            return;
+        }
+        self.flying = !self.flying;
+        self.camera.velocity_y = 0.0;
+        if self.flying {
+            self.camera.on_ground = false;
+            self.fly_kick = 1.0;
+            self.audio.play(crate::audio::Sound::Gust);
+            if !self.found_flight {
+                self.found_flight = true;
+                self.gui.push_chat("fly");
+            }
+        } else {
+            self.fly_kick = 0.0;
+        }
     }
 
     /// True when `events.jump` keeps the player on the ground.
@@ -14751,7 +14789,24 @@ impl State {
         self.posed_pitch = self.cook_shot_pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
-        if self.found_fireflies || self.found_falling_leaves {
+        if self.found_flight && self.flying {
+            self.menu.set_creative(true);
+            self.clock.set_time_of_day(0.42);
+            self.dusk_show = 0.0;
+            self.rain_mix = 0.0;
+            self.camera.on_ground = false;
+            self.camera.velocity_y = 0.0;
+            self.fly_kick = self.fly_kick.max(0.55);
+            let light = self.sun_light();
+            self.wanted_sun = light.direction;
+            self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+            self.hotbar.install_saved(0, &[]);
+            self.hotbar_dirty = true;
+            self.gui.age_chat(60.0);
+            if self.cook_shot_frames % 30 == 0 {
+                self.gui.push_chat("fly");
+            }
+        } else if self.found_fireflies || self.found_falling_leaves {
             // Keep presence shots quiet: no roaming animals, no tip stack.
             if self.found_fireflies {
                 self.clock.set_time_of_day(0.92);
@@ -14839,6 +14894,8 @@ impl State {
                     sz as f32 + 0.5,
                 ];
                 self.drops.straw(head);
+            } else if self.found_flight {
+                // Creative flight shot: no camp smoke.
             } else if self.found_fireflies {
                 // Night meadow shot: keep the warm pool, do not inject camp smoke.
                 let _ = self.drops.tick_motes(0.08);
@@ -15852,6 +15909,60 @@ impl State {
                 self.swap_kick = 1.0;
             }
         }
+    }
+
+    /// Creative flight mid-air over the pad, then quit with a PNG.
+    pub fn arm_creative_flight_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.menu.set_creative(true);
+        self.flying = true;
+        self.fly_kick = 0.9;
+        self.found_flight = true;
+        self.found_fireflies = false;
+        self.found_falling_leaves = false;
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("fly");
+        self.audio.play(crate::audio::Sound::Gust);
+
+        // Hover above the stairs overlook, looking across the pad.
+        let eye = glam::Vec3::new(8.5, 6.4 + body::EYE_HEIGHT, 16.2);
+        let focus = glam::Vec3::new(8.5, 2.2, 8.5);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = false;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
     }
 
     /// Grounded FOV then jump takeoff FOV from the stairs overlook, stitched side by side.
@@ -18105,7 +18216,24 @@ impl State {
             KeyCode::KeyS => self.input.back = pressed,
             KeyCode::KeyA => self.input.left = pressed,
             KeyCode::KeyD => self.input.right = pressed,
-            KeyCode::Space => self.input.jump = pressed,
+            KeyCode::Space => {
+                if pressed
+                    && self.playing
+                    && !self.menu.is_open()
+                    && !self.dead
+                    && self.menu.creative()
+                {
+                    if self.jump_tap_left > 0.0 {
+                        self.toggle_creative_flight();
+                        self.jump_tap_left = 0.0;
+                        // Swallow this press so it does not also jump / climb.
+                        self.input.jump = false;
+                        return;
+                    }
+                    self.jump_tap_left = 0.32;
+                }
+                self.input.jump = pressed;
+            }
             KeyCode::ControlLeft | KeyCode::ControlRight => {
                 self.ctrl_mod = pressed;
                 self.input.fast = pressed;
@@ -20768,6 +20896,8 @@ impl State {
         self.hit_kick = (self.hit_kick - dt * 4.5).max(0.0);
         self.splash_kick = (self.splash_kick - dt * 5.0).max(0.0);
         self.jump_kick = (self.jump_kick - dt * 5.5).max(0.0);
+        self.fly_kick = (self.fly_kick - dt * 3.2).max(0.0);
+        self.jump_tap_left = (self.jump_tap_left - dt).max(0.0);
         if !self.boat.aboard() {
             self.boat_kick = (self.boat_kick - dt * 6.0).max(0.0);
             self.boat_show = (self.boat_show - dt * 5.0).max(0.0);
@@ -20886,10 +21016,36 @@ impl State {
             self.sprint_run = 0.0;
             self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
         } else {
+            if !self.menu.creative() && self.flying {
+                self.flying = false;
+                self.fly_kick = 0.0;
+            }
             let mut motion = self.input;
-            if motion.crouch {
+            if motion.crouch && !self.flying {
                 motion.fast = false;
             }
+            if self.flying {
+                self.jump_asked = false;
+                self.jump_blocked = false;
+                self.sprint_asked = false;
+                self.sprint_blocked = false;
+                self.sprint_run = 0.0;
+                self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
+                self.camera
+                    .step_fly(dt, &motion, &self.world, &obstacles);
+                let stepping = motion.forward
+                    || motion.back
+                    || motion.left
+                    || motion.right
+                    || motion.jump
+                    || motion.crouch;
+                if stepping {
+                    self.bob_phase += dt * 5.5;
+                    self.bob_amount = (self.bob_amount + dt * 4.0).min(0.45);
+                } else {
+                    self.bob_amount = (self.bob_amount - dt * 3.0).max(0.0);
+                }
+            } else {
             let feet = body::feet_y(self.camera.eye.y);
             let leaving = motion.jump && body::ground_jump(&self.camera, &self.world);
             if leaving {
@@ -20959,6 +21115,7 @@ impl State {
                 self.bob_phase += dt * pace;
                 self.bob_amount = (self.bob_amount + dt * 5.0).min(1.0);
             }
+            } // end grounded walk (not flying)
             self.note_plate();
             self.note_cactus(dt);
             self.note_magma(dt);
@@ -21494,6 +21651,7 @@ impl State {
             crate::camera::chew_fov(self.sip, self.chew_phase) * bob_scale
         };
         let jump = self.jump_kick * crate::camera::JUMP_FOV * bob_scale;
+        let fly = self.fly_kick * crate::camera::FLY_FOV * bob_scale;
         let place = self.slot_punch * crate::camera::PLACE_FOV * bob_scale;
         let swap = self.swap_kick * crate::camera::SWAP_FOV * bob_scale;
         let broken = self.break_kick * crate::camera::BREAK_FOV * bob_scale;
@@ -21508,6 +21666,7 @@ impl State {
                 * bob_scale,
         ) + chew
             + jump
+            + fly
             + swap
             - place
             - broken;

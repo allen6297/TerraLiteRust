@@ -184,6 +184,17 @@ impl Camera {
         body::step_paced(self, dt, input, world, obstacles, pace);
     }
 
+    /// Creative flight step: no gravity, Space / Shift for vertical.
+    pub fn step_fly(
+        &mut self,
+        dt: f32,
+        input: &MoveInput,
+        world: &Cluster,
+        obstacles: &[([f32; 3], [f32; 3])],
+    ) {
+        body::step_fly(self, dt, input, world, obstacles);
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         self.view_proj_fov(aspect, LOOK_FOV)
@@ -296,6 +307,9 @@ pub const BOAT_FOV: f32 = 5.0;
 
 /// Degrees the view widens at jump takeoff (before view-bob scale).
 pub const JUMP_FOV: f32 = 4.0;
+
+/// Degrees the view widens when creative flight engages (before view-bob scale).
+pub const FLY_FOV: f32 = 7.0;
 
 /// Degrees the view tightens on a successful block place (before view-bob scale).
 pub const PLACE_FOV: f32 = 2.5;

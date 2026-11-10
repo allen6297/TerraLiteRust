@@ -4359,6 +4359,8 @@ pub struct Menu {
     bob: crate::camera::Bob,
     /// Soft sun and moon from the ray grid. Off keeps the raster shadow map.
     trace: bool,
+    /// Creative mode: double-tap Space toggles flight. Survival stays grounded.
+    creative: bool,
     world_name: String,
     worlds: Vec<String>,
     /// Shown on the join row after a refused connection.
@@ -4389,6 +4391,7 @@ impl Menu {
             hemisphere: crate::daylight::Hemisphere::South,
             bob: crate::camera::Bob::Full,
             trace: true,
+            creative: false,
             world_name: crate::net::DEFAULT_WORLD.to_string(),
             worlds: crate::net::list_worlds(),
             join_note: String::new(),
@@ -4416,6 +4419,7 @@ impl Menu {
             hemisphere: crate::daylight::Hemisphere::South,
             bob: crate::camera::Bob::Full,
             trace: true,
+            creative: false,
             world_name: crate::net::DEFAULT_WORLD.to_string(),
             worlds: vec![crate::net::DEFAULT_WORLD.to_string()],
             join_note: String::new(),
@@ -4480,8 +4484,8 @@ impl Menu {
             SettingsCategory {
                 id: "world".into(),
                 title: "World".into(),
-                detail: "size and sun path".into(),
-                options: vec!["world".into(), "hemisphere".into()],
+                detail: "size, sun path, and mode".into(),
+                options: vec!["world".into(), "hemisphere".into(), "creative".into()],
             },
             SettingsCategory {
                 id: "video".into(),
@@ -4536,6 +4540,16 @@ impl Menu {
         self.trace
     }
 
+    /// Creative mode lets the player double-tap Space to fly.
+    pub fn creative(&self) -> bool {
+        self.creative
+    }
+
+    /// Force creative on or off (CLI / shot arms).
+    pub fn set_creative(&mut self, on: bool) {
+        self.creative = on;
+    }
+
     pub fn world_name(&self) -> &str {
         &self.world_name
     }
@@ -4570,6 +4584,7 @@ impl Menu {
             ),
             "world" => format!("{} by {} chunks", self.size.side(), self.size.side()),
             "hemisphere" => "sun path across the sky".to_string(),
+            "creative" => "double-tap Space to fly".to_string(),
             "volume" => "master sound".to_string(),
             "view_bob" => "walk motion".to_string(),
             "trace" => "sun shadows".to_string(),
@@ -4589,6 +4604,8 @@ impl Menu {
         match label {
             "world" => self.size.label().to_string(),
             "hemisphere" => self.hemisphere.label().to_string(),
+            "creative" if self.creative => "on".to_string(),
+            "creative" => "off".to_string(),
             "volume" if self.muted => "muted".to_string(),
             "volume" => "on".to_string(),
             "view_bob" => self.bob.label().to_string(),
@@ -4615,6 +4632,11 @@ impl Menu {
                 on: self.trace,
                 on_label: "soft",
                 off_label: "raster",
+            },
+            "creative" => SettingsControl::Toggle {
+                on: self.creative,
+                on_label: "on",
+                off_label: "off",
             },
             "hemisphere" => SettingsControl::Toggle {
                 on: matches!(self.hemisphere, crate::daylight::Hemisphere::North),
@@ -4702,6 +4724,13 @@ impl Menu {
                     return MenuAction::None;
                 }
                 self.trace = on;
+                MenuAction::None
+            }
+            "creative" => {
+                if self.creative == on {
+                    return MenuAction::None;
+                }
+                self.creative = on;
                 MenuAction::None
             }
             "hemisphere" => {
