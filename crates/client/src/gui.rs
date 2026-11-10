@@ -5444,6 +5444,22 @@ pub fn water_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     ]
 }
 
+/// Brown edge veil when hunger is critically low. `amount` is `0` fed through `1` empty.
+pub fn starve_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.02 || width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let band = 8.0 + 22.0 * amount;
+    let shade = [0.28, 0.14, 0.06];
+    vec![
+        pixel_quad(width, height, 0.0, height - band, width, height, shade),
+        pixel_quad(width, height, 0.0, 0.0, width, band, shade),
+        pixel_quad(width, height, 0.0, 0.0, band, height, shade),
+        pixel_quad(width, height, width - band, 0.0, width, height, shade),
+    ]
+}
+
 /// Dark edge veil after sleeping through the night. `amount` is `1` just woke through `0`.
 ///
 /// Opaque HUD quads have no alpha, so the wake cue closes in from the edges
@@ -7975,6 +7991,8 @@ mod tests {
             .any(|quad| quad.color == WELL));
         assert!(water_quads(200.0, 100.0, 0.0).is_empty());
         assert_eq!(water_quads(200.0, 100.0, 1.0).len(), 4);
+        assert!(starve_quads(200.0, 100.0, 0.0).is_empty());
+        assert_eq!(starve_quads(200.0, 100.0, 1.0).len(), 4);
         assert!(boat_quads(200.0, 100.0, 0.0).is_empty());
         assert!(boat_quads(200.0, 100.0, 1.0)
             .iter()

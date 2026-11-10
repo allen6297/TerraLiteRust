@@ -278,6 +278,25 @@ impl Hunger {
         self.food
     }
 
+    /// Force the bar for proof shots and tests. Clamped to `0..=HUNGER`.
+    pub fn set_food(&mut self, food: i32) {
+        self.food = food.clamp(0, HUNGER);
+        if self.food > 0 {
+            self.starve = 0.0;
+        }
+        self.work = 0.0;
+        self.regen = 0.0;
+    }
+
+    /// `0` when fed enough, up to `1` when empty. Drives the hunger edge veil.
+    pub fn hunger_veil(&self) -> f32 {
+        if self.food >= 3 {
+            0.0
+        } else {
+            (3 - self.food) as f32 / 3.0
+        }
+    }
+
     /// `1` with food left. Half speed when the bar is empty.
     pub fn pace(&self) -> f32 {
         if self.food <= 0 { STARVE_PACE } else { 1.0 }
@@ -1242,6 +1261,18 @@ mod tests {
         assert_eq!(ground_id(&world, on(8.5)), "water");
         assert!(!in_water(on(2.5), &world));
         assert!(in_water(on(8.5), &world));
+    }
+
+    #[test]
+    fn hunger_veil_ramps_only_when_food_is_critical() {
+        let mut hunger = Hunger::full();
+        assert_eq!(hunger.hunger_veil(), 0.0);
+        hunger.set_food(3);
+        assert_eq!(hunger.hunger_veil(), 0.0);
+        hunger.set_food(2);
+        assert!((hunger.hunger_veil() - 1.0 / 3.0).abs() < 1.0e-5);
+        hunger.set_food(0);
+        assert_eq!(hunger.hunger_veil(), 1.0);
     }
 
     #[test]

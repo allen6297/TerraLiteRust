@@ -878,6 +878,14 @@ pub struct State {
     attack_shot_eye: glam::Vec3,
     attack_shot_yaw: f32,
     attack_shot_pitch: f32,
+    /// One-shot fed vs starving hunger veil stitch, then quit.
+    hunger_shot_path: Option<std::path::PathBuf>,
+    hunger_shot_frames: u32,
+    hunger_shot_phase: HungerShotPhase,
+    hunger_shot_fed: Option<CapturedRgba>,
+    hunger_shot_eye: glam::Vec3,
+    hunger_shot_yaw: f32,
+    hunger_shot_pitch: f32,
     hooks: Hooks,
     entity_time: f32,
     air_peak: f32,
@@ -1758,6 +1766,13 @@ impl State {
             attack_shot_eye: glam::Vec3::ZERO,
             attack_shot_yaw: 0.0,
             attack_shot_pitch: 0.0,
+            hunger_shot_path: None,
+            hunger_shot_frames: 0,
+            hunger_shot_phase: HungerShotPhase::Idle,
+            hunger_shot_fed: None,
+            hunger_shot_eye: glam::Vec3::ZERO,
+            hunger_shot_yaw: 0.0,
+            hunger_shot_pitch: 0.0,
             hooks,
             entity_time: 0.0,
             air_peak,
@@ -5627,6 +5642,61 @@ impl State {
         }
     }
 
+    /// Fed HUD then starving hunger veil from the stairs overlook, stitched side by side.
+    pub fn arm_hunger_shot(&mut self, path: std::path::PathBuf) {
+        self.hunger_shot_path = Some(path);
+        self.hunger_shot_frames = 0;
+        self.hunger_shot_phase = HungerShotPhase::WaitingFed;
+        self.hunger_shot_fed = None;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.hunger = body::Hunger::full();
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.hunger_shot_eye = eye;
+        self.hunger_shot_yaw = yaw;
+        self.hunger_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_hunger_shot_camera(&mut self) {
+        if self.hunger_shot_path.is_none() {
+            return;
+        }
+        self.camera.restore(
+            self.hunger_shot_eye,
+            self.hunger_shot_yaw,
+            self.hunger_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.hunger_shot_eye;
+        self.posed_yaw = self.hunger_shot_yaw;
+        self.posed_pitch = self.hunger_shot_pitch;
+        self.pose_dirty = true;
+        match self.hunger_shot_phase {
+            HungerShotPhase::WaitingFed | HungerShotPhase::Idle => {
+                self.hunger = body::Hunger::full();
+            }
+            HungerShotPhase::WaitingStarved => {
+                self.hunger.set_food(0);
+            }
+        }
+    }
+
     /// Cooling crosshair then ready crosshair with a held mace, stitched side by side.
     pub fn arm_attack_shot(&mut self, path: std::path::PathBuf) {
         self.attack_shot_path = Some(path);
@@ -6132,6 +6202,75 @@ impl State {
                 }
             }
             AttackShotPhase::Idle => {}
+        }
+    }
+
+    fn poll_hunger_shot(&mut self) {
+        let Some(path) = self.hunger_shot_path.clone() else {
+            return;
+        };
+        self.pin_hunger_shot_camera();
+        self.hunger_shot_frames = self.hunger_shot_frames.saturating_add(1);
+        if self.hunger_shot_frames < 90 || !self.chunk_bake.is_idle() {
+            if self.hunger_shot_frames > 600 {
+                eprintln!("hunger shot timed out");
+                self.hunger_shot_path = None;
+                self.hunger_shot_phase = HungerShotPhase::Idle;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match self.hunger_shot_phase {
+            HungerShotPhase::WaitingFed => match capture_window_rgba(&self.window) {
+                Ok(fed) => {
+                    self.hunger_shot_fed = Some(fed);
+                    self.hunger_shot_frames = 0;
+                    self.hunger_shot_phase = HungerShotPhase::WaitingStarved;
+                }
+                Err(err) => {
+                    eprintln!("hunger fed capture failed: {err}");
+                    if self.hunger_shot_frames > 400 {
+                        self.hunger_shot_path = None;
+                        self.hunger_shot_phase = HungerShotPhase::Idle;
+                        self.quit = true;
+                    }
+                }
+            },
+            HungerShotPhase::WaitingStarved => {
+                let Some(fed) = self.hunger_shot_fed.take() else {
+                    self.hunger_shot_path = None;
+                    self.hunger_shot_phase = HungerShotPhase::Idle;
+                    self.quit = true;
+                    return;
+                };
+                match capture_window_rgba(&self.window) {
+                    Ok(starved) => match stitch_held_light_proof(&fed, &starved, &path) {
+                        Ok(()) => {
+                            eprintln!("hunger shot wrote {}", path.display());
+                            self.hunger_shot_path = None;
+                            self.hunger_shot_phase = HungerShotPhase::Idle;
+                            self.quit = true;
+                        }
+                        Err(err) => {
+                            eprintln!("hunger stitch failed: {err}");
+                            self.hunger_shot_path = None;
+                            self.hunger_shot_phase = HungerShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("hunger starved capture failed: {err}");
+                        self.hunger_shot_fed = Some(fed);
+                        if self.hunger_shot_frames > 400 {
+                            self.hunger_shot_path = None;
+                            self.hunger_shot_phase = HungerShotPhase::Idle;
+                            self.quit = true;
+                        }
+                    }
+                }
+            }
+            HungerShotPhase::Idle => {}
         }
     }
 
@@ -8745,6 +8884,7 @@ impl State {
         self.pin_swim_shot_camera();
         self.pin_boat_shot_camera();
         self.pin_attack_shot_camera();
+        self.pin_hunger_shot_camera();
         self.sync_held_light();
         self.service_meshes();
         self.note_sky();
@@ -9799,6 +9939,10 @@ impl State {
         if self.water_sub > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::water_quads(gui_w, gui_h, self.water_sub));
         }
+        let hunger_veil = self.hunger.hunger_veil();
+        if hunger_veil > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::starve_quads(gui_w, gui_h, hunger_veil));
+        }
         if self.sleep_fade > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::sleep_quads(gui_w, gui_h, self.sleep_fade));
         }
@@ -9992,6 +10136,7 @@ impl State {
         self.poll_swim_shot();
         self.poll_boat_shot();
         self.poll_attack_shot();
+        self.poll_hunger_shot();
     }
 }
 
@@ -10028,6 +10173,13 @@ enum AttackShotPhase {
     Idle,
     WaitingCool,
     WaitingReady,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HungerShotPhase {
+    Idle,
+    WaitingFed,
+    WaitingStarved,
 }
 
 struct CapturedRgba {
