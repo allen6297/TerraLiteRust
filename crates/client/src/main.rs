@@ -1038,7 +1038,7 @@ where
                     .ok_or_else(|| "missing value for --shot-keybinds".to_string())?;
                 parsed.shot_keybinds = Some(std::path::PathBuf::from(value));
             }
-            "--shot-axolotl" => {
+            "--shot-axolotl" | "--shot-leash" | "--shot-axolotl-leash" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-axolotl".to_string())?;

@@ -996,6 +996,10 @@ pub struct State {
     pollen_show: f32,
     /// Seconds until the next pollen trail drip.
     pollen_drip: f32,
+    /// HUD plate while an axolotl companion is leashed, `0`..`1`.
+    leash_show: f32,
+    /// True when the current axolotl follow consumed a lead item.
+    axolotl_held_lead: bool,
     /// One-shot idle horse vs gallop FOV stitch, then quit.
     horse_shot_path: Option<std::path::PathBuf>,
     horse_shot_frames: u32,
@@ -2061,6 +2065,8 @@ impl State {
             horse_stroke: 0.0,
             pollen_show: 0.0,
             pollen_drip: 0.0,
+            leash_show: 0.0,
+            axolotl_held_lead: false,
             horse_shot_path: None,
             horse_shot_frames: 0,
             horse_shot_phase: HorseShotPhase::Idle,
@@ -2922,7 +2928,16 @@ impl State {
     }
 
     fn rebuild_axolotl(&mut self) {
-        let vertices = self.axolotl.vertices();
+        let mut vertices = self.axolotl.vertices();
+        if self.axolotl.following() {
+            let (forward, right) = self.camera.walk_axes();
+            let hand = [
+                self.camera.eye.x + forward.x * 0.55 + right.x * 0.28,
+                self.camera.eye.y - 0.42,
+                self.camera.eye.z + forward.z * 0.55 + right.z * 0.28,
+            ];
+            vertices.extend(self.axolotl.leash_rope(hand));
+        }
         if vertices.is_empty() {
             self.axolotl_buf = None;
             self.axolotl_count = 0;
@@ -5458,6 +5473,7 @@ impl State {
     }
 
     /// Right-click the axolotl so it follows through the water, or swims again.
+    /// Holding a lead consumes it and tips `leashed`; untie returns the lead.
     fn try_axolotl(&mut self) -> bool {
         let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
         let forward = self.camera.forward();
@@ -5465,10 +5481,36 @@ impl State {
         if !self.axolotl.aimed(eye, forward) {
             return false;
         }
-        let following = self.axolotl.follow();
+        if self.axolotl.following() {
+            let _ = self.axolotl.follow();
+            if self.axolotl_held_lead {
+                self.axolotl_held_lead = false;
+                if !self.hotbar.collect("lead") {
+                    self.bag.collect("lead");
+                    self.bag_dirty = true;
+                }
+                self.hotbar_dirty = true;
+                self.gui.push_chat("untied");
+            } else {
+                self.gui.push_chat("swim");
+            }
+            self.leash_show = 0.0;
+            self.rebuild_axolotl();
+            return true;
+        }
+        let held = self.hotbar.slot(self.hotbar.selected());
+        let with_lead = held
+            .map(|id| Pack::builtin().is_lead(id))
+            .unwrap_or(false);
+        if with_lead {
+            self.hotbar.consume_selected();
+            self.hotbar_dirty = true;
+            self.axolotl_held_lead = true;
+        }
+        let _ = self.axolotl.follow();
+        self.leash_show = 1.0;
         self.rebuild_axolotl();
-        self.gui
-            .push_chat(if following { "companion" } else { "swim" });
+        self.gui.push_chat(if with_lead { "leashed" } else { "companion" });
         true
     }
 
@@ -9767,14 +9809,20 @@ impl State {
         if !self.axolotl.following() {
             let _ = self.axolotl.follow();
         }
+        self.axolotl_held_lead = true;
+        self.leash_show = 1.0;
         // Swim toward the far side of the pool (around the dry cell).
         self.axolotl.tick(80, [10.5, 36.5], &self.world);
-        self.rebuild_axolotl();
-        self.gui.push_chat("companion");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("lead");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("leashed");
 
         let focus = glam::Vec3::from(self.axolotl.origin()) + glam::Vec3::new(0.0, 0.35, 0.0);
-        let eye = glam::Vec3::new(focus.x - 1.2, focus.y + 1.55 + body::EYE_HEIGHT, focus.z - 3.4);
+        // Stand back so the leash beads read between the hand and the axolotl.
+        let eye = glam::Vec3::new(focus.x - 2.4, focus.y + 1.35 + body::EYE_HEIGHT, focus.z - 2.8);
         self.camera = Camera::looking_at(eye, focus);
+        self.rebuild_axolotl();
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;
         self.cook_shot_yaw = yaw;
@@ -16979,6 +17027,11 @@ impl State {
             }
             self.rebuild_frog();
             self.axolotl.tick(steps, feet, &self.world);
+            if self.axolotl.following() {
+                self.leash_show = (self.leash_show + 0.35).min(1.0);
+            } else {
+                self.leash_show = (self.leash_show - steps as f32 * 0.08).max(0.0);
+            }
             self.rebuild_axolotl();
             if self.chicken.tick(steps, feet, &self.world) {
                 self.gui.push_chat("egg");
@@ -17736,6 +17789,9 @@ impl State {
         }
         if self.pollen_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::pollen_quads(gui_w, gui_h, self.pollen_show));
+        }
+        if self.leash_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::leash_quads(gui_w, gui_h, self.leash_show));
         }
         if self.sip > 0.02 && !self.sipping && !self.menu.is_open() && !self.dead {
             quads.extend(gui::chew_quads(gui_w, gui_h, self.sip));

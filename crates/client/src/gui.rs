@@ -5389,6 +5389,10 @@ pub fn pollen_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "pollen")
 }
 
+pub fn leash_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "leash")
+}
+
 pub fn chew_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "chew")
 }

@@ -2789,6 +2789,30 @@ impl Axolotl {
             self.fade,
         )
     }
+
+    /// Soft lead beads from the axolotl neck to the player's hand while following.
+    pub fn leash_rope(&self, hand: [f32; 3]) -> Vec<Vertex> {
+        if !self.following {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let neck = [x, y + 0.38, z];
+        let mut out = Vec::new();
+        let rope = [0.72, 0.58, 0.28];
+        let segs = 8;
+        for i in 0..=segs {
+            let t = i as f32 / segs as f32;
+            let sag = 0.08 * (4.0 * t * (1.0 - t));
+            let p = [
+                neck[0] + (hand[0] - neck[0]) * t,
+                neck[1] + (hand[1] - neck[1]) * t - sag,
+                neck[2] + (hand[2] - neck[2]) * t,
+            ];
+            let half = if i == 0 || i == segs { 0.045 } else { 0.028 };
+            push_box(&mut out, p, [half, half, half], rope);
+        }
+        out
+    }
 }
 
 fn axolotl_figure() -> &'static crate::blockbench::Figure {
@@ -4953,6 +4977,30 @@ mod tests {
         assert!(one.origin()[2] > 32.0);
         assert!(one.origin()[2] <= home[2]);
         assert!(!one.follow());
+    }
+
+    #[test]
+    fn a_following_axolotl_draws_a_leash_rope() {
+        let mut axolotl = Axolotl::new();
+        let hand = [
+            axolotl.origin()[0] + 2.0,
+            axolotl.origin()[1] + 1.2,
+            axolotl.origin()[2] + 1.0,
+        ];
+        assert!(axolotl.leash_rope(hand).is_empty());
+        assert!(axolotl.follow());
+        let rope = axolotl.leash_rope(hand);
+        assert!(rope.len() > 24, "leash beads should draw, got {}", rope.len());
+        assert!(
+            rope.iter()
+                .any(|v| (v.color[0] - 0.72).abs() < 0.02 && (v.color[1] - 0.58).abs() < 0.02),
+            "lead-colored rope"
+        );
+        let mid_y: f32 = rope.iter().map(|v| v.position[1]).sum::<f32>() / rope.len() as f32;
+        assert!(
+            mid_y < hand[1] + 0.05,
+            "rope should sag below the hand line, mid {mid_y}"
+        );
     }
 
     #[test]
