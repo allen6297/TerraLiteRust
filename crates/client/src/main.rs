@@ -31,6 +31,7 @@ mod shape_pick;
 mod sheep;
 mod texture;
 mod trace;
+mod xp;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -202,6 +203,8 @@ struct Args {
     shot_peer_swing: Option<std::path::PathBuf>,
     /// Survival death overlay (You Died), then quit.
     shot_death_respawn: Option<std::path::PathBuf>,
+    /// XP orbs + bar HUD, then quit.
+    shot_xp_orbs: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -450,6 +453,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_peer_held_item: args.shot_peer_held_item,
         shot_peer_swing: args.shot_peer_swing,
         shot_death_respawn: args.shot_death_respawn,
+        shot_xp_orbs: args.shot_xp_orbs,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -576,6 +580,7 @@ struct App {
     shot_peer_held_item: Option<std::path::PathBuf>,
     shot_peer_swing: Option<std::path::PathBuf>,
     shot_death_respawn: Option<std::path::PathBuf>,
+    shot_xp_orbs: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -819,6 +824,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_death_respawn.take() {
                     state.arm_death_respawn_shot(path);
+                }
+                if let Some(path) = self.shot_xp_orbs.take() {
+                    state.arm_xp_orbs_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1175,6 +1183,7 @@ where
         shot_peer_held_item: None,
         shot_peer_swing: None,
         shot_death_respawn: None,
+        shot_xp_orbs: None,
         name: None,
         host: false,
         join: false,
@@ -1533,6 +1542,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-death-respawn".to_string())?;
                 parsed.shot_death_respawn = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-xp-orbs" | "--shot-xp" | "--shot-xp-bar" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-xp-orbs".to_string())?;
+                parsed.shot_xp_orbs = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2017,6 +2032,17 @@ mod tests {
         assert_eq!(
             args.shot_death_respawn.as_deref(),
             Some(std::path::Path::new("death-respawn.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-xp-orbs".into(),
+            "xp-orbs-bar.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_xp_orbs.as_deref(),
+            Some(std::path::Path::new("xp-orbs-bar.png"))
         );
     }
 }

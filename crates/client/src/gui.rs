@@ -5493,6 +5493,52 @@ pub fn feel_quads(
     quads
 }
 
+/// Thin XP bar under the status plates / above the hotbar, with a level digit.
+pub fn xp_bar_quads(width: f32, height: f32, level: i32, fraction: f32) -> Vec<Quad> {
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let (width, height) = gui_space(width, height);
+    let fraction = fraction.clamp(0.0, 1.0);
+    let bar_w = 180.0;
+    let bar_h = 5.0;
+    let left = (width - bar_w) * 0.5;
+    // Sit just under the left status plates, clear of the hotbar lip.
+    let bottom = hotbar::bar_chrome_top() + 3.0;
+    let well = [0.04, 0.08, 0.04];
+    let fill = [0.42, 0.88, 0.32];
+    let edge = [0.18, 0.28, 0.16];
+    let mut quads = vec![
+        pixel_quad(width, height, left - 1.0, bottom - 1.0, left + bar_w + 1.0, bottom + bar_h + 1.0, edge),
+        pixel_quad(width, height, left, bottom, left + bar_w, bottom + bar_h, well),
+    ];
+    let filled = (bar_w * fraction).max(if fraction > 0.0 { 2.0 } else { 0.0 });
+    if filled > 0.0 {
+        quads.push(pixel_quad(
+            width,
+            height,
+            left,
+            bottom,
+            left + filled,
+            bottom + bar_h,
+            fill,
+        ));
+    }
+    let label = format!("{level}");
+    let label_w = measure(&label, 1.0);
+    draw_text(
+        &mut quads,
+        width,
+        height,
+        left - label_w - 8.0,
+        bottom - 2.0,
+        &label,
+        DETAIL,
+        1.0,
+    );
+    quads
+}
+
 /// A dark veil, the words "You died", and a Respawn button. The button's hit is `700`.
 pub fn death_quads(width: f32, height: f32) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
@@ -8764,6 +8810,14 @@ mod tests {
         let dead = death_quads(1280.0, 720.0);
         assert!(dead.iter().any(|quad| quad.hit == 700));
         assert!(dead.iter().filter(|quad| quad.color == INK).count() > 8);
+        let xp = xp_bar_quads(1280.0, 720.0, 3, 0.55);
+        assert!(!xp.is_empty());
+        assert!(xp.iter().any(|quad| {
+            (quad.color[0] - 0.42).abs() < 0.02
+                && (quad.color[1] - 0.88).abs() < 0.02
+                && (quad.color[2] - 0.32).abs() < 0.02
+        }));
+        assert!(xp_bar_quads(0.0, 720.0, 1, 0.5).is_empty());
     }
 
     #[test]

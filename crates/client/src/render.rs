@@ -1456,6 +1456,8 @@ pub struct State {
     drops: crate::drops::Drops,
     drop_buf: Option<wgpu::Buffer>,
     drop_count: u32,
+    /// Collectible XP orbs + level progress (survival HUD bar).
+    xp: crate::xp::Xp,
     sheep: crate::sheep::Sheep,
     sheep_buf: Option<wgpu::Buffer>,
     sheep_count: u32,
@@ -2528,6 +2530,7 @@ impl State {
             drops: crate::drops::Drops::new(),
             drop_buf: None,
             drop_count: 0,
+            xp: crate::xp::Xp::new(),
             sheep: crate::sheep::Sheep::new(),
             sheep_buf: None,
             sheep_count: 0,
@@ -2902,6 +2905,86 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    /// XP orbs mid-home + filled XP bar, then quit with a PNG.
+    pub fn arm_xp_orbs_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        // Overlook toward open pad air — lime orbs sit mid-frame above the ground.
+        let eye = glam::Vec3::new(8.5, 1.6 + crate::body::EYE_HEIGHT, 14.2);
+        let focus = glam::Vec3::new(8.5, 2.1, 10.4);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        // Seed level + mid-progress bar, pin orbs mid-home in the look cone.
+        self.xp = crate::xp::Xp::new();
+        self.xp.level = 3;
+        self.xp.gain(4);
+        // Spread across the view so the still reads as a collectible cluster.
+        let pins = [
+            [8.5, 2.35, 11.4],
+            [8.95, 2.55, 11.1],
+            [8.05, 2.45, 11.2],
+            [8.7, 2.15, 10.7],
+            [8.25, 2.7, 10.9],
+        ];
+        for at in pins {
+            self.xp.pin(at, crate::xp::MOB_ORB_XP);
+            self.drops.lime_spark(at);
+        }
+        self.rebuild_drops();
         let _ = self.window.focus_window();
     }
 
@@ -3511,7 +3594,8 @@ impl State {
 
     fn rebuild_drops(&mut self) {
         let eye = self.camera.eye.to_array();
-        let vertices = self.drops.vertices_toward(eye);
+        let mut vertices = self.drops.vertices_toward(eye);
+        vertices.extend(self.xp.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
             self.drop_count = 0;
@@ -3535,6 +3619,15 @@ impl State {
                 }),
         );
         self.drop_count = count;
+    }
+
+    fn grant_xp_at(&mut self, origin: [f32; 3], mob: bool) {
+        if mob {
+            self.xp.spawn_mob(origin);
+        } else {
+            self.xp.spawn_mine(origin);
+        }
+        self.rebuild_drops();
     }
 
     fn rebuild_sheep(&mut self) {
@@ -3984,6 +4077,7 @@ impl State {
             self.aimed_guest(eye, forward)
         };
         let amount = body::mace_hearts(falling, smash);
+        let mut xp_at: Option<[f32; 3]> = None;
         let dropped_zombie = zombie_aimed && {
             let (min, max) = self.zombie.bounds();
             let origin = [
@@ -3991,7 +4085,11 @@ impl State {
                 min[1],
                 (min[2] + max[2]) * 0.5,
             ];
-            self.hurt_mob("zombie", amount, origin, |s, n| s.zombie.hurt(n))
+            let dropped = self.hurt_mob("zombie", amount, origin, |s, n| s.zombie.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
         };
         let dropped_night = if let Some(index) = night_index {
             let origin = self
@@ -4000,21 +4098,30 @@ impl State {
                 .nth(index)
                 .map(crate::mobs::Zombie::origin)
                 .unwrap_or([0.0; 3]);
-            self.hurt_mob("zombie", amount, origin, |s, n| {
+            let dropped = self.hurt_mob("zombie", amount, origin, |s, n| {
                 s.night.get_mut(index).is_some_and(|z| z.hurt(n))
-            })
+            });
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
         } else {
             false
         };
         let dropped_breeze = breeze_aimed && {
             let origin = self.breeze.origin();
-            self.hurt_mob("breeze", amount, origin, |s, n| s.breeze.hurt(n))
+            let dropped = self.hurt_mob("breeze", amount, origin, |s, n| s.breeze.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
         };
         let dropped_guest = if let Some(index) = guest_index {
             let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
             let dropped = self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
             if dropped {
+                xp_at = Some(origin);
                 self.guests.remove(index);
             }
             self.rebuild_guests();
@@ -4041,6 +4148,9 @@ impl State {
         let source = self.camera.eye.to_array();
         self.play_world(crate::audio::Sound::Mace, source);
         self.gui.push_chat(word);
+        if let Some(origin) = xp_at {
+            self.grant_xp_at(origin, true);
+        }
         if dropped_zombie && !self.wave_breeze {
             if let Some(at) = self.trial_at {
                 let prize = self.pay_trial(at);
@@ -8192,6 +8302,9 @@ impl State {
             self.play_world(crate::audio::break_for(before.id), origin);
             self.break_kick = 1.0;
             self.drops.puff(origin, crate::drops::chip_color(before.id));
+            if crate::xp::Xp::is_ore(before.id) {
+                self.xp.spawn_mine(origin);
+            }
             self.rebuild_drops();
             let remains = shape_of(cell.block).is_full_cube();
             let mut loot = rebuild_world::break_loot_of(before.id);
@@ -20952,7 +21065,18 @@ impl State {
         self.tell_furnace_heat();
         self.tell_shape_pot();
         self.note_pose();
-        if self.drops.tick_motes(dt) {
+        let mut drops_dirty = self.drops.tick_motes(dt);
+        // Still shots freeze orb motion so the armed pose stays readable.
+        if self.cook_shot_path.is_none() {
+            let (xp_dirty, leveled) = self.xp.tick_collect(dt, self.camera.eye.to_array());
+            if xp_dirty {
+                drops_dirty = true;
+            }
+            if leveled > 0 {
+                self.gui.push_chat(&format!("level {}", self.xp.level));
+            }
+        }
+        if drops_dirty {
             self.rebuild_drops();
         }
         let generated = self.service_terrain();
@@ -22818,6 +22942,14 @@ impl State {
                 screen_w,
                 screen_h,
                 self.camera.eye,
+            ));
+        }
+        if self.playing && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::xp_bar_quads(
+                screen_w,
+                screen_h,
+                self.xp.level,
+                self.xp.fraction(),
             ));
         }
         if self.crouch > 0.02 && !self.menu.is_open() && !self.dead {

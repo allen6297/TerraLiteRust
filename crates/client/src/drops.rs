@@ -184,6 +184,21 @@ impl Drops {
         }
     }
 
+    /// Bright lime hover mote — XP orb stand-in for stills / soft sparks.
+    pub fn lime_spark(&mut self, origin: [f32; 3]) {
+        self.motes.push(Mote {
+            center: origin,
+            velocity: [0.04, 0.18, -0.05],
+            color: [0.62, 1.0, 0.28],
+            block: [0.85, 1.0, 0.4],
+            life: 10.0,
+            rise: false,
+            hover: true,
+            tumble: false,
+            half: 0.11,
+        });
+    }
+
     /// Soft warm motes that drift in night meadows / forest clearings (and shores).
     /// Capped so the air stays quiet.
     pub fn firefly(&mut self, origin: [f32; 3]) {
