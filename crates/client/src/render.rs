@@ -3746,7 +3746,7 @@ impl State {
             TAG_PLACE,
             None,
         );
-        if id == "fence_gate" {
+        if hinge(id) {
             let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.55, at[2] as f32 + 0.5];
             self.play_world(crate::audio::Sound::Creak, source);
             if !self.found_creak {
@@ -10606,6 +10606,141 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(9 + dx * 8, 24 + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Closed wooden door creak plate, then quit with a PNG.
+    pub fn arm_door_creak_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.axolotl.place_at([-20.0, 3.0, -20.0]);
+        self.bee.place_at([-20.0, 4.0, -20.0]);
+        self.frog.place_at([-20.0, 4.0, -20.0]);
+        self.cat.place_at([-20.0, 1.0, -20.0]);
+        self.wolf.place_at([-20.0, 1.0, -20.0]);
+        self.parrot.place_at([-20.0, 2.0, -20.0]);
+        self.rebuild_axolotl();
+        self.rebuild_bee();
+        self.rebuild_frog();
+        self.rebuild_cat();
+        self.rebuild_wolf();
+        self.rebuild_parrot();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let dx = 11;
+        let dy = 2;
+        let dz = 17;
+        let mut changes = Vec::new();
+        for z in (dz - 1)..=(dz + 1) {
+            for x in (dx - 1)..=(dx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=5 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Short oak frame with a closed door leaf.
+        changes.push(CellChange {
+            x: dx - 1,
+            y: dy,
+            z: dz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: dx - 1,
+            y: dy + 1,
+            z: dz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: dx + 1,
+            y: dy,
+            z: dz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: dx + 1,
+            y: dy + 1,
+            z: dz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: dx,
+            y: dy + 2,
+            z: dz,
+            block: Block::new("oak_log", 0),
+        });
+        changes.push(CellChange {
+            x: dx,
+            y: dy,
+            z: dz,
+            block: Block::new("door", 0),
+        });
+        changes.push(CellChange {
+            x: dx,
+            y: dy + 1,
+            z: dz,
+            block: Block::new("door", 8),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(dx as f32 + 0.5, dy as f32 + 1.0, dz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            dx as f32 + 0.5,
+            dy as f32 + 0.25 + body::EYE_HEIGHT,
+            dz as f32 - 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let source = [dx as f32 + 0.5, dy as f32 + 0.9, dz as f32 + 0.5];
+        self.drops = crate::drops::Drops::new();
+        self.drops.puff(source, [0.62, 0.48, 0.28]);
+        self.rebuild_drops();
+        self.found_creak = true;
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.push_chat("creak");
+        self.play_world(crate::audio::Sound::Creak, source);
+        self.set_capture(false);
+        for ox in -1..=1 {
+            for oz in -1..=1 {
+                self.chunk_bake.touch(dx + ox * 8, dz + oz * 8);
             }
         }
         let _ = self.window.focus_window();
