@@ -1470,6 +1470,8 @@ pub struct State {
     xp: crate::xp::Xp,
     /// In-flight bow arrows.
     arrows: crate::arrows::Arrows,
+    /// In-flight splash potion bottles.
+    splash: crate::splash::Splash,
     sheep: crate::sheep::Sheep,
     sheep_buf: Option<wgpu::Buffer>,
     sheep_count: u32,
@@ -2549,6 +2551,7 @@ impl State {
             drop_count: 0,
             xp: crate::xp::Xp::new(),
             arrows: crate::arrows::Arrows::new(),
+            splash: crate::splash::Splash::new(),
             sheep: crate::sheep::Sheep::new(),
             sheep_buf: None,
             sheep_count: 0,
@@ -3012,6 +3015,101 @@ impl State {
         // Arrow mid-flight between the eye and the zombie.
         self.arrows.pin([8.5, 2.35, 11.2], [0.0, 0.2, -12.0]);
         self.player.tick(0.0, 0.0, -1.0, false, false, true);
+        self.rebuild_player();
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
+    /// Splash potion mid-arc toward a zombie with pink burst motes, then quit.
+    pub fn arm_splash_potion_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([8.5, 1.0, 9.2]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("splash_healing_potion");
+        self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        self.third_person = false;
+        let eye = glam::Vec3::new(8.5, 1.55 + crate::body::EYE_HEIGHT, 13.2);
+        let focus = glam::Vec3::new(8.5, 1.4, 9.4);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.splash = crate::splash::Splash::new();
+        self.bow_drawing = false;
+        self.bow_charge = 0.0;
+        self.bow_show = 0.0;
+        self.shield_raised = false;
+        self.shield_show = 0.0;
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        // Bottle mid-flight + pink burst motes near the zombie.
+        self.splash.pin(
+            [8.5, 2.55, 11.0],
+            [0.0, -1.5, -8.0],
+            crate::splash::Effect::Heal,
+        );
+        self.drops
+            .splash_potion([8.5, 1.35, 9.6], crate::splash::Effect::Heal.color());
+        self.player.tick(0.0, 0.0, -1.0, false, false, false);
         self.rebuild_player();
         self.rebuild_drops();
         let _ = self.window.focus_window();
@@ -3871,6 +3969,7 @@ impl State {
         let mut vertices = self.drops.vertices_toward(eye);
         vertices.extend(self.xp.vertices());
         vertices.extend(self.arrows.vertices());
+        vertices.extend(self.splash.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
             self.drop_count = 0;
@@ -6449,6 +6548,138 @@ impl State {
         true
     }
 
+    /// Throw a splash potion as an arcing bottle. True when the selected slot is one.
+    fn try_splash(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        let Some(effect) = crate::splash::Effect::from_id(id) else {
+            return false;
+        };
+        if !Pack::builtin().is_splash(id) {
+            return false;
+        }
+        let eye = self.camera.eye.to_array();
+        let forward = self.camera.forward().to_array();
+        self.hotbar.consume_selected();
+        self.hotbar_dirty = true;
+        self.splash.throw(eye, forward, effect);
+        self.play_world(crate::audio::Sound::Gust, eye);
+        self.gui.push_chat("throw");
+        self.hit_kick = self.hit_kick.max(0.18);
+        self.rebuild_drops();
+        true
+    }
+
+    /// Apply AOE heal/harm for splash bursts that just landed.
+    fn apply_splash_bursts(&mut self, bursts: &[crate::splash::Burst]) {
+        for burst in bursts {
+            self.drops.splash_potion(burst.center, burst.effect.color());
+            self.play_world(crate::audio::Sound::Bubble, burst.center);
+            match burst.effect {
+                crate::splash::Effect::Heal => {
+                    let feet = [
+                        self.camera.eye.x,
+                        self.camera.eye.y - body::EYE_HEIGHT,
+                        self.camera.eye.z,
+                    ];
+                    if crate::splash::in_radius(burst.center, feet)
+                        || crate::splash::in_radius(burst.center, self.camera.eye.to_array())
+                    {
+                        let before = self.hearts;
+                        self.hearts = body::potion_hearts(self.hearts);
+                        if self.hearts > before {
+                            self.gui.push_chat("heal");
+                        } else {
+                            self.gui.push_chat("splash");
+                        }
+                    } else {
+                        self.gui.push_chat("splash");
+                    }
+                }
+                crate::splash::Effect::Harm => {
+                    let amount = crate::splash::HARM_HEARTS;
+                    let mut hit = false;
+                    let (zmin, zmax) = self.zombie.bounds();
+                    let z_origin = [
+                        (zmin[0] + zmax[0]) * 0.5,
+                        zmin[1],
+                        (zmin[2] + zmax[2]) * 0.5,
+                    ];
+                    if crate::splash::in_radius(burst.center, z_origin) {
+                        let dropped =
+                            self.hurt_mob("zombie", amount, z_origin, |s, n| s.zombie.hurt(n));
+                        if dropped {
+                            self.grant_xp_at(z_origin, true);
+                        }
+                        self.rebuild_zombie();
+                        hit = true;
+                    }
+                    let night_hits: Vec<(usize, [f32; 3])> = self
+                        .night
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, z)| {
+                            let o = z.origin();
+                            crate::splash::in_radius(burst.center, o).then_some((index, o))
+                        })
+                        .collect();
+                    for (index, origin) in night_hits.into_iter().rev() {
+                        let dropped = self.hurt_mob("zombie", amount, origin, |s, n| {
+                            s.night.get_mut(index).is_some_and(|z| z.hurt(n))
+                        });
+                        if dropped {
+                            self.grant_xp_at(origin, true);
+                        }
+                        hit = true;
+                    }
+                    let breeze = self.breeze.origin();
+                    if crate::splash::in_radius(burst.center, breeze) {
+                        let dropped =
+                            self.hurt_mob("breeze", amount, breeze, |s, n| s.breeze.hurt(n));
+                        if dropped {
+                            self.grant_xp_at(breeze, true);
+                        }
+                        self.rebuild_breeze();
+                        hit = true;
+                    }
+                    let guest_hits: Vec<(usize, String, [f32; 3])> = self
+                        .guests
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, guest)| {
+                            let o = guest.origin();
+                            crate::splash::in_radius(burst.center, o)
+                                .then(|| (index, guest.id().to_string(), o))
+                        })
+                        .collect();
+                    for (index, id, origin) in guest_hits.into_iter().rev() {
+                        let dropped =
+                            self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
+                        if dropped {
+                            self.grant_xp_at(origin, true);
+                            self.guests.remove(index);
+                            self.rebuild_guests();
+                        }
+                        hit = true;
+                    }
+                    let feet = [
+                        self.camera.eye.x,
+                        self.camera.eye.y - body::EYE_HEIGHT,
+                        self.camera.eye.z,
+                    ];
+                    if crate::splash::in_radius(burst.center, feet)
+                        || crate::splash::in_radius(burst.center, self.camera.eye.to_array())
+                    {
+                        self.apply_damage(amount);
+                        hit = true;
+                    }
+                    self.gui.push_chat(if hit { "hurt" } else { "splash" });
+                }
+            }
+        }
+    }
+
     /// An arrow aimed at a target scores a hit. True when the selected slot is an arrow.
     fn try_arrow(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -8570,6 +8801,7 @@ impl State {
             || self.try_key()
             || self.try_wind()
             || self.try_pearl()
+            || self.try_splash()
             || self.try_eye()
             || self.try_arrow()
             || self.try_fish()
@@ -21546,6 +21778,14 @@ impl State {
                 drops_dirty = true;
             }
             if self.try_arrow_mob_hits() {
+                drops_dirty = true;
+            }
+            let (splash_dirty, bursts) = self.splash.tick(dt, &self.world);
+            if splash_dirty {
+                drops_dirty = true;
+            }
+            if !bursts.is_empty() {
+                self.apply_splash_bursts(&bursts);
                 drops_dirty = true;
             }
         }

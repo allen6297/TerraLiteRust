@@ -593,9 +593,12 @@ impl Hotbar {
 
     /// The ingredient Enter would brew, when water is in the bar and the potion fits.
     ///
-    /// `nether_wart_block` or `flower`. Missing water, a missing ingredient, or a
-    /// full bar returns `None`.
+    /// Prefer splash conversion (`healing_potion` + `gravel`) when both are present.
+    /// Otherwise `nether_wart_block` or `flower` with water. Missing pieces return `None`.
     pub fn brew_target(&self) -> Option<&'static str> {
+        if self.can_brew_splash() {
+            return Some("gravel");
+        }
         let has_water = self
             .slots
             .iter()
@@ -617,12 +620,56 @@ impl Hotbar {
         Some(id)
     }
 
-    /// Brew one healing potion. A single water bucket becomes an empty bucket.
+    fn can_brew_splash(&self) -> bool {
+        let has_heal = self
+            .slots
+            .iter()
+            .any(|slot| slot.is_some_and(|item| item.id == "healing_potion" && item.count > 0));
+        let has_gravel = self
+            .slots
+            .iter()
+            .any(|slot| slot.is_some_and(|item| item.id == "gravel" && item.count > 0));
+        if !has_heal || !has_gravel {
+            return false;
+        }
+        let frees = self.slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|item| item.id == "healing_potion" && item.count == 1)
+        });
+        self.room_for("splash_healing_potion") || frees
+    }
+
+    /// Brew one healing potion, or convert a healing potion + gravel into a splash.
     ///
-    /// Nether wart or a flower is the other ingredient. `"brewed"` spends both.
-    /// `"need water"` and `"need nether wart"` name the missing piece. `"no room"`
-    /// means the bar cannot hold the potion.
+    /// Nether wart or a flower with water makes `healing_potion`. Gravel with an
+    /// existing healing potion makes `splash_healing_potion`. `"brewed"` spends
+    /// both. `"need water"` / `"need nether wart"` name the drink mix. `"no room"`
+    /// means the bar cannot hold the result.
     pub fn brew_potion(&mut self) -> &'static str {
+        if self.can_brew_splash() {
+            let Some(heal) = self.slots.iter().position(|slot| {
+                slot.is_some_and(|item| item.id == "healing_potion" && item.count > 0)
+            }) else {
+                return "need nether wart";
+            };
+            let Some(gravel) = self
+                .slots
+                .iter()
+                .position(|slot| slot.is_some_and(|item| item.id == "gravel" && item.count > 0))
+            else {
+                return "need nether wart";
+            };
+            let frees = self.item(heal).is_some_and(|item| item.count == 1);
+            if !self.room_for("splash_healing_potion") && !frees {
+                return "no room";
+            }
+            self.consume_at(heal);
+            self.consume_at(gravel);
+            if !self.collect("splash_healing_potion") {
+                return "no room";
+            }
+            return "brewed";
+        }
         let Some(water) = self
             .slots
             .iter()
@@ -2245,6 +2292,18 @@ mod tests {
         assert_eq!(flower.brew_potion(), "brewed");
         assert_eq!(flower.slot(1), Some("bucket"));
         assert_eq!(flower.slot(2), Some("healing_potion"));
+    }
+
+    #[test]
+    fn a_brewing_stand_turns_healing_and_gravel_into_a_splash() {
+        let mut bar = Hotbar::new();
+        assert!(bar.collect("healing_potion"));
+        assert!(bar.collect("gravel"));
+        assert_eq!(bar.brew_target(), Some("gravel"));
+        assert_eq!(bar.brew_potion(), "brewed");
+        assert_eq!(bar.slot(1), Some("splash_healing_potion"));
+        assert_eq!(bar.count(1), 1);
+        assert_ne!(bar.slot(2), Some("gravel"));
     }
 
     #[test]

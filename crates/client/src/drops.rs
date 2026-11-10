@@ -375,6 +375,39 @@ impl Drops {
         }
     }
 
+    /// Colored splash-potion burst motes at an impact point.
+    pub fn splash_potion(&mut self, origin: [f32; 3], color: [f32; 3]) {
+        const DIRS: [[f32; 3]; 10] = [
+            [0.9, 1.8, 0.2],
+            [-1.0, 1.5, 0.35],
+            [0.35, 2.1, -0.85],
+            [-0.4, 1.2, -1.0],
+            [1.1, 1.6, 0.9],
+            [-0.95, 1.9, 0.7],
+            [0.15, 2.4, 0.1],
+            [-0.55, 1.35, -0.3],
+            [0.7, 0.6, -0.55],
+            [-0.65, 0.55, 0.8],
+        ];
+        for dir in DIRS {
+            self.motes.push(Mote {
+                center: [
+                    origin[0],
+                    origin[1] + 0.15,
+                    origin[2],
+                ],
+                velocity: dir,
+                color,
+                block: color,
+                life: 0.85,
+                rise: false,
+                hover: false,
+                tumble: true,
+                half: 0.055,
+            });
+        }
+    }
+
     /// Soft cyan bubbles rising from a brewing stand.
     pub fn brew_bubbles(&mut self, origin: [f32; 3]) {
         const BUBBLES: [([f32; 3], [f32; 3], f32); 6] = [

@@ -1,5 +1,6 @@
 mod arrows;
 mod audio;
+mod splash;
 mod blockbench;
 mod boat;
 mod body;
@@ -212,6 +213,8 @@ struct Args {
     shot_shield_block: Option<std::path::PathBuf>,
     /// Bow draw + flying arrow, then quit.
     shot_bow_shoot: Option<std::path::PathBuf>,
+    /// Splash potion mid-arc + burst motes, then quit.
+    shot_splash_potion: Option<std::path::PathBuf>,
     /// Host/Join nameplate label sent with pose.
     name: Option<String>,
     /// Start a private localhost listen, then join as host.
@@ -464,6 +467,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_loot_magnet: args.shot_loot_magnet,
         shot_shield_block: args.shot_shield_block,
         shot_bow_shoot: args.shot_bow_shoot,
+        shot_splash_potion: args.shot_splash_potion,
         name: args.name,
         host: args.host,
         join: args.join,
@@ -594,6 +598,7 @@ struct App {
     shot_loot_magnet: Option<std::path::PathBuf>,
     shot_shield_block: Option<std::path::PathBuf>,
     shot_bow_shoot: Option<std::path::PathBuf>,
+    shot_splash_potion: Option<std::path::PathBuf>,
     name: Option<String>,
     host: bool,
     join: bool,
@@ -849,6 +854,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_bow_shoot.take() {
                     state.arm_bow_shoot_shot(path);
+                }
+                if let Some(path) = self.shot_splash_potion.take() {
+                    state.arm_splash_potion_shot(path);
                 }
                 if let Some(host) = self.early_host.take() {
                     state.attach_host(host);
@@ -1209,6 +1217,7 @@ where
         shot_loot_magnet: None,
         shot_shield_block: None,
         shot_bow_shoot: None,
+        shot_splash_potion: None,
         name: None,
         host: false,
         join: false,
@@ -1591,6 +1600,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-bow-shoot".to_string())?;
                 parsed.shot_bow_shoot = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-splash-potion" | "--shot-splash" | "--shot-potion" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-splash-potion".to_string())?;
+                parsed.shot_splash_potion = Some(std::path::PathBuf::from(value));
             }
             "--name" | "--player-name" => {
                 let value = iter
@@ -2119,6 +2134,17 @@ mod tests {
         assert_eq!(
             args.shot_bow_shoot.as_deref(),
             Some(std::path::Path::new("bow-draw-shoot.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-splash-potion".into(),
+            "splash-potion.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_splash_potion.as_deref(),
+            Some(std::path::Path::new("splash-potion.png"))
         );
     }
 }

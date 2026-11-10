@@ -2041,7 +2041,7 @@ impl Gui {
             return false;
         }
         self.brew_at = Some(at);
-        self.brew_note = "enter spends water and nether wart".to_string();
+        self.brew_note = "enter: water+wart, or healing+gravel splash".to_string();
         self.brew_open = true;
         true
     }
@@ -6497,6 +6497,11 @@ fn catalog() -> Vec<String> {
             ids.push(id);
         }
     }
+    for id in pack.splash_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
     for id in pack.rod_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
@@ -6678,6 +6683,8 @@ fn tab_of(id: &str) -> &'static str {
             | "chorus_flower"
             | "chorus_fruit"
             | "healing_potion"
+            | "splash_healing_potion"
+            | "splash_harming_potion"
             | "ender_pearl"
             | "eye_of_ender"
             | "chorus_plant"

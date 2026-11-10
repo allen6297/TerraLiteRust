@@ -499,6 +499,13 @@ struct BowDef {
     icon: String,
 }
 
+struct SplashDef {
+    id: String,
+    icon: String,
+    /// `"heal"` restores the thrower; `"harm"` hurts nearby mobs.
+    effect: String,
+}
+
 struct PearlDef {
     id: String,
     icon: String,
@@ -598,6 +605,8 @@ pub struct Pack {
     arrows: Vec<ArrowDef>,
     /// Bows from the data pack. Hold use to draw, release to fire an arrow.
     bows: Vec<BowDef>,
+    /// Splash potions from the data pack. Throw for an AOE heal or harm burst.
+    splashes: Vec<SplashDef>,
     /// Crafting lines from `data/terralite/recipes`. The fletching table reads arrow.
     pack_recipes: Vec<PackRecipe>,
     /// Ender pearls from the data pack. Throwing one teleports along the look.
@@ -669,6 +678,7 @@ impl Pack {
             fertilizers: Vec::new(),
             arrows: Vec::new(),
             bows: Vec::new(),
+            splashes: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
             winds: Vec::new(),
@@ -2446,6 +2456,12 @@ impl Pack {
                     .map(|bow| bow.icon.as_str())
             })
             .or_else(|| {
+                self.splashes
+                    .iter()
+                    .find(|splash| splash.id == id)
+                    .map(|splash| splash.icon.as_str())
+            })
+            .or_else(|| {
                 self.pearls
                     .iter()
                     .find(|pearl| pearl.id == id)
@@ -2621,6 +2637,24 @@ impl Pack {
     /// Bow ids, in data-pack order.
     pub fn bow_ids(&self) -> Vec<String> {
         self.bows.iter().map(|bow| bow.id.clone()).collect()
+    }
+
+    /// True when `id` is a throwable splash potion.
+    pub fn is_splash(&self, id: &str) -> bool {
+        self.splashes.iter().any(|splash| splash.id == id)
+    }
+
+    /// Splash potion ids, in data-pack order.
+    pub fn splash_ids(&self) -> Vec<String> {
+        self.splashes.iter().map(|splash| splash.id.clone()).collect()
+    }
+
+    /// Splash effect tag (`heal` / `harm`) when `id` is a splash potion.
+    pub fn splash_effect(&self, id: &str) -> Option<&str> {
+        self.splashes
+            .iter()
+            .find(|splash| splash.id == id)
+            .map(|splash| splash.effect.as_str())
     }
 
     /// True when `id` is a thrown ender pearl.
@@ -3032,6 +3066,7 @@ impl Pack {
         let mut fertilizers = Vec::new();
         let mut arrows = Vec::new();
         let mut bows = Vec::new();
+        let mut splashes = Vec::new();
         let mut pearls = Vec::new();
         let mut winds = Vec::new();
         let mut rods = Vec::new();
@@ -3076,6 +3111,7 @@ impl Pack {
                 || fertilizers.iter().any(|meal: &FertilizerDef| meal.id == id)
                 || arrows.iter().any(|arrow: &ArrowDef| arrow.id == id)
                 || bows.iter().any(|bow: &BowDef| bow.id == id)
+                || splashes.iter().any(|splash: &SplashDef| splash.id == id)
                 || pearls.iter().any(|pearl: &PearlDef| pearl.id == id)
                 || winds.iter().any(|wind: &WindDef| wind.id == id)
                 || rods.iter().any(|rod: &RodDef| rod.id == id)
@@ -3116,6 +3152,7 @@ impl Pack {
                 PackItem::Fertilizer(meal) => fertilizers.push(meal),
                 PackItem::Arrow(arrow) => arrows.push(arrow),
                 PackItem::Bow(bow) => bows.push(bow),
+                PackItem::Splash(splash) => splashes.push(splash),
                 PackItem::Pearl(pearl) => pearls.push(pearl),
                 PackItem::Wind(wind) => winds.push(wind),
                 PackItem::Rod(rod) => rods.push(rod),
@@ -3151,6 +3188,7 @@ impl Pack {
         self.fertilizers = fertilizers;
         self.arrows = arrows;
         self.bows = bows;
+        self.splashes = splashes;
         self.pearls = pearls;
         self.winds = winds;
         self.rods = rods;
@@ -3189,6 +3227,7 @@ enum PackItem {
     Fertilizer(FertilizerDef),
     Arrow(ArrowDef),
     Bow(BowDef),
+    Splash(SplashDef),
     Pearl(PearlDef),
     Wind(WindDef),
     Rod(RodDef),
@@ -3874,6 +3913,28 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("splash") {
+        require_only(obj, &["splash", "icon"], &format!("{id}.json"))?;
+        let effect = obj
+            .get("splash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json splash needs heal or harm"))?;
+        if effect != "heal" && effect != "harm" {
+            return Err(format!("{id}.json splash {effect} is unknown"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Splash(SplashDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+            effect: effect.to_string(),
+        }));
+    }
     parse_tool(id, obj).map(PackItem::Tool)
 }
 
@@ -3978,6 +4039,7 @@ impl Pack {
             fertilizers: Vec::new(),
             arrows: Vec::new(),
             bows: Vec::new(),
+            splashes: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
             winds: Vec::new(),
@@ -7675,6 +7737,18 @@ mod tests {
         assert!(!pack.is_bow("arrow"));
         assert_eq!(pack.tool_icon("bow"), Some("stick"));
         assert!(pack.bow_ids().contains(&"bow".to_string()));
+        assert!(pack.is_splash("splash_healing_potion"));
+        assert!(pack.is_splash("splash_harming_potion"));
+        assert!(!pack.is_splash("healing_potion"));
+        assert_eq!(pack.splash_effect("splash_healing_potion"), Some("heal"));
+        assert_eq!(pack.splash_effect("splash_harming_potion"), Some("harm"));
+        assert_eq!(
+            pack.tool_icon("splash_healing_potion"),
+            Some("nether_wart_block")
+        );
+        assert!(pack
+            .splash_ids()
+            .contains(&"splash_healing_potion".to_string()));
         assert_eq!(
             pack.pack_recipe("arrow"),
             Some(
