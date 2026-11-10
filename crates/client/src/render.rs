@@ -56,8 +56,10 @@ struct Uniforms {
     trace_box: vec4<f32>,
     // rgb sky zenith, w = water atlas textured id (slot+1), or 0 when missing
     sky_tint: vec4<f32>,
-    // x wind offset, y day strength (0 night), z open-sun dim (≈0.76), w unused
+    // x wind offset, y day strength (0 night), z open-sun dim (≈0.76), w plant breeze
     cloud: vec4<f32>,
+    // textured ids (slot+1) for wheat / cane / grass blades / vine — 0 skips
+    plant_ids: vec4<f32>,
 };
 
 @group(0) @binding(5)
@@ -109,15 +111,38 @@ struct VsOut {
 
 override CASCADE: i32 = 0;
 
+// Gentle tip sway for cross plants / grass blades. Base stays planted.
+// Tip weight uses UV.y (0 base → 1 tip) so integer cell tops still lean.
+fn plant_sway(pos: vec3<f32>, textured: f32, nrm: vec3<f32>, uv_y: f32) -> vec3<f32> {
+    let ids = u.plant_ids;
+    let match_id = abs(textured - ids.x) < 0.25
+        || abs(textured - ids.y) < 0.25
+        || abs(textured - ids.z) < 0.25
+        || abs(textured - ids.w) < 0.25;
+    let has_ids = ids.x + ids.y + ids.z + ids.w > 0.5;
+    let is_plant = select(0.0, 1.0, match_id && has_ids);
+    // Vertical plant planes (crosses / blades), not tops or floors.
+    let upright = 1.0 - smoothstep(0.35, 0.72, abs(nrm.y));
+    let tip = pow(clamp(uv_y, 0.0, 1.0), 1.35);
+    let weight = is_plant * upright * tip * u.cloud.w;
+    let t = u.cloud.x * 1.65 + pos.x * 0.62 + pos.z * 0.48;
+    let wave = sin(t) * 0.62 + sin(t * 1.73 + 1.1) * 0.38;
+    // ~15cm at the tip — readable in a still, soft when walking meadows.
+    let amp = 0.15 * weight;
+    return pos + vec3<f32>(wave * amp, abs(wave) * amp * -0.1, cos(t * 0.92 + 0.4) * amp * 0.72);
+}
+
 @vertex
 fn vs_shadow(input: VsIn) -> @builtin(position) vec4<f32> {
-    return u.cascades[CASCADE] * vec4<f32>(input.position, 1.0);
+    let pos = plant_sway(input.position, input.textured, input.normal, input.uv.y);
+    return u.cascades[CASCADE] * vec4<f32>(pos, 1.0);
 }
 
 @vertex
 fn vs_main(input: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip = u.view_proj * vec4<f32>(input.position, 1.0);
+    let pos = plant_sway(input.position, input.textured, input.normal, input.uv.y);
+    out.clip = u.view_proj * vec4<f32>(pos, 1.0);
     out.color = input.color;
     out.normal = input.normal;
     out.uv = input.uv;
@@ -125,7 +150,7 @@ fn vs_main(input: VsIn) -> VsOut {
     out.block = input.block;
     out.bounce = input.bounce;
     out.ao = input.ao;
-    out.world_pos = input.position;
+    out.world_pos = pos;
     return out;
 }
 
@@ -988,6 +1013,13 @@ pub struct State {
     splash_shot_eye: glam::Vec3,
     splash_shot_yaw: f32,
     splash_shot_pitch: f32,
+    /// One-shot tall grass / wheat wind sway, then quit.
+    grass_shot_path: Option<std::path::PathBuf>,
+    grass_shot_frames: u32,
+    grass_shot_wind: f32,
+    grass_shot_eye: glam::Vec3,
+    grass_shot_yaw: f32,
+    grass_shot_pitch: f32,
     /// One-shot walk FOV vs sprint FOV stitch, then quit.
     sprint_shot_path: Option<std::path::PathBuf>,
     sprint_shot_frames: u32,
@@ -2195,6 +2227,12 @@ impl State {
             splash_shot_eye: glam::Vec3::ZERO,
             splash_shot_yaw: 0.0,
             splash_shot_pitch: 0.0,
+            grass_shot_path: None,
+            grass_shot_frames: 0,
+            grass_shot_wind: 0.0,
+            grass_shot_eye: glam::Vec3::ZERO,
+            grass_shot_yaw: 0.0,
+            grass_shot_pitch: 0.0,
             sprint_shot_path: None,
             sprint_shot_frames: 0,
             sprint_shot_phase: SprintShotPhase::Idle,
@@ -8472,6 +8510,163 @@ impl State {
         self.posed_eye = self.splash_shot_eye;
         self.posed_yaw = self.splash_shot_yaw;
         self.posed_pitch = self.splash_shot_pitch;
+        self.pose_dirty = true;
+        self.sheep = crate::sheep::Sheep::new();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.guests.clear();
+    }
+
+    /// Meadow of wheat + cane on grass: tips lean in the breeze, then quit.
+    pub fn arm_grass_wind_shot(&mut self, path: std::path::PathBuf) {
+        self.grass_shot_path = Some(path);
+        self.grass_shot_frames = 0;
+        // Phase near peak lean at meadow center (~9,10) so tips read in the PNG.
+        self.grass_shot_wind = 2.28;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Midday breeze (day_breeze peaks away from dawn/night).
+        self.clock.set_time_of_day(0.48);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.chicken = crate::mobs::Chicken::new();
+        self.bee = crate::mobs::Bee::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rain_mix = 0.0;
+        self.wind_mix = 1.0;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.chicken_buf = None;
+        self.chicken_count = 0;
+        self.bee_buf = None;
+        self.bee_count = 0;
+        self.rebuild_drops();
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("wind: grass sway");
+
+        let mut changes = Vec::new();
+        for z in 5..=16 {
+            for x in 4..=14 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Dense wheat meadow + cane edges so tips fill the frame.
+        for z in 7..=14 {
+            for x in 6..=12 {
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::new("wheat_crop", 3),
+                });
+            }
+        }
+        for z in 7..=14 {
+            changes.push(CellChange {
+                x: 5,
+                y: 2,
+                z,
+                block: Block::new("sugar_cane", 0),
+            });
+            changes.push(CellChange {
+                x: 13,
+                y: 2,
+                z,
+                block: Block::new("sugar_cane", 0),
+            });
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye = glam::Vec3::new(4.8, 2.2 + body::EYE_HEIGHT, 15.4);
+        let target = glam::Vec3::new(9.2, 2.7, 9.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.grass_shot_eye = eye;
+        self.grass_shot_yaw = yaw;
+        self.grass_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_grass_shot_camera(&mut self) {
+        if self.grass_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(0.48);
+        self.dusk_show = 0.0;
+        self.rain_mix = 0.0;
+        self.wind_mix = 1.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.grass_shot_eye,
+            self.grass_shot_yaw,
+            self.grass_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.grass_shot_eye;
+        self.posed_yaw = self.grass_shot_yaw;
+        self.posed_pitch = self.grass_shot_pitch;
         self.pose_dirty = true;
         self.sheep = crate::sheep::Sheep::new();
         self.sheep_buf = None;
@@ -16863,6 +17058,37 @@ impl State {
         }
     }
 
+    fn poll_grass_shot(&mut self) {
+        let Some(path) = self.grass_shot_path.clone() else {
+            return;
+        };
+        self.pin_grass_shot_camera();
+        self.grass_shot_frames = self.grass_shot_frames.saturating_add(1);
+        if self.grass_shot_frames < 180 || !self.chunk_bake.is_idle() {
+            if self.grass_shot_frames > 800 {
+                eprintln!("grass shot timed out");
+                self.grass_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("grass shot wrote {}", path.display());
+                self.grass_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("grass shot failed: {err}");
+                if self.grass_shot_frames > 280 {
+                    self.grass_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_bed_sleep_shot(&mut self) {
         let Some(path) = self.bed_sleep_shot_path.clone() else {
             return;
@@ -19898,6 +20124,7 @@ impl State {
             && self.water_shot_path.is_none()
             && self.cloud_shot_path.is_none()
             && self.splash_shot_path.is_none()
+            && self.grass_shot_path.is_none()
         {
             if self.firefly_wait <= 0.0 {
                 self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
@@ -19939,6 +20166,7 @@ impl State {
             && self.bounce_shot_path.is_none()
             && self.water_shot_path.is_none()
             && self.cloud_shot_path.is_none()
+            && self.grass_shot_path.is_none()
         {
             if self.splash_wait <= 0.0 || self.splash_shot_path.is_some() {
                 let burst = if self.splash_shot_path.is_some() {
@@ -19985,6 +20213,7 @@ impl State {
             || self.water_shot_path.is_some()
             || self.cloud_shot_path.is_some()
             || self.splash_shot_path.is_some()
+            || self.grass_shot_path.is_some()
         {
             self.dusk_show = 0.0;
         } else if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0
@@ -20412,6 +20641,7 @@ impl State {
                 && self.water_shot_path.is_none()
                 && self.cloud_shot_path.is_none()
                 && self.splash_shot_path.is_none()
+                && self.grass_shot_path.is_none()
             {
                 self.sheep.tick_near(steps, feet, &self.world);
                 self.rebuild_sheep();
@@ -20674,6 +20904,7 @@ impl State {
                 || self.water_shot_path.is_some()
                 || self.cloud_shot_path.is_some()
                 || self.splash_shot_path.is_some()
+                || self.grass_shot_path.is_some()
             {
                 self.fox_buf = None;
                 self.fox_count = 0;
@@ -20699,6 +20930,7 @@ impl State {
                 && self.water_shot_path.is_none()
                 && self.cloud_shot_path.is_none()
                 && self.splash_shot_path.is_none()
+                && self.grass_shot_path.is_none()
             {
                 if let Some(ram) = self.goat.tick(steps, feet_at, &self.world) {
                     self.goat_ram(ram);
@@ -21011,9 +21243,17 @@ impl State {
         // Daytime cloud shadows: gentle open-sun dim. Umbra floors stay put.
         let day_w = ((light.brightness - 0.22) / 0.78).clamp(0.0, 1.0);
         let weather = crate::daylight::fog_mood(time);
+        let breeze = if self.grass_shot_path.is_some() {
+            1.0
+        } else {
+            self.wind_mix.clamp(0.0, 1.0)
+        };
         let (cloud_wind, cloud_dim, cloud_strength) = if self.cloud_shot_path.is_some() {
             // Proof shot: full day strength + deeper dim so the band reads.
             (self.cloud_shot_wind, 0.58, day_w.max(0.92))
+        } else if self.grass_shot_path.is_some() {
+            // Mid-sway phase so tips lean visibly in the still PNG.
+            (self.grass_shot_wind, 0.76, day_w.max(0.9))
         } else {
             (
                 self.clock.seconds() * 0.11,
@@ -21021,9 +21261,22 @@ impl State {
                 day_w * (0.78 + 0.22 * weather),
             )
         };
-        let cloud = [cloud_wind, cloud_strength, cloud_dim, 0.0];
+        let cloud = [cloud_wind, cloud_strength, cloud_dim, breeze];
         self.queue
             .write_buffer(&self.uniform_buf, 416, bytes_of(&cloud));
+        let plant_slot = |path: &str| {
+            crate::texture::texture_slot(path)
+                .map(|slot| slot as f32 + 1.0)
+                .unwrap_or(0.0)
+        };
+        let plant_ids = [
+            plant_slot("assets/terralite/textures/wheat_crop.png"),
+            plant_slot("assets/terralite/textures/sugar_cane.png"),
+            plant_slot("assets/terralite/textures/block/grass_block_side_overlay.png"),
+            plant_slot("assets/terralite/textures/vine.png"),
+        ];
+        self.queue
+            .write_buffer(&self.uniform_buf, 432, bytes_of(&plant_ids));
 
         let surface_texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -21663,6 +21916,7 @@ impl State {
         self.poll_water_shot();
         self.poll_cloud_shot();
         self.poll_splash_shot();
+        self.poll_grass_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
@@ -23739,6 +23993,9 @@ mod tests {
         assert!(src.contains("shadow_mul * cloud_mul"));
         // Cloud dims open sun only — never multiplies into the umbra floor path.
         assert!(src.contains("cover * open_sun"));
+        assert!(src.contains("plant_sway"));
+        assert!(src.contains("plant_ids"));
+        assert!(src.contains("u.cloud.w"));
         // Bounce fill must not multiply corner AO into sun coverage.
         assert!(!src.contains("sun_shade * input.ao"));
         assert!(!src.contains("occluded * sky * sun_shade"));
