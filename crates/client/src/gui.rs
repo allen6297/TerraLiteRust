@@ -5252,6 +5252,20 @@ pub fn look_label(id: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+/// Preformatted compound tips pass through; otherwise [`look_label`].
+pub fn look_tip_or_label(id: &str) -> Option<String> {
+    if id.contains('/')
+        || id.starts_with("Tank  ")
+        || id.starts_with("Pump  ")
+        || id.starts_with("Pipe  ")
+        || id.starts_with("Wire  ")
+    {
+        Some(id.to_string())
+    } else {
+        look_label(id)
+    }
+}
+
 /// Center crosshair. `ready` is `0` just swung through `1` fully charged.
 ///
 /// Cooling shrinks the arms so the wait reads like a Minecraft attack meter
@@ -5306,7 +5320,8 @@ pub fn cross_quads(width: f32, height: f32, ready: f32) -> Vec<Quad> {
     ]
 }
 
-/// A small cross at the center. `id` is the looked-at block, entity, or fluid.
+/// A small cross at the center. `id` is the looked-at block, entity, or fluid,
+/// or a preformatted tip that already contains `/` (e.g. `Tank  water 3/8`).
 /// `held` is the selected hotbar item. The look name sits bottom-right; the held
 /// name stays above the hotbar. `held_override` replaces the hotbar name when a
 /// place shape is armed. `attack_ready` shrinks the cross while a swing cools.
@@ -5323,7 +5338,7 @@ pub fn look_quads(
     }
     let cx = width * 0.5;
     let mut quads = cross_quads(width, height, attack_ready);
-    if let Some(label) = id.and_then(look_label) {
+    if let Some(label) = id.and_then(look_tip_or_label) {
         let plate_w = measure(&label, 1.0) + 12.0;
         // Bottom-right tip: clear of the centered hotbar and the left status stack.
         let margin = 12.0;
@@ -8068,6 +8083,12 @@ mod tests {
         assert_eq!(look_label("iron_pickaxe").as_deref(), Some("Iron Pickaxe"));
         assert!(look_label("air").is_none());
         assert!(look_label("").is_none());
+        assert_eq!(
+            look_tip_or_label("Tank  water 3/8").as_deref(),
+            Some("Tank  water 3/8")
+        );
+        assert_eq!(look_tip_or_label("Pump  on").as_deref(), Some("Pump  on"));
+        assert_eq!(look_tip_or_label("oak_log").as_deref(), Some("Oak Log"));
         let bare = look_quads(200.0, 100.0, None, None, None, 1.0);
         assert_eq!(bare.len(), 4);
         assert!(bare.iter().all(|quad| quad.color != WELL));
@@ -8089,6 +8110,14 @@ mod tests {
         );
         assert!(named.iter().any(|quad| quad.color == LIP));
         assert!(named.iter().any(|quad| quad.color == INK));
+        let tank_tip = look_quads(200.0, 100.0, Some("Tank  water 3/8"), None, None, 1.0);
+        assert!(
+            tank_tip.iter().any(|quad| quad.color == WELL),
+            "preformatted tank tip still draws a plate"
+        );
+        let tank_w = measure("Tank  water 3/8", 1.0) + 12.0;
+        let oak_w = measure("Oak Log", 1.0) + 12.0;
+        assert!(tank_w > oak_w, "tank level tip is wider than a bare name");
         let held = look_quads(200.0, 400.0, None, Some("cobblestone"), None, 1.0);
         let held_plate = held
             .iter()

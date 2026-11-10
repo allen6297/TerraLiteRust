@@ -5351,7 +5351,51 @@ impl State {
         let entity = entity
             .as_ref()
             .map(|(id, distance)| (id.as_str(), *distance));
-        look::nearest_label([entity, fluid, block]).map(str::to_string)
+        let id = look::nearest_label([entity, fluid, block])?;
+        // Compound look tips: tank level, pump power, filled pipe/wire kind.
+        if let Some(tip) = self.compound_look_tip(id, eye, forward) {
+            return Some(tip);
+        }
+        Some(id.to_string())
+    }
+
+    /// HUD tip when looking at a compound host with extra state.
+    fn compound_look_tip(
+        &self,
+        id: &str,
+        eye: glam::Vec3,
+        forward: glam::Vec3,
+    ) -> Option<String> {
+        let target = look::raycast(eye, forward, &self.world)?;
+        let block = self
+            .world
+            .block_at(target.block[0], target.block[1], target.block[2]);
+        if block.id != id {
+            return None;
+        }
+        if is_tank(block.id) {
+            let level = tank_level(block);
+            let kind = match block.fill {
+                FILL_WATER => "water",
+                FILL_EMBER => "ember",
+                _ => "empty",
+            };
+            return Some(format!("Tank  {kind} {level}/{TANK_MAX}"));
+        }
+        if is_pump(block.id) {
+            let power = if pump_on(block.metadata) { "on" } else { "off" };
+            return match block.fill {
+                FILL_WATER => Some(format!("Pump  {power}  water")),
+                FILL_EMBER => Some(format!("Pump  {power}  ember")),
+                _ => Some(format!("Pump  {power}")),
+            };
+        }
+        if (is_pipe(block.id) || is_wire(block.id)) && block.fill != FILL_NONE {
+            let kind = fill_name(block.fill).unwrap_or("fill");
+            let name = if is_pipe(block.id) { "Pipe" } else { "Wire" };
+            return Some(format!("{name}  {kind}"));
+        }
+        None
     }
 
     /// The closest body the look ray meets, within the same reach as a block.
