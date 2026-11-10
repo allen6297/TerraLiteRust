@@ -1650,6 +1650,13 @@ pub struct State {
     iron_golem: crate::mobs::IronGolem,
     iron_golem_buf: Option<wgpu::Buffer>,
     iron_golem_count: u32,
+    blaze: crate::mobs::Blaze,
+    blaze_buf: Option<wgpu::Buffer>,
+    blaze_count: u32,
+    /// In-flight blaze fireballs.
+    fireballs: crate::fireballs::Fireballs,
+    /// Hand over a blaze rod once inventory has room.
+    blaze_due: bool,
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
     bee_count: u32,
@@ -2798,6 +2805,11 @@ impl State {
             iron_golem: crate::mobs::IronGolem::new(),
             iron_golem_buf: None,
             iron_golem_count: 0,
+            blaze: crate::mobs::Blaze::new(),
+            blaze_buf: None,
+            blaze_count: 0,
+            fireballs: crate::fireballs::Fireballs::new(),
+            blaze_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
             bee_count: 0,
@@ -2880,6 +2892,7 @@ impl State {
         state.rebuild_chicken();
         state.rebuild_trader();
         state.rebuild_iron_golem();
+        state.rebuild_blaze();
         state.rebuild_bee();
         state.rebuild_fox();
         state.rebuild_goat();
@@ -4676,6 +4689,7 @@ impl State {
         vertices.extend(self.xp.vertices());
         vertices.extend(self.arrows.vertices());
         vertices.extend(self.splash.vertices());
+        vertices.extend(self.fireballs.vertices());
         vertices.extend(self.pearls.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
@@ -4978,6 +4992,23 @@ impl State {
         self.iron_golem_count = vertices.len() as u32;
     }
 
+    fn rebuild_blaze(&mut self) {
+        let vertices = self.blaze.vertices();
+        if vertices.is_empty() {
+            self.blaze_buf = None;
+            self.blaze_count = 0;
+            return;
+        }
+        self.blaze_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("blaze"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.blaze_count = vertices.len() as u32;
+    }
+
     fn rebuild_bee(&mut self) {
         let vertices = self.bee.vertices();
         if vertices.is_empty() {
@@ -5186,11 +5217,16 @@ impl State {
         };
         let breeze_aimed =
             !zombie_aimed && night_index.is_none() && self.breeze.aimed(eye, forward);
-        let guest_index = if zombie_aimed || night_index.is_some() || breeze_aimed {
-            None
-        } else {
-            self.aimed_guest(eye, forward)
-        };
+        let blaze_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && self.blaze.aimed(eye, forward);
+        let guest_index =
+            if zombie_aimed || night_index.is_some() || breeze_aimed || blaze_aimed {
+                None
+            } else {
+                self.aimed_guest(eye, forward)
+            };
         let amount = body::mace_hearts(falling, smash);
         let mut xp_at: Option<[f32; 3]> = None;
         let dropped_zombie = zombie_aimed && {
@@ -5231,6 +5267,14 @@ impl State {
             }
             dropped
         };
+        let dropped_blaze = blaze_aimed && {
+            let origin = self.blaze.origin();
+            let dropped = self.hurt_mob("blaze", amount, origin, |s, n| s.blaze.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_guest = if let Some(index) = guest_index {
             let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
@@ -5244,8 +5288,13 @@ impl State {
         } else {
             false
         };
-        let aimed = zombie_aimed || night_index.is_some() || breeze_aimed || guest_index.is_some();
-        let dropped = dropped_zombie || dropped_night || dropped_breeze || dropped_guest;
+        let aimed = zombie_aimed
+            || night_index.is_some()
+            || breeze_aimed
+            || blaze_aimed
+            || guest_index.is_some();
+        let dropped =
+            dropped_zombie || dropped_night || dropped_breeze || dropped_blaze || dropped_guest;
         let word = if !aimed {
             "swing"
         } else if dropped {
@@ -5281,11 +5330,15 @@ impl State {
                 }
             }
         }
+        if dropped_blaze {
+            self.grant_blaze_rod();
+        }
         if self.hotbar.slot(slot).is_none() {
             self.gui.push_chat("the mace breaks");
         }
         self.rebuild_zombie();
         self.rebuild_breeze();
+        self.rebuild_blaze();
     }
 
     fn holding_horn(&self) -> bool {
@@ -5804,6 +5857,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_breeze();
+                return true;
+            }
+            let blaze = self.blaze.origin();
+            let (blmin, blmax) = self.blaze.bounds();
+            if point_in_box(tip, blmin, blmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("blaze", amount, blaze, |s, n| s.blaze.hurt(n));
+                if dropped {
+                    self.grant_xp_at(blaze, true);
+                    self.grant_blaze_rod();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_blaze();
                 return true;
             }
             if let Some(index) = self.guests.iter().position(|guest| {
@@ -6509,6 +6578,9 @@ impl State {
         {
             self.found_fortress = true;
             self.gui.push_chat("a nether fortress");
+            if self.blaze.alive() {
+                self.gui.push_chat("a blaze");
+            }
         }
         if !self.found_lodestone
             && near(
@@ -7491,6 +7563,24 @@ impl State {
         self.gui.push_chat("rod");
     }
 
+    /// Hand over the blaze rod. A full bar leaves the debt for a later tick.
+    fn grant_blaze_rod(&mut self) {
+        if !self.hotbar.room_for("blaze_rod") && !self.bag.room_for("blaze_rod") {
+            if !self.blaze_due {
+                self.gui.push_chat("full");
+            }
+            self.blaze_due = true;
+            return;
+        }
+        if !self.hotbar.collect("blaze_rod") {
+            self.bag.collect("blaze_rod");
+            self.bag_dirty = true;
+        }
+        self.hotbar_dirty = true;
+        self.blaze_due = false;
+        self.gui.push_chat("blaze rod");
+    }
+
     /// Hand over the slimeball. A full bar leaves the debt for a later tick.
     fn grant_slime(&mut self) {
         if !self.hotbar.room_for("slimeball") && !self.bag.room_for("slimeball") {
@@ -7787,6 +7877,17 @@ impl State {
                             self.grant_xp_at(breeze, true);
                         }
                         self.rebuild_breeze();
+                        hit = true;
+                    }
+                    let blaze = self.blaze.origin();
+                    if crate::splash::in_radius(burst.center, blaze) {
+                        let dropped =
+                            self.hurt_mob("blaze", amount, blaze, |s, n| s.blaze.hurt(n));
+                        if dropped {
+                            self.grant_xp_at(blaze, true);
+                            self.grant_blaze_rod();
+                        }
+                        self.rebuild_blaze();
                         hit = true;
                     }
                     let guest_hits: Vec<(usize, String, [f32; 3])> = self
@@ -8508,6 +8609,70 @@ impl State {
         self.rebuild_chicken();
         self.gui.push_chat("egg");
         true
+    }
+
+    /// Fortress blaze mid-fireball over the cage, then quit.
+    pub fn arm_blaze_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, bz) = rebuild_world::NETHER_FORTRESS_BLAZE;
+        let by = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        self.blaze.place_at([bx as f32 + 0.5, by as f32 + 1.55, bz as f32 + 0.5]);
+        let origin = self.blaze.origin();
+        // Mid-flight fireball toward the camera so the still shows a bolt.
+        self.fireballs.pin(
+            [origin[0] + 0.9, origin[1] + 0.35, origin[2] + 0.6],
+            [4.0, 0.5, 3.0],
+        );
+        self.drops.embers(origin);
+        self.rebuild_blaze();
+        self.rebuild_drops();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a blaze");
+        self.gui.push_chat("fireball");
+
+        let focus = glam::Vec3::new(origin[0], origin[1] + 0.4, origin[2]);
+        let eye = glam::Vec3::new(
+            origin[0] + 2.4,
+            origin[1] + 0.15,
+            origin[2] + 1.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
     }
 
     /// Nether fortress spur west of the hellish pad — brick corridor + chest.
@@ -10130,6 +10295,7 @@ impl State {
             ("horse", self.horse.bounds()),
             ("zombie", self.zombie.bounds()),
             ("breeze", self.breeze.bounds()),
+            ("blaze", self.blaze.bounds()),
             ("copper_golem", self.golem.bounds()),
             ("wolf", self.wolf.bounds()),
             ("cat", self.cat.bounds()),
@@ -10215,6 +10381,9 @@ impl State {
         }
         if self.breeze.aimed(eye, forward) {
             return Some("breeze");
+        }
+        if self.blaze.aimed(eye, forward) {
+            return Some("blaze");
         }
         if self.fox.aimed(eye, forward) {
             return Some("fox");
@@ -25258,6 +25427,28 @@ impl State {
             if self.try_arrow_mob_hits() {
                 drops_dirty = true;
             }
+            let (fire_dirty, fire_bursts, fire_hit) =
+                self.fireballs.tick(dt, &self.world, eye);
+            if fire_dirty {
+                drops_dirty = true;
+            }
+            for at in &fire_bursts {
+                self.drops.embers(*at);
+                self.drops.puff(*at, [1.0, 0.45, 0.1]);
+            }
+            if fire_hit {
+                let blocked = self.try_shield_block();
+                let amount = body::bite_hearts(
+                    blocked,
+                    crate::fireballs::HIT_HEARTS,
+                    self.armor_soak(),
+                );
+                self.apply_damage(amount);
+                self.gui.push_chat(if blocked { "block" } else { "burn" });
+            }
+            if !fire_bursts.is_empty() {
+                drops_dirty = true;
+            }
             let (splash_dirty, bursts) = self.splash.tick(dt, &self.world);
             if splash_dirty {
                 drops_dirty = true;
@@ -26405,13 +26596,34 @@ impl State {
             if self.breeze_due {
                 self.grant_rod();
             }
-            if self.slime_due {
-                self.grant_slime();
+            if self.blaze_due {
+                self.grant_blaze_rod();
             }
             if self.horn_due {
                 self.grant_horn();
             }
+            if self.slime_due {
+                self.grant_slime();
+            }
             self.rebuild_breeze();
+            let eye3 = [
+                self.camera.eye.x,
+                self.camera.eye.y,
+                self.camera.eye.z,
+            ];
+            if self.blaze.tick_near(steps, eye3) {
+                let from = self.blaze.origin();
+                let muzzle = [from[0], from[1] + 0.7, from[2]];
+                self.fireballs.shoot(muzzle, eye3);
+                self.play_world(crate::audio::Sound::Gust, muzzle);
+                self.drops.embers(muzzle);
+                self.gui.push_chat("fireball");
+                self.rebuild_drops();
+            }
+            if self.blaze.rest(dt) {
+                self.rebuild_blaze();
+            }
+            self.rebuild_blaze();
             if let Some(chore) = self.golem.tick(steps, &self.world) {
                 match chore {
                     crate::mobs::Chore::Press(at) => {
@@ -27262,6 +27474,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, iron_golem.slice(..));
                     pass.draw(0..self.iron_golem_count, 0..1);
+                }
+            }
+            if let Some(blaze) = &self.blaze_buf {
+                if self.blaze_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, blaze.slice(..));
+                    pass.draw(0..self.blaze_count, 0..1);
                 }
             }
             if let Some(bee) = &self.bee_buf {

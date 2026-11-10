@@ -202,6 +202,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "nether_portal" => [0.55, 0.18, 0.85],
         "flint_and_steel" => [0.62, 0.62, 0.68],
         "fire_charge" => [0.92, 0.42, 0.18],
+        "blaze_rod" => [0.95, 0.62, 0.12],
         "sugar_cane" => [0.55, 0.78, 0.36],
         "chorus_plant" => [0.58, 0.28, 0.72],
         "chorus_flower" => [0.82, 0.46, 0.94],

@@ -1,6 +1,7 @@
 //! A pig, a horse, a zombie, a breeze, a copper golem, a wolf, a cat, a parrot,
 //! a frog, an axolotl, a chicken, a bee, a fox, a goat, a village trader,
-//! and an iron golem that guards the village green.
+//! an iron golem that guards the village green, and a blaze over the nether
+//! fortress cage.
 //!
 //! The zombie body is `models/entity/zombie.bbmodel` with `textures/entity/zombie.png`,
 //! playing `idle`, `walk`, and `attack` the same way the chicken and player do.
@@ -5052,6 +5053,224 @@ impl IronGolem {
     }
 }
 
+/// Fortress blaze pad — floats above [`rebuild_world::NETHER_FORTRESS_BLAZE`].
+pub const BLAZE_PAD: (i32, i32) = (-29, -41);
+
+const BLAZE_HEARTS: i32 = 5;
+const BLAZE_SHOOT_EVERY: u32 = 36;
+const BLAZE_HOVER: f32 = 5.0;
+const BLAZE_STEP: f32 = 0.08;
+const BLAZE_HOME_Y: f32 = 5.6;
+
+/// Floating hostile over the nether fortress blaze cage. Shoots fireballs.
+pub struct Blaze {
+    origin: [f32; 3],
+    home: [f32; 3],
+    swing: u32,
+    hearts: i32,
+    down: f32,
+    loose: u32,
+}
+
+impl Blaze {
+    pub fn new() -> Self {
+        let (x, z) = BLAZE_PAD;
+        let home = [x as f32 + 0.5, BLAZE_HOME_Y, z as f32 + 0.5];
+        Self {
+            origin: home,
+            home,
+            swing: 0,
+            hearts: BLAZE_HEARTS,
+            down: 0.0,
+            loose: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = BLAZE_HEARTS;
+        self.down = 0.0;
+        self.swing = 0;
+        self.loose = 0;
+    }
+
+    pub fn bump(&mut self, from: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        bump_origin(&mut self.origin, &mut self.loose, from)
+    }
+
+    /// True when the look ray passes close to the floating body.
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.55, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=7.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 0.7
+    }
+
+    /// Spend hearts. True when this hit drops the blaze.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.down = 10.0;
+        true
+    }
+
+    /// Float up beside the fortress cage.
+    pub fn rouse(&mut self, at: [f32; 3]) {
+        self.origin = [at[0], at[1] + 1.5, at[2]];
+        self.home = self.origin;
+        self.hearts = BLAZE_HEARTS;
+        self.down = 0.0;
+        self.swing = 0;
+        self.loose = 0;
+    }
+
+    /// Return home after a knockdown. True on the frame it rises.
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if self.hearts > 0 {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.hearts = BLAZE_HEARTS;
+        self.origin = self.home;
+        self.swing = 0;
+        self.down = 0.0;
+        true
+    }
+
+    /// Drift toward a hover range. True when a fireball is due.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if self.loose > 0 {
+            self.loose = self.loose.saturating_sub(count);
+            return false;
+        }
+        if self.hearts <= 0 {
+            return false;
+        }
+        let mut shot = false;
+        for _ in 0..count {
+            let dx = player[0] - self.origin[0];
+            let dz = player[2] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            // Bob gently while holding altitude near the cage.
+            self.origin[1] = self.home[1] + (self.swing as f32 * 0.11).sin() * 0.12;
+            if dist > BLAZE_HOVER + 1.0 && dist > 0.05 {
+                let step = BLAZE_STEP.min(dist - BLAZE_HOVER);
+                self.origin[0] += dx / dist * step;
+                self.origin[2] += dz / dist * step;
+            } else if dist < BLAZE_HOVER - 1.5 && dist > 0.05 {
+                self.origin[0] -= dx / dist * BLAZE_STEP;
+                self.origin[2] -= dz / dist * BLAZE_STEP;
+            } else if dist > 14.0 {
+                // Drift home when the player is far.
+                let hx = self.home[0] - self.origin[0];
+                let hz = self.home[2] - self.origin[2];
+                let hd = (hx * hx + hz * hz).sqrt();
+                if hd > 0.05 {
+                    self.origin[0] += hx / hd * BLAZE_STEP;
+                    self.origin[2] += hz / hd * BLAZE_STEP;
+                }
+            }
+            self.swing = self.swing.wrapping_add(1);
+            if (2.0..16.0).contains(&dist) && self.swing % BLAZE_SHOOT_EVERY == 0 {
+                shot = true;
+            }
+        }
+        shot
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if self.hearts <= 0 {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.35, y, z - 0.35], [x + 0.35, y + 1.35, z + 0.35])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bob = (self.swing as f32 * 0.14).sin() * 0.04;
+        let body = [0.92, 0.72, 0.18];
+        let dark = [0.55, 0.28, 0.08];
+        let flame = [1.0, 0.42, 0.08];
+        let mut out = Vec::new();
+        // Core body.
+        push_box(
+            &mut out,
+            [x, y + 0.55 + bob, z],
+            [0.28, 0.38, 0.22],
+            body,
+        );
+        // Head nub.
+        push_box(
+            &mut out,
+            [x, y + 1.05 + bob, z],
+            [0.22, 0.18, 0.2],
+            dark,
+        );
+        // Outer spinning rods (four yellow sticks).
+        let spin = self.swing as f32 * 0.18;
+        for i in 0..4 {
+            let ang = spin + i as f32 * std::f32::consts::FRAC_PI_2;
+            let rx = ang.cos() * 0.42;
+            let rz = ang.sin() * 0.42;
+            push_box(
+                &mut out,
+                [x + rx, y + 0.55 + bob, z + rz],
+                [0.05, 0.32, 0.05],
+                flame,
+            );
+        }
+        // Ember underglow.
+        push_box(
+            &mut out,
+            [x, y + 0.12 + bob, z],
+            [0.18, 0.08, 0.18],
+            flame,
+        );
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5215,6 +5434,34 @@ mod tests {
         assert!(gust.dx > 0.0);
         assert!(gust.lift > 0.0);
         assert!(crate::body::breeze_shot([0.0, 3.0, 0.0], [40.0, 1.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn a_blaze_floats_fires_and_drops_a_rod() {
+        let mut blaze = Blaze::new();
+        assert_eq!(
+            (blaze.origin()[0].floor() as i32, blaze.origin()[2].floor() as i32),
+            BLAZE_PAD
+        );
+        assert!(blaze.origin()[1] > 5.0);
+        assert!(!blaze.vertices().is_empty());
+        let home = blaze.origin();
+        let mut fired = false;
+        for _ in 0..BLAZE_SHOOT_EVERY {
+            if blaze.tick_near(1, [home[0] + 5.0, home[1], home[2]]) {
+                fired = true;
+            }
+        }
+        assert!(fired, "blaze should queue a fireball in hover range");
+        assert!(!blaze.hurt(1));
+        assert!(blaze.hurt(4));
+        assert!(!blaze.alive());
+        assert!(blaze.vertices().is_empty());
+        assert!(!blaze.rest(1.0));
+        assert!(blaze.rest(10.0));
+        assert!(blaze.alive());
+        blaze.rouse([2.0, 4.0, 3.0]);
+        assert!((blaze.origin()[1] - 5.5).abs() < 0.01);
     }
 
     #[test]
