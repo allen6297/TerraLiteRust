@@ -202,6 +202,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "wheat" => [0.86, 0.74, 0.32],
         "wheat_crop" => [0.78, 0.72, 0.28],
         "wheat_seeds" => [0.42, 0.58, 0.22],
+        "bread" => [0.82, 0.58, 0.28],
         "farmland" => [0.48, 0.32, 0.18],
         "wooden_hoe" => [0.62, 0.48, 0.28],
         "eye_of_ender" => [0.55, 0.86, 0.42],

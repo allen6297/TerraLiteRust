@@ -8971,6 +8971,99 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Fresh bread on a tilled wheat patch, then quit with a PNG.
+    pub fn arm_bread_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 12;
+        let cz = 17;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 1)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("farmland", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 3),
+        });
+        changes.push(CellChange {
+            x: cx - 1,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 2),
+        });
+        changes.push(CellChange {
+            x: cx + 1,
+            y: 2,
+            z: cz,
+            block: Block::new("wheat_crop", 1),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, 2.4, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(cx as f32 - 2.3, 2.05 + body::EYE_HEIGHT, cz as f32 + 2.5);
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let mote = [cx as f32 + 0.5, 2.85, cz as f32 + 0.5];
+        self.note_shot_at = Some(mote);
+        self.note_shot_pitch = 3;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.drops.puff(mote, [0.82, 0.58, 0.28]);
+        self.drops.note(mote, 3);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Note(3), mote);
+        self.found_compound = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bread");
+        let _ = self.hotbar.collect("wheat");
+        let _ = self.hotbar.collect("wheat");
+        let _ = self.hotbar.collect("wheat");
+        self.hotbar_dirty = true;
+        self.gui.push_chat("bread");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Fresh farmland beside dirt with a till puff, then quit with a PNG.
     pub fn arm_farmland_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);

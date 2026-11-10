@@ -484,6 +484,7 @@ mod tests {
                 "boat".to_string(),
                 "book".to_string(),
                 "bookshelf".to_string(),
+                "bread".to_string(),
                 "breeze_rod".to_string(),
                 "brewing_stand".to_string(),
                 "bricks".to_string(),
@@ -638,6 +639,7 @@ mod tests {
                 "tripwire".to_string(),
                 "vine".to_string(),
                 "water".to_string(),
+                "wheat".to_string(),
                 "wheat_seeds".to_string(),
                 "wind_charge".to_string(),
                 "wire".to_string(),
@@ -653,6 +655,12 @@ mod tests {
             book.detail("cobblestone"),
             "used to make compass and mossy cobblestone and saddle and shield and smooth stone and stone and stone pickaxe"
         );
+        assert_eq!(
+            book.match_grid(&["wheat".into(), "wheat".into(), "wheat".into()]),
+            Some("bread".to_string())
+        );
+        assert_eq!(book.detail("bread"), "wheat and wheat and wheat make bread");
+        assert_eq!(book.detail("wheat"), "used to make bread");
         assert_eq!(
             book.match_grid(&["oak_log".into(), "iron_ore".into()]),
             Some("lantern".to_string())

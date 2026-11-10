@@ -7262,6 +7262,8 @@ mod tests {
         assert!(pack.seed_ids().contains(&"wheat_seeds".to_string()));
         assert_eq!(pack.food_of("wheat"), Some(2));
         assert_eq!(pack.tool_icon("wheat"), Some("hay_bale"));
+        assert_eq!(pack.food_of("bread"), Some(5));
+        assert_eq!(pack.tool_icon("bread"), Some("hay_bale"));
         assert_eq!(pack.hardness_of(Block::new("wheat_crop", 0)), Some(0.1));
         assert!(pack.is_hoe("wooden_hoe"));
         assert!(!pack.is_hoe("wooden_pickaxe"));

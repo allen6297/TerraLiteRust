@@ -6341,6 +6341,7 @@ fn tab_of(id: &str) -> &'static str {
             | "wheat"
             | "wheat_crop"
             | "wheat_seeds"
+            | "bread"
             | "farmland"
             | "wooden_hoe"
     ) {
@@ -9074,6 +9075,12 @@ mod tests {
         assert_eq!(
             gui.selected_detail(),
             "oak log and wool and stick make bookshelf"
+        );
+        assert!(gui.on_press(KeyCode::ArrowDown));
+        assert_eq!(gui.selected_id().as_deref(), Some("bread"));
+        assert_eq!(
+            gui.selected_detail(),
+            "wheat and wheat and wheat make bread"
         );
         assert!(gui.on_press(KeyCode::ArrowDown));
         assert_eq!(gui.selected_id().as_deref(), Some("breeze_rod"));
