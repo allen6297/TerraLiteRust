@@ -1,0 +1,13 @@
+{
+  "elements": [
+    {
+      "from": [3, 3, 3],
+      "to": [13, 13, 13]
+    }
+  ],
+  "texture": "assets/terralite/textures/conduit.png",
+  "light": {
+    "color": [0.35, 0.85, 0.95],
+    "level": 15
+  }
+}

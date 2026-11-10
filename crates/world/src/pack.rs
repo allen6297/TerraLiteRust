@@ -7845,6 +7845,11 @@ mod tests {
         assert!(pack.is_core("nether_star"));
         assert_eq!(pack.tool_icon("nether_star"), Some("glowstone"));
         assert!(pack.contains_block("beacon"));
+        assert!(pack.contains_block("conduit"));
+        assert!(pack.is_core("heart_of_the_sea"));
+        assert_eq!(pack.tool_icon("heart_of_the_sea"), Some("sea_lantern"));
+        assert!(pack.is_core("nautilus_shell"));
+        assert_eq!(pack.tool_icon("nautilus_shell"), Some("prismarine"));
         assert!(pack.contains_block("iron_block"));
         assert!(pack.contains_block("gold_block"));
         assert!(pack.contains_block("emerald_block"));

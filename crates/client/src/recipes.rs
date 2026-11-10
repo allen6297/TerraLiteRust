@@ -601,7 +601,9 @@ mod tests {
                 "cobweb".to_string(),
                 "compass".to_string(),
                 "composter".to_string(),
+                "conduit".to_string(),
                 "copper_bulb".to_string(),
+
                 "copper_chest".to_string(),
                 "copper_door".to_string(),
                 "copper_grate".to_string(),
@@ -653,9 +655,11 @@ mod tests {
                 "hanging_sign".to_string(),
                 "hay_bale".to_string(),
                 "healing_potion".to_string(),
+                "heart_of_the_sea".to_string(),
                 "heavy_core".to_string(),
                 "ice".to_string(),
                 "iron_block".to_string(),
+
                 "iron_ore".to_string(),
                 "iron_pickaxe".to_string(),
 
@@ -682,8 +686,10 @@ mod tests {
                 "mossy_cobblestone".to_string(),
                 "mossy_stone_bricks".to_string(),
                 "music_disc".to_string(),
+                "nautilus_shell".to_string(),
                 "nether_bricks".to_string(),
                 "nether_star".to_string(),
+
                 "nether_wart_block".to_string(),
                 "netherrack".to_string(),
                 "note_block".to_string(),

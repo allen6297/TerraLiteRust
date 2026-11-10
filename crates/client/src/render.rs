@@ -1246,6 +1246,13 @@ pub struct State {
     beacon_at: Option<[i32; 3]>,
     beacon_buf: Option<wgpu::Buffer>,
     beacon_count: u32,
+    /// Seconds of conduit power left.
+    conduit_left: f32,
+    conduit_show: f32,
+    /// Active conduit cell that powers the aura + underwater buff.
+    conduit_at: Option<[i32; 3]>,
+    conduit_buf: Option<wgpu::Buffer>,
+    conduit_count: u32,
     /// HUD plate while strength is up, `0`..`1`.
     strength_show: f32,
     /// HUD plate while an axolotl companion is leashed, `0`..`1`.
@@ -2580,6 +2587,11 @@ impl State {
             beacon_at: None,
             beacon_buf: None,
             beacon_count: 0,
+            conduit_left: 0.0,
+            conduit_show: 0.0,
+            conduit_at: None,
+            conduit_buf: None,
+            conduit_count: 0,
             strength_show: 0.0,
             leash_show: 0.0,
             axolotl_held_lead: false,
@@ -5138,6 +5150,45 @@ impl State {
         );
         self.gui.push_chat("beacon");
         let _ = self.advancements.unlock("beacon");
+    }
+
+    fn rebuild_conduit_aura(&mut self) {
+        let Some(at) = self.conduit_at else {
+            self.conduit_buf = None;
+            self.conduit_count = 0;
+            return;
+        };
+        if !crate::conduit::frame_ready(&self.world, at) {
+            self.conduit_at = None;
+            self.conduit_buf = None;
+            self.conduit_count = 0;
+            return;
+        }
+        let vertices = crate::conduit::aura_vertices(at);
+        self.conduit_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("conduit_aura"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.conduit_count = vertices.len() as u32;
+    }
+
+    /// Power a placed conduit when a prismarine ring sits in water.
+    fn try_activate_conduit(&mut self, at: [i32; 3]) {
+        if !crate::conduit::frame_ready(&self.world, at) {
+            self.gui.push_chat("need a prismarine ring");
+            return;
+        }
+        self.conduit_at = Some(at);
+        self.rebuild_conduit_aura();
+        self.play_world(
+            crate::audio::Sound::Bubble,
+            [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5],
+        );
+        self.gui.push_chat("conduit");
+        let _ = self.advancements.unlock("conduit");
     }
 
     /// After a wither skull lands, check for three-in-a-row on soul sand.
@@ -9101,6 +9152,103 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Crafted conduit in a prismarine water ring with aura, then quit with a PNG.
+    pub fn arm_conduit_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (sx, sz) = rebuild_world::SHIPWRECK;
+        let chunk_x = sx.div_euclid(16);
+        let chunk_z = sz.div_euclid(16);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(chunk_x, chunk_z));
+        self.clock.set_time_of_day(0.35);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cy, cz) = (sx + 2, 2, sz + 2);
+        let mut changes = Vec::new();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: cy - 1,
+                    z: cz + dz,
+                    block: Block::new("sand", 0),
+                });
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: cy,
+                    z: cz + dz,
+                    block: Block::new("water", 0),
+                });
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: cy + 1,
+                    z: cz + dz,
+                    block: Block::new("water", 0),
+                });
+            }
+        }
+        // Prismarine ring around the conduit.
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)] {
+            changes.push(CellChange {
+                x: cx + dx,
+                y: cy,
+                z: cz + dz,
+                block: Block::new("prismarine", 0),
+            });
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: cy,
+            z: cz,
+            block: Block::new("conduit", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.try_activate_conduit([cx, cy, cz]);
+        self.conduit_left = crate::conduit::BUFF_SECS;
+        self.conduit_show = 1.0;
+        self.water_sub = 1.0;
+        self.was_wet = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("conduit");
+        self.gui.push_chat("conduit power");
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        // Stand in open water looking at the conduit + prismarine ring.
+        let eye = glam::Vec3::new(cx as f32 + 4.2, cy as f32 + 1.55, cz as f32 + 0.2);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("conduit");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Crafted beacon on an iron pad with a rising beam, then quit with a PNG.
     pub fn arm_beacon_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -11538,6 +11686,9 @@ impl State {
             }
             if cell.block.id == "beacon" && before.id != "beacon" {
                 self.try_activate_beacon([cell.x, cell.y, cell.z]);
+            }
+            if cell.block.id == "conduit" && before.id != "conduit" {
+                self.try_activate_conduit([cell.x, cell.y, cell.z]);
             }
             if let Some(slot) = pending.and_then(|edit| edit.slot) {
                 let buffer_level_changed = is_buffer(cell.block.id)
@@ -26124,6 +26275,8 @@ impl State {
         self.strength_show = 0.0;
         self.speed_left = 0.0;
         self.speed_show = 0.0;
+        self.conduit_left = 0.0;
+        self.conduit_show = 0.0;
         self.air_peak = self.camera.eye.y;
         self.boat.dismount();
         self.pig.dismount();
@@ -26871,6 +27024,37 @@ impl State {
             };
         } else {
             self.speed_show = (self.speed_show - dt * 4.0).max(0.0);
+        }
+        if let Some(at) = self.conduit_at {
+            if crate::conduit::frame_ready(&self.world, at) {
+                let feet = [
+                    self.camera.eye.x,
+                    self.camera.eye.y - body::EYE_HEIGHT,
+                    self.camera.eye.z,
+                ];
+                let wet = body::in_water(self.camera.eye, &self.world)
+                    || body::eye_in_water(self.camera.eye, &self.world);
+                if wet && crate::conduit::in_range(at, feet) {
+                    if self.conduit_left <= 0.05 {
+                        self.gui.push_chat("conduit power");
+                    }
+                    self.conduit_left = crate::conduit::BUFF_SECS;
+                    self.conduit_show = 1.0;
+                }
+            } else {
+                self.conduit_at = None;
+                self.rebuild_conduit_aura();
+            }
+        }
+        if self.conduit_left > 0.0 {
+            self.conduit_left = (self.conduit_left - dt).max(0.0);
+            self.conduit_show = if self.conduit_left > 0.8 {
+                1.0
+            } else {
+                (self.conduit_left / 0.8).clamp(0.0, 1.0)
+            };
+        } else {
+            self.conduit_show = (self.conduit_show - dt * 4.0).max(0.0);
         }
         self.slot_punch = (self.slot_punch - dt * 6.0).max(0.0);
         self.swap_kick = (self.swap_kick - dt * 10.0).max(0.0);
@@ -28036,7 +28220,11 @@ impl State {
             night * 0.85,
         );
         // Underwater: blue-green tint and a short fog so the pool reads as submerged.
-        let sub = self.water_sub.clamp(0.0, 1.0);
+        // Conduit power clears most of the veil for "breathing / vision".
+        let mut sub = self.water_sub.clamp(0.0, 1.0);
+        if self.conduit_left > 0.0 {
+            sub *= 1.0 - crate::conduit::VISION_CLEAR;
+        }
         if sub > 0.0 {
             let water_sky = [0.04, 0.22, 0.32];
             let water_fog = [0.06, 0.28, 0.38];
@@ -28418,6 +28606,14 @@ impl State {
                     pass.draw(0..self.beacon_count, 0..1);
                 }
             }
+            if let Some(conduit) = &self.conduit_buf {
+                if self.conduit_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, conduit.slice(..));
+                    pass.draw(0..self.conduit_count, 0..1);
+                }
+            }
             if let Some(bee) = &self.bee_buf {
                 if self.bee_count >= 3 {
                     pass.set_pipeline(&self.pipeline);
@@ -28602,6 +28798,9 @@ impl State {
         }
         if self.speed_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::speed_quads(gui_w, gui_h, self.speed_show));
+        }
+        if self.conduit_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::conduit_quads(gui_w, gui_h, self.conduit_show));
         }
         if self.leash_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::leash_quads(gui_w, gui_h, self.leash_show));

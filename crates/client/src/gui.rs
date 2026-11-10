@@ -6236,6 +6236,10 @@ pub fn speed_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "speed")
 }
 
+pub fn conduit_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "conduit")
+}
+
 pub fn leash_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "leash")
 }
