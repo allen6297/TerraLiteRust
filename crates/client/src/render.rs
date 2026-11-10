@@ -7841,6 +7841,41 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Stairs overlook with full health/hunger + worn armor plates, then quit with a PNG.
+    pub fn arm_hud_plates_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.38);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.hearts = body::HEARTS;
+        self.hunger = body::Hunger::full();
+        let _ = self.armor.equip(0, "leather_cap");
+        let _ = self.armor.equip(1, "leather_tunic");
+        let _ = self.armor.equip(2, "leather_boots");
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        // Burn off leftover chat so the plate stack stays the subject.
+        self.gui.age_chat(60.0);
+
+        let eye = glam::Vec3::new(8.5, 3.2 + body::EYE_HEIGHT, 14.2);
+        let target = glam::Vec3::new(8.5, 2.0, 8.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Open inventory with a pinned rich tip (iron pick), then quit with a PNG.
     pub fn arm_tips_shot(&mut self, path: std::path::PathBuf) {
         self.creative_shot_path = Some(path);

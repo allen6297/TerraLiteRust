@@ -65,8 +65,10 @@ const WELL: [f32; 3] = [0.02, 0.025, 0.04];
 const LIP: [f32; 3] = [0.30, 0.31, 0.36];
 /// A flat plate behind a title so the letters stay readable on a textured header.
 const TITLE_PLATE: [f32; 3] = [0.07, 0.08, 0.11];
-/// The plate under hearts and hunger.
-const TRAY: [f32; 3] = [0.04, 0.045, 0.06];
+/// The plate under hearts and hunger (inventory-matched dark well).
+const TRAY: [f32; 3] = [0.05, 0.055, 0.08];
+/// Thin rim around a status plate (matches inventory slot edge tone).
+const TRAY_EDGE: [f32; 3] = [0.22, 0.23, 0.28];
 /// A light corner on a full heart.
 const PIP: [f32; 3] = [1.0, 0.62, 0.55];
 /// The red edge drawn while a hit is still fading.
@@ -5951,11 +5953,13 @@ pub fn sleep_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
 /// Left inset for the HUD status cluster (hearts / hunger / armor).
 const HUD_STATUS_LEFT: f32 = 16.0;
 /// Gap between the hotbar chrome and the stacked status plates.
-const HUD_STATUS_GAP: f32 = 10.0;
+const HUD_STATUS_GAP: f32 = 12.0;
 /// Vertical pitch from one status row to the next.
-const HUD_STATUS_ROW: f32 = 24.0;
-const HUD_STATUS_PIP: f32 = 10.0;
-const HUD_STATUS_STEP: f32 = 14.0;
+const HUD_STATUS_ROW: f32 = 26.0;
+const HUD_STATUS_PIP: f32 = 11.0;
+const HUD_STATUS_STEP: f32 = 15.0;
+const HUD_STATUS_PAD_X: f32 = 7.0;
+const HUD_STATUS_PAD_Y: f32 = 5.0;
 
 /// Bottom of the lower status row (hunger), clear above the hotbar.
 fn status_hunger_bottom() -> f32 {
@@ -5970,6 +5974,24 @@ fn status_armor_bottom() -> f32 {
     status_health_bottom() + HUD_STATUS_ROW
 }
 
+/// Dark well + light top lip + thin rim — same language as inventory chrome.
+fn status_plate_chrome(width: f32, height: f32, left: f32, bottom: f32, span: f32) -> Vec<Quad> {
+    let x0 = left;
+    let y0 = bottom - HUD_STATUS_PAD_Y;
+    let x1 = left + HUD_STATUS_PAD_X + span + HUD_STATUS_PAD_X;
+    let y1 = bottom + HUD_STATUS_PIP + HUD_STATUS_PAD_Y;
+    vec![
+        pixel_quad(width, height, x0, y0, x1, y1, TRAY),
+        // Outer rim.
+        pixel_quad(width, height, x0, y1 - 1.0, x1, y1, TRAY_EDGE),
+        pixel_quad(width, height, x0, y0, x1, y0 + 1.0, TRAY_EDGE),
+        pixel_quad(width, height, x0, y0, x0 + 1.0, y1, TRAY_EDGE),
+        pixel_quad(width, height, x1 - 1.0, y0, x1, y1, TRAY_EDGE),
+        // Light top lip inside the rim.
+        pixel_quad(width, height, x0 + 1.0, y1 - 3.0, x1 - 1.0, y1 - 1.0, LIP),
+    ]
+}
+
 fn armor_quads(width: f32, height: f32, worn: [Option<&str>; 3]) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
@@ -5982,17 +6004,9 @@ fn armor_quads(width: f32, height: f32, worn: [Option<&str>; 3]) -> Vec<Quad> {
     let bottom = status_armor_bottom();
     let span = 3.0 * HUD_STATUS_STEP;
     let left = HUD_STATUS_LEFT;
-    let mut quads = vec![pixel_quad(
-        width,
-        height,
-        left,
-        bottom - 6.0,
-        left + 4.0 + span,
-        bottom + 16.0,
-        TRAY,
-    )];
+    let mut quads = status_plate_chrome(width, height, left, bottom, span);
     for (index, piece) in worn.iter().enumerate() {
-        let x = left + 8.0 + index as f32 * HUD_STATUS_STEP;
+        let x = left + HUD_STATUS_PAD_X + index as f32 * HUD_STATUS_STEP;
         let color = piece.map(|id| palette::color(id, 0)).unwrap_or(empty);
         quads.push(pixel_quad(
             width,
@@ -6098,24 +6112,15 @@ fn health_quads(width: f32, height: f32, hearts: i32) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
-    let mut quads = Vec::new();
-    let full = [0.75, 0.16, 0.14];
-    let empty = [0.22, 0.08, 0.08];
+    let full = [0.78, 0.18, 0.16];
+    let empty = [0.20, 0.08, 0.08];
     // Bottom-left stack: health sits above hunger, both clear of the hotbar.
     let bottom = status_health_bottom();
     let span = crate::body::HEARTS as f32 * HUD_STATUS_STEP;
     let left = HUD_STATUS_LEFT;
-    quads.push(pixel_quad(
-        width,
-        height,
-        left,
-        bottom - 6.0,
-        left + 4.0 + span,
-        bottom + 16.0,
-        TRAY,
-    ));
+    let mut quads = status_plate_chrome(width, height, left, bottom, span);
     for index in 0..crate::body::HEARTS {
-        let x = left + 8.0 + index as f32 * HUD_STATUS_STEP;
+        let x = left + HUD_STATUS_PAD_X + index as f32 * HUD_STATUS_STEP;
         let filled = index < hearts;
         let color = if filled { full } else { empty };
         quads.push(pixel_quad(
@@ -6133,8 +6138,8 @@ fn health_quads(width: f32, height: f32, hearts: i32) -> Vec<Quad> {
                 height,
                 x + 6.0,
                 bottom + 6.0,
-                x + 9.0,
-                bottom + 9.0,
+                x + 10.0,
+                bottom + 10.0,
                 PIP,
             ));
         }
@@ -6146,24 +6151,15 @@ fn hunger_quads(width: f32, height: f32, food: i32) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
-    let mut quads = Vec::new();
-    let full = [0.86, 0.62, 0.16];
-    let empty = [0.28, 0.18, 0.08];
+    let full = [0.90, 0.66, 0.18];
+    let empty = [0.26, 0.16, 0.08];
     // Bottom-left with health (GUI plan L10); was previously bottom-right.
     let bottom = status_hunger_bottom();
     let span = crate::body::HUNGER as f32 * HUD_STATUS_STEP;
     let left = HUD_STATUS_LEFT;
-    quads.push(pixel_quad(
-        width,
-        height,
-        left,
-        bottom - 6.0,
-        left + 4.0 + span,
-        bottom + 16.0,
-        TRAY,
-    ));
+    let mut quads = status_plate_chrome(width, height, left, bottom, span);
     for index in 0..crate::body::HUNGER {
-        let x = left + 8.0 + index as f32 * HUD_STATUS_STEP;
+        let x = left + HUD_STATUS_PAD_X + index as f32 * HUD_STATUS_STEP;
         let color = if index < food { full } else { empty };
         quads.push(pixel_quad(
             width,
@@ -6174,6 +6170,18 @@ fn hunger_quads(width: f32, height: f32, food: i32) -> Vec<Quad> {
             bottom + HUD_STATUS_PIP,
             color,
         ));
+        if index < food {
+            // Small highlight so filled pips read like inventory slot lips.
+            quads.push(pixel_quad(
+                width,
+                height,
+                x + 2.0,
+                bottom + HUD_STATUS_PIP - 3.0,
+                x + HUD_STATUS_PIP - 2.0,
+                bottom + HUD_STATUS_PIP - 1.0,
+                DETAIL,
+            ));
+        }
     }
     quads
 }
@@ -8810,9 +8818,9 @@ mod tests {
 
     #[test]
     fn hunger_and_health_sit_bottom_left_and_empties() {
-        let heart = [0.75, 0.16, 0.14];
-        let full = [0.86, 0.62, 0.16];
-        let empty = [0.28, 0.18, 0.08];
+        let heart = [0.78, 0.18, 0.16];
+        let full = [0.90, 0.66, 0.18];
+        let empty = [0.26, 0.16, 0.08];
         let bag = hotbar::Bag::new();
         let fed = ui_quads(
             1280.0,
@@ -8854,6 +8862,14 @@ mod tests {
         assert!(
             fed.iter().filter(|quad| quad.color == TRAY).count() >= 2,
             "hearts and hunger each sit on a plate"
+        );
+        assert!(
+            fed.iter().filter(|quad| quad.color == LIP).count() >= 2,
+            "each status plate keeps an inventory-style top lip"
+        );
+        assert!(
+            fed.iter().filter(|quad| quad.color == TRAY_EDGE).count() >= 8,
+            "each status plate keeps a thin rim"
         );
         let trays: Vec<_> = fed.iter().filter(|quad| quad.color == TRAY).collect();
         assert!(
