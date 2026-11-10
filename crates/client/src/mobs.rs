@@ -1395,6 +1395,8 @@ const WOLF_HOME: [f32; 3] = [8.0, 1.0, 8.0];
 const HUNT: f32 = 8.0;
 /// How far behind the player a tamed wolf is content to walk.
 const HEEL: f32 = 2.0;
+/// Pad home for tips and shots.
+pub const WOLF_PAD: (i32, i32) = (8, 8);
 
 pub struct Wolf {
     origin: [f32; 3],
@@ -1423,6 +1425,12 @@ impl Wolf {
         self.origin
     }
 
+    /// Put the body somewhere for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.loose = 0;
+    }
+
     pub fn tamed(&self) -> bool {
         self.tamed
     }
@@ -1442,7 +1450,8 @@ impl Wolf {
         self.sitting
     }
 
-    /// Sit or stand. False when the wolf is still wild. True when it sits.
+    /// Empty-hand companion toggle: sit or stand-and-follow.
+    /// False when the wolf is still wild. True when it sits.
     pub fn sit(&mut self) -> bool {
         if !self.tamed {
             return false;
@@ -1555,7 +1564,7 @@ impl Wolf {
 
     pub fn vertices(&self) -> Vec<Vertex> {
         let [x, y, z] = self.origin;
-        let drop = if self.sitting { 0.12 } else { 0.0 };
+        let drop = if self.sitting { 0.18 } else { 0.0 };
         let mut out = Vec::new();
         push_box(
             &mut out,
@@ -1568,6 +1577,20 @@ impl Wolf {
             [x + 0.22, y + 0.42 - drop, z],
             [0.12, 0.12, 0.1],
             [0.58, 0.56, 0.54],
+        );
+        // Ears perk when following; flop a little when sitting.
+        let ear_y = if self.sitting { 0.06 } else { 0.1 };
+        push_box(
+            &mut out,
+            [x + 0.18, y + 0.48 - drop, z - 0.06],
+            [0.04, ear_y, 0.03],
+            [0.4, 0.4, 0.44],
+        );
+        push_box(
+            &mut out,
+            [x + 0.18, y + 0.48 - drop, z + 0.06],
+            [0.04, ear_y, 0.03],
+            [0.4, 0.4, 0.44],
         );
         push_box(
             &mut out,
@@ -4366,6 +4389,14 @@ mod tests {
         assert!(wolf.tamed());
         assert!(!wolf.feed());
         assert!(wolf.vertices().iter().any(|vertex| vertex.color[0] > 0.7));
+        // Empty-hand companion: sit stays put, stand follows again.
+        assert!(wolf.sit());
+        assert!(wolf.sitting());
+        let parked = wolf.origin();
+        wolf.tick(30, [home[0] + 10.0, home[2]], None, &ground);
+        assert!((wolf.origin()[0] - parked[0]).abs() < 0.05);
+        assert!(!wolf.sit());
+        assert!(!wolf.sitting());
         wolf.tick(40, [home[0] + 10.0, home[2]], None, &ground);
         assert!(wolf.origin()[0] > home[0] + 2.0);
         let mut bit = false;
