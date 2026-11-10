@@ -13,9 +13,10 @@ use bytemuck::bytes_of;
 use rebuild_world::{
     BAG_SLOTS, Block, CellChange, Cluster, Emitter, FILL_EMBER, FILL_NONE, FILL_WATER, Hooks, Pack,
     PlayerBox, ScriptView, TAG_BREAK, TAG_PLACE, apply_changes, apply_compound_seeps,
-    compound_accepts, compound_host, encode_bag, encode_break, encode_chat, encode_chest,
-    encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of, is_pipe,
-    is_wire, load_dir, plan_compound_seeps, shape_of,
+    apply_pump_pushes, compound_accepts_meta, compound_host, encode_bag, encode_break, encode_chat,
+    encode_chest, encode_hotbar, encode_place, encode_pose, fill_kind, fill_name, held_light_of,
+    is_pipe, is_pump, is_wire, load_dir, plan_compound_seeps, plan_pump_pushes, pump_meta, pump_on,
+    shape_of,
 };
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -1036,6 +1037,8 @@ pub struct State {
     told_furnace_heat: bool,
     /// Once: holding bricks or clay at a crafting table with both on the bar.
     told_shape_pot: bool,
+    /// Once: look at a pump — tip to toggle.
+    told_pump: bool,
     /// Eased cave-cover drip mix, `0` open through `1` deep under solid.
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
@@ -1990,6 +1993,7 @@ impl State {
             told_blast_heat: false,
             told_furnace_heat: false,
             told_shape_pot: false,
+            told_pump: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
             cricket_mix: 0.0,
@@ -3248,6 +3252,7 @@ impl State {
                 | "target"
                 | "trial_spawner"
                 | "copper_bulb"
+                | "pump"
         ) || Pack::builtin().is_block_entity(id)
     }
 
@@ -3260,6 +3265,10 @@ impl State {
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
         if block.id == "bed" {
             self.sleep_in_bed(hit.block);
+            return;
+        }
+        if block.id == "pump" {
+            self.toggle_pump(hit.block, block.metadata);
             return;
         }
         if hinge(block.id) {
@@ -3453,6 +3462,43 @@ impl State {
         );
     }
 
+    /// Power bit (8) on a pump — facing bits stay. Off is a closed valve.
+    fn toggle_pump(&mut self, at: [i32; 3], metadata: u8) {
+        let next = metadata ^ 8;
+        self.gui.push_chat(if pump_on(next) { "pump on" } else { "pump off" });
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        let current = self.world.block_at(at[0], at[1], at[2]);
+        self.send_edit(
+            encode_place(
+                at[0],
+                at[1],
+                at[2],
+                Block::new("pump", next).with_fill(current.fill),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            None,
+        );
+    }
+
+    /// Right-click a pump to toggle when not holding a block to place.
+    fn try_use_pump(&mut self) -> bool {
+        if self.hotbar.selected_block().is_some() {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        if block.id != "pump" {
+            return false;
+        }
+        self.toggle_pump(hit.block, block.metadata);
+        true
+    }
+
     fn sleep_in_bed(&mut self, at: [i32; 3]) {
         if !self.note_respawn("bed", at) {
             self.gui.push_chat("awake");
@@ -3616,6 +3662,26 @@ impl State {
         }
         self.told_blast_heat = true;
         self.gui.push_chat("use to blast");
+    }
+
+    /// Once: look at a pump — tip to toggle power / valve.
+    fn tell_pump(&mut self) {
+        if self.told_pump || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "pump"
+        {
+            return;
+        }
+        self.told_pump = true;
+        self.gui.push_chat("use pump to toggle");
     }
 
     /// Once: hold clay, look at a furnace — tip to use it.
@@ -4819,7 +4885,7 @@ impl State {
     }
 
     /// Slow pipe seep: copy fill into one nearby empty host each pulse.
-    /// Dedicated pipe/wire runs pulse faster so conduits feel snappy.
+    /// Powered pumps push first; pipe/wire/pump runs pulse faster.
     fn tick_compound_flow(&mut self, dt: f32) {
         if !self.playing || self.menu.is_open() || self.dead {
             return;
@@ -4838,14 +4904,16 @@ impl State {
             eye.y.floor() as i32,
             eye.z.floor() as i32,
         ];
-        let Some(cell) = plan_compound_seeps(&self.world, focus, 20, 1)
+        let cell = plan_pump_pushes(&self.world, focus, 20, 1)
             .into_iter()
             .next()
-        else {
+            .or_else(|| plan_compound_seeps(&self.world, focus, 20, 1).into_iter().next());
+        let Some(cell) = cell else {
             self.compound_flow_wait = 0.42;
             return;
         };
-        let conduit = is_pipe(cell.block.id) || is_wire(cell.block.id);
+        let conduit =
+            is_pipe(cell.block.id) || is_wire(cell.block.id) || is_pump(cell.block.id);
         self.compound_flow_wait = if conduit { 0.22 } else { 0.42 };
         let player = PlayerBox {
             min: [1.0e6, 1.0e6, 1.0e6],
@@ -4879,7 +4947,7 @@ impl State {
         let host = self
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
-        if host.fill != FILL_NONE || !compound_accepts(host.id, fill) {
+        if host.fill != FILL_NONE || !compound_accepts_meta(host.id, host.metadata, fill) {
             // Let water_bucket fall through to pour a full water cell.
             return false;
         }
@@ -5467,6 +5535,9 @@ impl State {
         if self.try_script_use() {
             return;
         }
+        if self.try_use_pump() {
+            return;
+        }
         if self.try_spawn_egg() {
             return;
         }
@@ -5535,6 +5606,10 @@ impl State {
             || block.id == "lightning_rod"
         {
             block = Block::new(block.id, look::torch_facing(hit.axis, hit.normal));
+        }
+        if block.id == "pump" {
+            // Face along the look — pushes away from the player. Starts off (valve).
+            block = Block::new("pump", pump_meta(pump_facing_from_look(self.camera.forward()), false));
         }
         if block.id == "painting"
             || block.id == "vine"
@@ -6674,6 +6749,7 @@ impl State {
         let flow = name.contains("flow");
         let pipes = name.contains("pipe") || name.contains("wire");
         let connected = name.contains("connected");
+        let pump_shot = name.contains("pump") || name.contains("valve");
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
         self.playing = true;
@@ -6685,9 +6761,9 @@ impl State {
         self.guests.clear();
         self.rebuild_zombie();
         self.rebuild_guests();
-        // Ember / wire shots at night so fill light reads; water stays day.
+        // Ember / wire / pump shots at night so fill light reads; water stays day.
         self.clock
-            .set_time_of_day(if ember || pipes { 0.88 } else { 0.42 });
+            .set_time_of_day(if ember || pipes || pump_shot { 0.88 } else { 0.42 });
         let light = self.sun_light();
         self.wanted_sun = light.direction;
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
@@ -6714,7 +6790,64 @@ impl State {
                 }
             }
         }
-        if pipes {
+        if pump_shot {
+            // Intake grate → pipe → powered pump (+X) → empty pipe outlet.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz,
+                block: Block::new("pump", pump_meta(0, true)),
+            });
+            changes.push(CellChange {
+                x: gx + 3,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0),
+            });
+            changes.push(CellChange {
+                x: gx + 4,
+                y: gy,
+                z: gz,
+                block: Block::new("pipe", 0),
+            });
+            // Closed pump on a parallel line — valve shut, no push.
+            changes.push(CellChange {
+                x: gx,
+                y: gy,
+                z: gz + 2,
+                block: Block::new("copper_grate", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 1,
+                y: gy,
+                z: gz + 2,
+                block: Block::new("pipe", 0).with_fill(FILL_WATER),
+            });
+            changes.push(CellChange {
+                x: gx + 2,
+                y: gy,
+                z: gz + 2,
+                block: Block::new("pump", pump_meta(0, false)),
+            });
+            changes.push(CellChange {
+                x: gx + 3,
+                y: gy,
+                z: gz + 2,
+                block: Block::new("pipe", 0),
+            });
+        } else if pipes {
             if connected {
                 // Water L-bend + T, ember wire corner — shows junction shapes.
                 changes.push(CellChange {
@@ -6861,7 +6994,15 @@ impl State {
             });
         }
         apply_changes(&mut self.world, &changes);
-        if pipes {
+        if pump_shot {
+            for _ in 0..3 {
+                let _ = apply_pump_pushes(&mut self.world, [gx + 2, gy, gz], 8, 1);
+                let _ = apply_compound_seeps(&mut self.world, [gx + 3, gy, gz], 8, 1);
+                // Closed line should stay dry past the valve.
+                let _ = apply_pump_pushes(&mut self.world, [gx + 2, gy, gz + 2], 8, 1);
+                let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz + 2], 8, 1);
+            }
+        } else if pipes {
             if connected {
                 for _ in 0..4 {
                     let _ = apply_compound_seeps(&mut self.world, [gx + 2, gy, gz], 8, 1);
@@ -6885,7 +7026,18 @@ impl State {
         self.chunk_bake.touch(gx + 4, gz);
         self.chunk_bake.touch(gx + 4, gz + 2);
         self.chunk_bake.touch(gx + 2, gz - 2);
-        let (eye, focus) = if pipes && connected {
+        let (eye, focus) = if pump_shot {
+            let _ = self.hotbar.select_digit(1);
+            let _ = self.hotbar.give_stack("water_bucket");
+            (
+                glam::Vec3::new(
+                    (gx + 2) as f32 + 0.5,
+                    gy as f32 + 2.1 + body::EYE_HEIGHT,
+                    gz as f32 - 2.6,
+                ),
+                glam::Vec3::new((gx + 2) as f32 + 0.5, gy as f32 + 0.55, gz as f32 + 0.7),
+            )
+        } else if pipes && connected {
             let _ = self.hotbar.select_digit(1);
             let _ = self.hotbar.give_stack("water_bucket");
             (
@@ -11377,6 +11529,7 @@ impl State {
         self.tick_compound_flow(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
+        self.tell_pump();
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();
@@ -13422,6 +13575,30 @@ fn pot_plant(metadata: u8, holding_flower: bool) -> PotPlant {
         PotPlant::Plant
     } else {
         PotPlant::NeedFlower
+    }
+}
+
+/// Dominant look axis → pump facing bits (`0..=5`).
+fn pump_facing_from_look(forward: glam::Vec3) -> u8 {
+    let ax = forward.x.abs();
+    let ay = forward.y.abs();
+    let az = forward.z.abs();
+    if ax >= ay && ax >= az {
+        if forward.x >= 0.0 {
+            0
+        } else {
+            1
+        }
+    } else if ay >= ax && ay >= az {
+        if forward.y >= 0.0 {
+            2
+        } else {
+            3
+        }
+    } else if forward.z >= 0.0 {
+        4
+    } else {
+        5
     }
 }
 

@@ -8,7 +8,7 @@
 
 use glam::Vec3;
 use rebuild_world::{
-    Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts, compound_host,
+    Cluster, FILL_EMBER, FILL_NONE, FILL_WATER, Pack, compound_accepts_meta, compound_host,
     conduit_link_mask, conduit_shell_boxes, conduit_span, for_each_collider, shape_of,
 };
 
@@ -36,14 +36,14 @@ pub fn selection_lines(
         return Vec::new();
     };
     let block = world.block_at(target.block[0], target.block[1], target.block[2]);
-    let color = outline_color(held, block.id, block.fill);
+    let color = outline_color(held, block.id, block.metadata, block.fill);
     let origin = Vec3::new(
         target.block[0] as f32,
         target.block[1] as f32,
         target.block[2] as f32,
     );
     let mut lines = Vec::new();
-    if block.id == "pipe" || block.id == "wire" {
+    if block.id == "pipe" || block.id == "wire" || block.id == "pump" {
         let links = conduit_link_mask(
             world,
             block.id,
@@ -52,7 +52,8 @@ pub fn selection_lines(
             target.block[2],
         );
         let (lo, hi) = conduit_span(block.id);
-        let boxes = conduit_shell_boxes(lo, hi, links, block.id == "pipe");
+        let caps = block.id == "pipe" || block.id == "pump";
+        let boxes = conduit_shell_boxes(lo, hi, links, caps);
         if boxes.is_empty() {
             return Vec::new();
         }
@@ -79,7 +80,7 @@ pub fn selection_lines(
     lines
 }
 
-fn outline_color(held: Option<&str>, host_id: &str, fill: u8) -> [f32; 3] {
+fn outline_color(held: Option<&str>, host_id: &str, metadata: u8, fill: u8) -> [f32; 3] {
     let Some(held) = held else {
         return WHITE;
     };
@@ -98,7 +99,7 @@ fn outline_color(held: Option<&str>, host_id: &str, fill: u8) -> [f32; 3] {
         "ember" => FILL_EMBER,
         _ => return WHITE,
     };
-    if !compound_accepts(host_id, want) {
+    if !compound_accepts_meta(host_id, metadata, want) {
         return WHITE;
     }
     if fill == FILL_NONE || fill == want {
@@ -255,34 +256,40 @@ mod tests {
     #[test]
     fn holding_water_bucket_tints_an_empty_grate_cyan() {
         assert_eq!(
-            outline_color(Some("water_bucket"), "copper_grate", FILL_NONE),
+            outline_color(Some("water_bucket"), "copper_grate", 0, FILL_NONE),
             CYAN
         );
         assert_eq!(
-            outline_color(Some("ember_charge"), "copper_grate", FILL_NONE),
+            outline_color(Some("ember_charge"), "copper_grate", 0, FILL_NONE),
             AMBER
         );
         assert_eq!(
-            outline_color(Some("drain_sponge"), "copper_grate", FILL_WATER),
+            outline_color(Some("drain_sponge"), "copper_grate", 0, FILL_WATER),
             LIME
         );
-        assert_eq!(outline_color(Some("cobblestone"), "copper_grate", FILL_NONE), WHITE);
         assert_eq!(
-            outline_color(Some("water_bucket"), "fence", FILL_NONE),
+            outline_color(Some("cobblestone"), "copper_grate", 0, FILL_NONE),
+            WHITE
+        );
+        assert_eq!(outline_color(Some("water_bucket"), "fence", 0, FILL_NONE), CYAN);
+        assert_eq!(
+            outline_color(Some("ember_charge"), "leaves", 0, FILL_NONE),
+            AMBER
+        );
+        assert_eq!(
+            outline_color(Some("drain_sponge"), "glass", 0, FILL_EMBER),
+            LIME
+        );
+        assert_eq!(outline_color(Some("water_bucket"), "pipe", 0, FILL_NONE), CYAN);
+        assert_eq!(outline_color(Some("ember_charge"), "pipe", 0, FILL_NONE), WHITE);
+        assert_eq!(outline_color(Some("ember_charge"), "wire", 0, FILL_NONE), AMBER);
+        assert_eq!(outline_color(Some("water_bucket"), "wire", 0, FILL_NONE), WHITE);
+        // Closed pump rejects fill highlight; powered accepts.
+        assert_eq!(outline_color(Some("water_bucket"), "pump", 0, FILL_NONE), WHITE);
+        assert_eq!(
+            outline_color(Some("water_bucket"), "pump", 8, FILL_NONE),
             CYAN
         );
-        assert_eq!(
-            outline_color(Some("ember_charge"), "leaves", FILL_NONE),
-            AMBER
-        );
-        assert_eq!(
-            outline_color(Some("drain_sponge"), "glass", FILL_EMBER),
-            LIME
-        );
-        assert_eq!(outline_color(Some("water_bucket"), "pipe", FILL_NONE), CYAN);
-        assert_eq!(outline_color(Some("ember_charge"), "pipe", FILL_NONE), WHITE);
-        assert_eq!(outline_color(Some("ember_charge"), "wire", FILL_NONE), AMBER);
-        assert_eq!(outline_color(Some("water_bucket"), "wire", FILL_NONE), WHITE);
     }
 
     #[test]

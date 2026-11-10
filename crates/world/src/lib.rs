@@ -51,8 +51,9 @@ pub use changes::{
     write_player,
 };
 pub use chunk::{
-    Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, compound_accepts, compound_host,
-    conduit_links, fill_kind, fill_name, is_pipe, is_wire,
+    Block, Chunk, FILL_EMBER, FILL_NONE, FILL_WATER, compound_accepts, compound_accepts_meta,
+    compound_host, conduit_links, fill_kind, fill_name, is_pipe, is_pump, is_wire, pump_dir,
+    pump_meta, pump_on,
 };
 pub use cluster::{Cluster, load_cluster_from_path, load_cluster_from_region};
 pub use edit::{Edit, PlayerBox, apply};
@@ -62,7 +63,9 @@ pub use conduit::{
     edge_tube as conduit_edge_tube, fill_span as conduit_fill_span, link_mask_at as conduit_link_mask,
     shell_boxes as conduit_shell_boxes, span as conduit_span,
 };
-pub use flow::{apply_compound_seeps, plan_compound_seeps};
+pub use flow::{
+    apply_compound_seeps, apply_pump_pushes, plan_compound_seeps, plan_pump_pushes,
+};
 pub use hooks::{
     AfterBreak, AfterPlace, BeforeBreak, BeforePlace, BreakVerdict, EntityClock, Hooks,
     PLAYER_SPAWN, TestHook, TestHookEvent, apply_authoritative,

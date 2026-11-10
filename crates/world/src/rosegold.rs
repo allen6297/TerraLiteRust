@@ -2037,7 +2037,7 @@ fn answer(
                 return Ok(Answer::Bool(false));
             };
             if fill != crate::chunk::FILL_NONE
-                && !crate::chunk::compound_accepts(current.id, fill)
+                && !crate::chunk::compound_accepts_meta(current.id, current.metadata, fill)
             {
                 return Ok(Answer::Bool(false));
             }

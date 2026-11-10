@@ -1,13 +1,15 @@
 //! Slow compound fill seep between adjacent host blocks.
 //!
 //! Water and ember copy into neighboring empty compound hosts (pipe / conduit
-//! feel). One pulse plans a small number of spreads near a focus so a large
-//! world stays cheap.
+//! feel). Pumps gate and push one-way when powered. One pulse plans a small
+//! number of spreads near a focus so a large world stays cheap.
 
 use std::collections::HashSet;
 
 use crate::changes::CellChange;
-use crate::chunk::{FILL_EMBER, FILL_NONE, compound_accepts, is_pipe, is_wire};
+use crate::chunk::{
+    FILL_EMBER, FILL_NONE, compound_accepts_meta, is_pipe, is_pump, is_wire, pump_dir, pump_on,
+};
 use crate::cluster::Cluster;
 
 /// Water: down first, then horizontal, then up.
@@ -40,6 +42,39 @@ fn neighbors_for(fill: u8) -> &'static [[i32; 3]; 6] {
 /// Max filled hosts considered in one pulse near the focus.
 const SOURCE_CAP: usize = 32;
 
+fn accepts(block: crate::chunk::Block, fill: u8) -> bool {
+    compound_accepts_meta(block.id, block.metadata, fill)
+}
+
+/// True when fill may move from `src` into empty `dest` (pump one-way rules).
+fn seep_allowed(
+    src: crate::chunk::Block,
+    dest: crate::chunk::Block,
+    dx: i32,
+    dy: i32,
+    dz: i32,
+) -> bool {
+    if dest.fill != FILL_NONE || !accepts(dest, src.fill) {
+        return false;
+    }
+    if is_pump(src.id) {
+        if !pump_on(src.metadata) {
+            return false;
+        }
+        let dir = pump_dir(src.metadata);
+        return [dx, dy, dz] == dir;
+    }
+    if is_pump(dest.id) {
+        if !pump_on(dest.metadata) {
+            return false;
+        }
+        // Enter only from the intake (opposite facing).
+        let dir = pump_dir(dest.metadata);
+        return [dx, dy, dz] == dir;
+    }
+    true
+}
+
 /// Plan fill seeps into adjacent empty compound hosts around `focus`.
 ///
 /// Sources keep their fill (pipe pressure). Destinations that would be claimed
@@ -67,7 +102,7 @@ pub fn plan_compound_seeps(
                 if sources.len() >= SOURCE_CAP {
                     return;
                 }
-                if !compound_accepts(block.id, block.fill) {
+                if !accepts(block, block.fill) {
                     return;
                 }
                 if (x - focus[0]).abs() > radius
@@ -76,14 +111,15 @@ pub fn plan_compound_seeps(
                 {
                     return;
                 }
-                sources.push((x, y, z, block.fill, is_pipe(block.id) || is_wire(block.id)));
+                let conduit = is_pipe(block.id) || is_wire(block.id) || is_pump(block.id);
+                sources.push((x, y, z, block, conduit));
             });
         }
     }
-    // Dedicated conduits first, then lower cells so water drains through pipe runs.
-    sources.sort_by_key(|&(x, y, z, _, conduit)| {
+    // Pumps and conduits first, then lower cells so water drains through runs.
+    sources.sort_by_key(|&(x, y, z, block, conduit)| {
         (
-            !conduit,
+            !(conduit || is_pump(block.id)),
             y,
             (x - focus[0]).abs() + (z - focus[2]).abs(),
             x,
@@ -93,13 +129,12 @@ pub fn plan_compound_seeps(
 
     let mut claimed = HashSet::new();
     let mut out = Vec::new();
-    for (x, y, z, fill, _) in sources {
+    for (x, y, z, src, _) in sources {
         if out.len() >= max_spreads {
             break;
         }
-        // Prefer pipe/wire destinations within this source's neighbor bias.
         let mut candidates = Vec::new();
-        for [dx, dy, dz] in neighbors_for(fill) {
+        for [dx, dy, dz] in neighbors_for(src.fill) {
             let nx = x + dx;
             let ny = y + dy;
             let nz = z + dz;
@@ -107,10 +142,10 @@ pub fn plan_compound_seeps(
                 continue;
             }
             let dest = world.block_at(nx, ny, nz);
-            if dest.fill != FILL_NONE || !compound_accepts(dest.id, fill) {
+            if !seep_allowed(src, dest, *dx, *dy, *dz) {
                 continue;
             }
-            let conduit = is_pipe(dest.id) || is_wire(dest.id);
+            let conduit = is_pipe(dest.id) || is_wire(dest.id) || is_pump(dest.id);
             candidates.push((conduit, nx, ny, nz, dest));
         }
         candidates.sort_by_key(|&(conduit, ..)| !conduit);
@@ -125,9 +160,87 @@ pub fn plan_compound_seeps(
                 x: nx,
                 y: ny,
                 z: nz,
-                block: dest.with_fill(fill),
+                block: dest.with_fill(src.fill),
             });
         }
+    }
+    out
+}
+
+/// Powered pumps push fill from intake to outlet in one step (pressure keep).
+pub fn plan_pump_pushes(
+    world: &Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_pushes: usize,
+) -> Vec<CellChange> {
+    if max_pushes == 0 || radius < 0 {
+        return Vec::new();
+    }
+    let mut pumps = Vec::new();
+    let min_cx = (focus[0] - radius).div_euclid(16);
+    let max_cx = (focus[0] + radius).div_euclid(16);
+    let min_cz = (focus[2] - radius).div_euclid(16);
+    let max_cz = (focus[2] + radius).div_euclid(16);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let Some(chunk) = world.get(cx, cz) else {
+                continue;
+            };
+            chunk.for_each_block(|x, y, z, block| {
+                if !is_pump(block.id) || !pump_on(block.metadata) {
+                    return;
+                }
+                if (x - focus[0]).abs() > radius
+                    || (y - focus[1]).abs() > radius
+                    || (z - focus[2]).abs() > radius
+                {
+                    return;
+                }
+                pumps.push((x, y, z, block.metadata));
+            });
+        }
+    }
+    pumps.sort_by_key(|&(x, y, z, _)| {
+        (
+            (x - focus[0]).abs() + (z - focus[2]).abs(),
+            y,
+            x,
+            z,
+        )
+    });
+
+    let mut claimed = HashSet::new();
+    let mut out = Vec::new();
+    for (x, y, z, meta) in pumps {
+        if out.len() >= max_pushes {
+            break;
+        }
+        let dir = pump_dir(meta);
+        let ix = x - dir[0];
+        let iy = y - dir[1];
+        let iz = z - dir[2];
+        let ox = x + dir[0];
+        let oy = y + dir[1];
+        let oz = z + dir[2];
+        if !claimed.insert((ox, oy, oz)) {
+            continue;
+        }
+        let input = world.block_at(ix, iy, iz);
+        let output = world.block_at(ox, oy, oz);
+        if input.fill == FILL_NONE {
+            continue;
+        }
+        if output.fill != FILL_NONE || !accepts(output, input.fill) {
+            continue;
+        }
+        // Closed-valve pumps never appear here; powered outlet must accept.
+        out.push(CellChange {
+            x: ox,
+            y: oy,
+            z: oz,
+            block: output.with_fill(input.fill),
+        });
     }
     out
 }
@@ -147,10 +260,25 @@ pub fn apply_compound_seeps(
     count
 }
 
+/// Apply [`plan_pump_pushes`] into `world`. Returns how many cells filled.
+pub fn apply_pump_pushes(
+    world: &mut Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    max_pushes: usize,
+) -> usize {
+    let planned = plan_pump_pushes(world, focus, radius, max_pushes);
+    let count = planned.len();
+    for cell in planned {
+        world.set_block(cell.x, cell.y, cell.z, cell.block);
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk::{Block, Chunk, FILL_EMBER, FILL_WATER};
+    use crate::chunk::{Block, Chunk, FILL_EMBER, FILL_WATER, pump_meta};
     use crate::cluster::Cluster;
 
     fn world(blocks: &[(i32, i32, i32, Block)]) -> Cluster {
@@ -284,6 +412,55 @@ mod tests {
             (planned[0].x, planned[0].y, planned[0].z),
             (2, 1, 3),
             "pipe should win over fence when both are open"
+        );
+    }
+
+    #[test]
+    fn closed_pump_blocks_seep() {
+        // Facing +X (0), off.
+        let pump = Block::new("pump", pump_meta(0, false));
+        let cluster = world(&[
+            (1, 1, 1, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (2, 1, 1, pump),
+            (3, 1, 1, Block::new("pipe", 0)),
+        ]);
+        assert!(plan_compound_seeps(&cluster, [2, 1, 1], 8, 4).is_empty());
+        assert!(plan_pump_pushes(&cluster, [2, 1, 1], 8, 4).is_empty());
+    }
+
+    #[test]
+    fn powered_pump_pushes_one_way() {
+        // Facing +X, on: intake west, outlet east.
+        let pump = Block::new("pump", pump_meta(0, true));
+        let mut cluster = world(&[
+            (1, 1, 1, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (2, 1, 1, pump),
+            (3, 1, 1, Block::new("pipe", 0)),
+        ]);
+        let planned = plan_pump_pushes(&cluster, [2, 1, 1], 8, 4);
+        assert_eq!(planned.len(), 1);
+        assert_eq!((planned[0].x, planned[0].y, planned[0].z), (3, 1, 1));
+        assert_eq!(planned[0].block.fill, FILL_WATER);
+        assert_eq!(apply_pump_pushes(&mut cluster, [2, 1, 1], 8, 4), 1);
+        assert_eq!(cluster.block_at(3, 1, 1).fill, FILL_WATER);
+        assert_eq!(cluster.block_at(1, 1, 1).fill, FILL_WATER, "intake keeps pressure");
+    }
+
+    #[test]
+    fn powered_pump_rejects_reverse_seep() {
+        let pump = Block::new("pump", pump_meta(0, true));
+        let cluster = world(&[
+            (3, 1, 1, Block::new("pipe", 0).with_fill(FILL_WATER)),
+            (2, 1, 1, pump),
+            (1, 1, 1, Block::new("pipe", 0)),
+        ]);
+        // Outlet-side source must not seep backward into the pump.
+        let planned = plan_compound_seeps(&cluster, [2, 1, 1], 8, 4);
+        assert!(
+            planned
+                .iter()
+                .all(|c| !(c.x == 2 && c.y == 1 && c.z == 1)),
+            "pump must not accept fill from the outlet side"
         );
     }
 }

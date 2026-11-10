@@ -1553,7 +1553,7 @@ fn mesh_partial_shapes(
                     i32::from(y),
                     chunk.z() * 16 + i32::from(z),
                 ];
-                if block.id == "pipe" || block.id == "wire" {
+                if block.id == "pipe" || block.id == "wire" || block.id == "pump" {
                     let links = conduit_sample_links(block.id, cell, sample);
                     mesh_conduit(block, links, cell, sample, light, sun, mesh);
                     if let Some((fill, boxes)) = conduit_fill_boxes(block, links) {
@@ -1624,7 +1624,8 @@ fn mesh_conduit(
     mesh: &mut Mesh,
 ) {
     let (lo, hi) = conduit_span(block.id);
-    let boxes = conduit_shell_boxes(lo, hi, links, block.id == "pipe");
+    let caps = block.id == "pipe" || block.id == "pump";
+    let boxes = conduit_shell_boxes(lo, hi, links, caps);
     let shape = Shape::from_boxes(&boxes);
     mesh_cell(block, shape, cell, sample, light, sun, mesh);
 }

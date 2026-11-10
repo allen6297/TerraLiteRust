@@ -22,18 +22,18 @@ pub fn link_mask_at(world: &Cluster, id: &str, x: i32, y: i32, z: i32) -> u8 {
 }
 
 pub fn span(id: &str) -> (u8, u8) {
-    if id == "pipe" {
-        (5, 11)
-    } else {
-        (7, 9)
+    match id {
+        "pipe" => (5, 11),
+        "pump" => (4, 12),
+        _ => (7, 9),
     }
 }
 
 pub fn fill_span(id: &str) -> (u8, u8) {
-    if id == "pipe" {
-        (6, 10)
-    } else {
-        (7, 9)
+    match id {
+        "pipe" => (6, 10),
+        "pump" => (5, 11),
+        _ => (7, 9),
     }
 }
 

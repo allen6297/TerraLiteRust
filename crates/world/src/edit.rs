@@ -136,6 +136,7 @@ fn swings(id: &str) -> bool {
             | "target"
             | "trial_spawner"
             | "copper_bulb"
+            | "pump"
             | "decorated_pot"
             | "shelf"
             | "item_frame"
@@ -162,7 +163,8 @@ fn place_fits(world: &Cluster, x: i32, y: i32, z: i32, block: Block, player: Pla
         && current.metadata == block.metadata
         && current.fill != block.fill
         && (current.fill == 0 || block.fill == 0)
-        && (block.fill == 0 || crate::chunk::compound_accepts(current.id, block.fill));
+        && (block.fill == 0
+            || crate::chunk::compound_accepts_meta(current.id, current.metadata, block.fill));
     if !current.is_air() && !swing && !fill_update {
         return false;
     }

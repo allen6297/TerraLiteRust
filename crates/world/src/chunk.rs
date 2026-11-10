@@ -68,6 +68,7 @@ pub fn compound_host(id: &str) -> bool {
         "copper_grate"
             | "pipe"
             | "wire"
+            | "pump"
             | "fence"
             | "fence_gate"
             | "slab"
@@ -114,27 +115,63 @@ pub fn is_wire(id: &str) -> bool {
     id == "wire"
 }
 
+/// True when `id` is a compound pump / valve.
+pub fn is_pump(id: &str) -> bool {
+    id == "pump"
+}
+
+/// Pump facing from metadata bits `0..=5`: +X -X +Y -Y +Z -Z.
+pub fn pump_dir(metadata: u8) -> [i32; 3] {
+    match metadata & 7 {
+        0 => [1, 0, 0],
+        1 => [-1, 0, 0],
+        2 => [0, 1, 0],
+        3 => [0, -1, 0],
+        4 => [0, 0, 1],
+        _ => [0, 0, -1],
+    }
+}
+
+/// Bit 8: pump powered (one-way push). Off acts as a closed valve.
+pub fn pump_on(metadata: u8) -> bool {
+    metadata & 8 != 0
+}
+
+/// Encode facing + on bit.
+pub fn pump_meta(dir: u8, on: bool) -> u8 {
+    (dir & 7) | if on { 8 } else { 0 }
+}
+
 /// Whether a compound host may carry this fill kind.
 ///
-/// Pipes take water; wires take ember; other hosts take either.
+/// Pipes take water; wires take ember; pumps take either when powered; other
+/// hosts take either. A closed pump rejects new fill (valve shut).
 pub fn compound_accepts(id: &str, fill: u8) -> bool {
+    compound_accepts_meta(id, 0, fill)
+}
+
+/// Like [`compound_accepts`], but pumps consult `metadata` for the on bit.
+pub fn compound_accepts_meta(id: &str, metadata: u8, fill: u8) -> bool {
     if !compound_host(id) || fill == FILL_NONE {
         return false;
     }
     match id {
         "pipe" => fill == FILL_WATER,
         "wire" => fill == FILL_EMBER,
+        "pump" => pump_on(metadata) && (fill == FILL_WATER || fill == FILL_EMBER),
         _ => fill == FILL_WATER || fill == FILL_EMBER,
     }
 }
 
-/// Neighbor link for pipe/wire mesh arms.
+/// Neighbor link for pipe/wire/pump mesh arms.
 ///
-/// Pipes join pipes and non-wire hosts; wires join wires and non-pipe hosts.
+/// Pipes join pipes/pumps and non-wire hosts; wires join wires/pumps and
+/// non-pipe hosts; pumps join any compound host.
 pub fn conduit_links(a: &str, b: &str) -> bool {
     match a {
-        "pipe" => b == "pipe" || (compound_host(b) && b != "wire"),
-        "wire" => b == "wire" || (compound_host(b) && b != "pipe"),
+        "pipe" => b == "pipe" || b == "pump" || (compound_host(b) && b != "wire"),
+        "wire" => b == "wire" || b == "pump" || (compound_host(b) && b != "pipe"),
+        "pump" => compound_host(b),
         _ => false,
     }
 }
