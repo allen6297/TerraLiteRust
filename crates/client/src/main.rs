@@ -194,6 +194,8 @@ struct Args {
     shot_water_reflection: Option<std::path::PathBuf>,
     /// Underwater caustic shimmer on floors/walls, then quit.
     shot_underwater_caustics: Option<std::path::PathBuf>,
+    /// Lava heat haze shimmer, then quit.
+    shot_lava_heat_haze: Option<std::path::PathBuf>,
     /// Drifting cloud ground darken, then quit.
     shot_cloud_shadow: Option<std::path::PathBuf>,
     /// Rain splash motes on open ground, then quit.
@@ -489,6 +491,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_bounce_interior: args.shot_bounce_interior,
         shot_water_reflection: args.shot_water_reflection,
         shot_underwater_caustics: args.shot_underwater_caustics,
+        shot_lava_heat_haze: args.shot_lava_heat_haze,
         shot_cloud_shadow: args.shot_cloud_shadow,
         shot_rain_splash: args.shot_rain_splash,
         shot_grass_wind: args.shot_grass_wind,
@@ -635,6 +638,7 @@ struct App {
     shot_water_reflection: Option<std::path::PathBuf>,
     /// Underwater caustic shimmer on floors/walls, then quit.
     shot_underwater_caustics: Option<std::path::PathBuf>,
+    shot_lava_heat_haze: Option<std::path::PathBuf>,
     shot_cloud_shadow: Option<std::path::PathBuf>,
     shot_rain_splash: Option<std::path::PathBuf>,
     shot_grass_wind: Option<std::path::PathBuf>,
@@ -876,6 +880,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_underwater_caustics.take() {
                     state.arm_underwater_caustics_shot(path);
+                }
+                if let Some(path) = self.shot_lava_heat_haze.take() {
+                    state.arm_lava_heat_haze_shot(path);
                 }
                 if let Some(path) = self.shot_cloud_shadow.take() {
                     state.arm_cloud_shadow_shot(path);
@@ -1310,6 +1317,7 @@ where
         shot_bounce_interior: None,
         shot_water_reflection: None,
         shot_underwater_caustics: None,
+        shot_lava_heat_haze: None,
         shot_cloud_shadow: None,
         shot_rain_splash: None,
         shot_grass_wind: None,
@@ -1645,6 +1653,15 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-underwater-caustics".to_string())?;
                 parsed.shot_underwater_caustics = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-lava-heat-haze"
+            | "--shot-lava-haze"
+            | "--shot-heat-haze"
+            | "--shot-lava" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-lava-heat-haze".to_string())?;
+                parsed.shot_lava_heat_haze = Some(std::path::PathBuf::from(value));
             }
             "--shot-cloud-shadow" | "--shot-cloud-ground" | "--shot-clouds" => {
                 let value = iter
@@ -2515,6 +2532,17 @@ mod tests {
         assert_eq!(
             args.shot_underwater_caustics.as_deref(),
             Some(std::path::Path::new("underwater-caustics.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-lava-heat-haze".into(),
+            "lava-heat-haze.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_lava_heat_haze.as_deref(),
+            Some(std::path::Path::new("lava-heat-haze.png"))
         );
     }
 }

@@ -1,0 +1,13 @@
+{
+  "elements": [
+    {
+      "from": [0, 0, 0],
+      "to": [16, 16, 16]
+    }
+  ],
+  "texture": "assets/terralite/textures/lava.png",
+  "light": {
+    "color": [1.0, 0.45, 0.12],
+    "level": 15
+  }
+}

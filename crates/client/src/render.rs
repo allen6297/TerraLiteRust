@@ -709,6 +709,7 @@ struct FramePass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    uniform_buf: wgpu::Buffer,
     target: Option<FrameTarget>,
     width: u32,
     height: u32,
@@ -743,6 +744,16 @@ impl FramePass {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -780,20 +791,28 @@ impl FramePass {
             multiview_mask: None,
             cache: None,
         });
+        // Linear so UV shimmer samples softly instead of hopping whole texels.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("frame"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
+        });
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frame-uniforms"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         Some(Self {
             pipeline,
             layout,
             sampler,
+            uniform_buf,
             target: None,
             width: 0,
             height: 0,
@@ -1038,6 +1057,12 @@ pub struct State {
     caustic_shot_eye: glam::Vec3,
     caustic_shot_yaw: f32,
     caustic_shot_pitch: f32,
+    /// One-shot lava heat haze looking across a pool, then quit.
+    lava_haze_shot_path: Option<std::path::PathBuf>,
+    lava_haze_shot_frames: u32,
+    lava_haze_shot_eye: glam::Vec3,
+    lava_haze_shot_yaw: f32,
+    lava_haze_shot_pitch: f32,
     /// One-shot drifting cloud ground darken, then quit.
     cloud_shot_path: Option<std::path::PathBuf>,
     cloud_shot_frames: u32,
@@ -1307,6 +1332,8 @@ pub struct State {
     was_wet: bool,
     /// `0` dry through `1` when the eye is underwater.
     water_sub: f32,
+    /// `0` cool through `1` when near / looking at lava (drives heat haze).
+    lava_heat: f32,
     /// Brief FOV punch on the splash that enters water.
     splash_kick: f32,
     /// Brief FOV widen on jump takeoff.
@@ -2325,6 +2352,11 @@ impl State {
             caustic_shot_eye: glam::Vec3::ZERO,
             caustic_shot_yaw: 0.0,
             caustic_shot_pitch: 0.0,
+            lava_haze_shot_path: None,
+            lava_haze_shot_frames: 0,
+            lava_haze_shot_eye: glam::Vec3::ZERO,
+            lava_haze_shot_yaw: 0.0,
+            lava_haze_shot_pitch: 0.0,
             cloud_shot_path: None,
             cloud_shot_frames: 0,
             cloud_shot_wind: 0.0,
@@ -2508,6 +2540,7 @@ impl State {
             horn_wait: 0.0,
             was_wet: false,
             water_sub: 0.0,
+            lava_heat: 0.0,
             splash_kick: 0.0,
             jump_kick: 0.0,
             rain_mix: 0.0,
@@ -10332,6 +10365,120 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Looking across a lava pool with heat haze, then quit with a PNG.
+    pub fn arm_lava_heat_haze_shot(&mut self, path: std::path::PathBuf) {
+        self.lava_haze_shot_path = Some(path);
+        self.lava_haze_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.clear_motion();
+        self.set_capture(false);
+
+        let mut changes = Vec::new();
+        for z in 4..=16 {
+            for x in 3..=13 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                for y in 2..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Broad lava pool with a stone rim so the heat haze reads mid-frame.
+        for z in 7..=13 {
+            for x in 5..=11 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("lava", 0),
+                });
+            }
+        }
+        // Vertical posts behind the pool give the UV shimmer edges to warp.
+        for &(x, z) in &[(6, 7), (8, 7), (10, 7), (5, 10), (11, 10)] {
+            for y in 2..=4 {
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::new("cobblestone", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye_warm = [8.0_f32, 2.4, 15.0];
+        for _ in 0..64 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        let eye = glam::Vec3::new(8.0, 2.15 + body::EYE_HEIGHT, 15.4);
+        let target = glam::Vec3::new(8.0, 1.35, 9.5);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.lava_haze_shot_eye = eye;
+        self.lava_haze_shot_yaw = yaw;
+        self.lava_haze_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.lava_heat = 1.0;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let _ = self.window.focus_window();
+    }
+
     /// Underwater looking along the pond floor — caustic mottling, then quit with a PNG.
     pub fn arm_underwater_caustics_shot(&mut self, path: std::path::PathBuf) {
         self.caustic_shot_path = Some(path);
@@ -11026,6 +11173,33 @@ impl State {
         self.bee_buf = None;
         self.bee_count = 0;
         self.guests.clear();
+    }
+
+    fn pin_lava_haze_shot_camera(&mut self) {
+        if self.lava_haze_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(0.42);
+        self.dusk_show = 0.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.lava_haze_shot_eye,
+            self.lava_haze_shot_yaw,
+            self.lava_haze_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.lava_haze_shot_eye;
+        self.posed_yaw = self.lava_haze_shot_yaw;
+        self.posed_pitch = self.lava_haze_shot_pitch;
+        self.pose_dirty = true;
+        self.lava_heat = 1.0;
+        self.sheep = crate::sheep::Sheep::new();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.wanted_focus = chunk_of(self.camera.eye);
     }
 
     fn pin_caustic_shot_camera(&mut self) {
@@ -20081,6 +20255,37 @@ impl State {
         }
     }
 
+    fn poll_lava_haze_shot(&mut self) {
+        let Some(path) = self.lava_haze_shot_path.clone() else {
+            return;
+        };
+        self.pin_lava_haze_shot_camera();
+        self.lava_haze_shot_frames = self.lava_haze_shot_frames.saturating_add(1);
+        if self.lava_haze_shot_frames < 200 || !self.chunk_bake.is_idle() {
+            if self.lava_haze_shot_frames > 800 {
+                eprintln!("lava haze shot timed out");
+                self.lava_haze_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("lava haze shot wrote {}", path.display());
+                self.lava_haze_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("lava haze shot failed: {err}");
+                if self.lava_haze_shot_frames > 280 {
+                    self.lava_haze_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_caustic_shot(&mut self) {
         let Some(path) = self.caustic_shot_path.clone() else {
             return;
@@ -20438,6 +20643,7 @@ impl State {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let layout = self.frame.as_ref().unwrap().layout.clone();
         let sampler = self.frame.as_ref().unwrap().sampler.clone();
+        let uniform_buf = self.frame.as_ref().unwrap().uniform_buf.clone();
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("frame"),
             layout: &layout,
@@ -20449,6 +20655,10 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buf.as_entire_binding(),
                 },
             ],
         });
@@ -24304,6 +24514,8 @@ impl State {
         let submerged = body::eye_in_water(self.camera.eye, &self.world);
         let water_goal = if submerged { 1.0 } else { 0.0 };
         self.water_sub += (water_goal - self.water_sub) * (dt * 8.0).min(1.0);
+        let heat_goal = lava_heat_amount(self.camera.eye, self.camera.forward(), &self.world);
+        self.lava_heat += (heat_goal - self.lava_heat) * (dt * 6.0).min(1.0);
         let aboard = self.boat.aboard()
             || self.cart.aboard()
             || self.horse.ridden()
@@ -25341,6 +25553,19 @@ impl State {
         }
         if let Some(frame) = &self.frame {
             if let Some(target) = &frame.target {
+                let haze_t = if self.lava_haze_shot_path.is_some() {
+                    1.85
+                } else {
+                    self.clock.seconds()
+                };
+                let haze = [
+                    self.lava_heat.clamp(0.0, 1.0),
+                    haze_t,
+                    0.0,
+                    0.0,
+                ];
+                self.queue
+                    .write_buffer(&frame.uniform_buf, 0, bytes_of(&haze));
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("frame-shader"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -25464,6 +25689,9 @@ impl State {
         }
         if self.water_sub > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::water_quads(gui_w, gui_h, self.water_sub));
+        }
+        if self.lava_heat > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::lava_haze_quads(gui_w, gui_h, self.lava_heat));
         }
         let hunger_veil = self.hunger.hunger_veil();
         if hunger_veil > 0.02 && !self.menu.is_open() && !self.dead {
@@ -25680,6 +25908,7 @@ impl State {
         self.poll_bounce_shot();
         self.poll_water_shot();
         self.poll_caustic_shot();
+        self.poll_lava_haze_shot();
         self.poll_cloud_shot();
         self.poll_splash_shot();
         self.poll_grass_shot();
@@ -26968,6 +27197,51 @@ fn press_target(world: &Cluster, at: [i32; 3]) -> Option<([i32; 3], Block)> {
         }
     }
     None
+}
+
+/// Heat amount from standing near lava and/or looking at it (0..1).
+fn is_heat_block(id: &str) -> bool {
+    id == "lava" || id == "magma"
+}
+
+fn lava_heat_amount(eye: glam::Vec3, forward: glam::Vec3, world: &Cluster) -> f32 {
+    let mut heat = 0.0_f32;
+    if let Some((id, dist)) = look::fluid_along(eye, forward, world) {
+        if is_heat_block(id) {
+            // Close look fills most of the haze; far look still warms a little.
+            heat = heat.max((1.0 - dist / 5.0).clamp(0.0, 1.0).powf(0.65));
+        }
+    }
+    // Solid look also counts (magma is not a fluid).
+    if let Some((id, dist)) = look::block_along(eye, forward, world) {
+        if is_heat_block(id) {
+            heat = heat.max((1.0 - dist / 5.0).clamp(0.0, 1.0).powf(0.65));
+        }
+    }
+    let ex = eye.x.floor() as i32;
+    let ey = eye.y.floor() as i32;
+    let ez = eye.z.floor() as i32;
+    let mut nearest = f32::INFINITY;
+    for dz in -4..=4 {
+        for dy in -2..=2 {
+            for dx in -4..=4 {
+                let id = world.block_at(ex + dx, ey + dy, ez + dz).id;
+                if !is_heat_block(id) {
+                    continue;
+                }
+                let cx = ex as f32 + dx as f32 + 0.5;
+                let cy = ey as f32 + dy as f32 + 0.5;
+                let cz = ez as f32 + dz as f32 + 0.5;
+                let d = (glam::Vec3::new(cx, cy, cz) - eye).length();
+                nearest = nearest.min(d);
+            }
+        }
+    }
+    if nearest.is_finite() {
+        // Within ~5 blocks the air feels hot even without looking at lava.
+        heat = heat.max((1.0 - nearest / 5.0).clamp(0.0, 1.0));
+    }
+    heat.clamp(0.0, 1.0)
 }
 
 fn chunk_of(eye: glam::Vec3) -> [i32; 2] {

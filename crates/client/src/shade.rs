@@ -120,6 +120,7 @@ fn validate_frame_shader(source: &str) -> Result<(), String> {
         "@fragment",
         "frame_tex",
         "frame_samp",
+        "frame_u",
     ] {
         if !source.contains(needle) {
             return Err(format!("frame shader is missing {needle}"));
@@ -157,9 +158,10 @@ mod tests {
         assert!(shader_path.ends_with(std::path::Path::new("assets/terralite/shaders/frame.wgsl")));
         let hook = load_frame_hook().unwrap();
         assert!(hook.enabled);
-        assert!(hook.source.contains("let tint = vec3<f32>(1.0, 1.0, 1.0);"));
         assert!(hook.source.contains("let brightness = 1.0;"));
         assert!(hook.source.contains("color * tint * brightness"));
+        assert!(hook.source.contains("frame_u"));
+        assert!(hook.source.contains("heat"));
         assert!(!hook.source.to_lowercase().contains("ndotl"));
         let white = apply_frame([1.0, 1.0, 1.0], [1.0, 1.0, 1.0], 1.0);
         assert_eq!(white, [1.0, 1.0, 1.0]);

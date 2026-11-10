@@ -6518,6 +6518,22 @@ pub fn hurt_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     ]
 }
 
+/// Warm edge veil when near lava. `amount` is `0` cool through `1` hot.
+pub fn lava_haze_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.02 || width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let band = 6.0 + 18.0 * amount;
+    let shade = [0.34, 0.12, 0.04];
+    vec![
+        pixel_quad(width, height, 0.0, height - band, width, height, shade),
+        pixel_quad(width, height, 0.0, 0.0, width, band, shade),
+        pixel_quad(width, height, 0.0, 0.0, band, height, shade),
+        pixel_quad(width, height, width - band, 0.0, width, height, shade),
+    ]
+}
+
 /// Cyan edge veil while the eye is underwater. `amount` is `0` dry through `1` submerged.
 pub fn water_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     let amount = amount.clamp(0.0, 1.0);
