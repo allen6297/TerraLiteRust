@@ -504,6 +504,11 @@ struct TotemDef {
     icon: String,
 }
 
+struct FireworkDef {
+    id: String,
+    icon: String,
+}
+
 struct SplashDef {
     id: String,
     icon: String,
@@ -612,6 +617,8 @@ pub struct Pack {
     bows: Vec<BowDef>,
     /// Totems from the data pack. Holding one blocks a lethal hit once.
     totems: Vec<TotemDef>,
+    /// Firework rockets — boost while gliding with an elytra.
+    fireworks: Vec<FireworkDef>,
     /// Splash potions from the data pack. Throw for an AOE heal or harm burst.
     splashes: Vec<SplashDef>,
     /// Crafting lines from `data/terralite/recipes`. The fletching table reads arrow.
@@ -686,6 +693,7 @@ impl Pack {
             arrows: Vec::new(),
             bows: Vec::new(),
             totems: Vec::new(),
+            fireworks: Vec::new(),
             splashes: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
@@ -2470,6 +2478,12 @@ impl Pack {
                     .map(|totem| totem.icon.as_str())
             })
             .or_else(|| {
+                self.fireworks
+                    .iter()
+                    .find(|rocket| rocket.id == id)
+                    .map(|rocket| rocket.icon.as_str())
+            })
+            .or_else(|| {
                 self.splashes
                     .iter()
                     .find(|splash| splash.id == id)
@@ -2661,6 +2675,24 @@ impl Pack {
     /// Totem ids, in data-pack order.
     pub fn totem_ids(&self) -> Vec<String> {
         self.totems.iter().map(|totem| totem.id.clone()).collect()
+    }
+
+    /// True when `id` is a wearable elytra (chest armor that enables glide).
+    pub fn is_elytra(&self, id: &str) -> bool {
+        id == "elytra" && self.armor_of(id).is_some_and(|(slot, _)| slot == 1)
+    }
+
+    /// True when `id` is a firework rocket (elytra boost).
+    pub fn is_firework(&self, id: &str) -> bool {
+        self.fireworks.iter().any(|rocket| rocket.id == id)
+    }
+
+    /// Firework rocket ids, in data-pack order.
+    pub fn firework_ids(&self) -> Vec<String> {
+        self.fireworks
+            .iter()
+            .map(|rocket| rocket.id.clone())
+            .collect()
     }
 
     /// True when `id` is a throwable splash potion.
@@ -3091,6 +3123,7 @@ impl Pack {
         let mut arrows = Vec::new();
         let mut bows = Vec::new();
         let mut totems = Vec::new();
+        let mut fireworks = Vec::new();
         let mut splashes = Vec::new();
         let mut pearls = Vec::new();
         let mut winds = Vec::new();
@@ -3137,6 +3170,9 @@ impl Pack {
                 || arrows.iter().any(|arrow: &ArrowDef| arrow.id == id)
                 || bows.iter().any(|bow: &BowDef| bow.id == id)
                 || totems.iter().any(|totem: &TotemDef| totem.id == id)
+                || fireworks
+                    .iter()
+                    .any(|rocket: &FireworkDef| rocket.id == id)
                 || splashes.iter().any(|splash: &SplashDef| splash.id == id)
                 || pearls.iter().any(|pearl: &PearlDef| pearl.id == id)
                 || winds.iter().any(|wind: &WindDef| wind.id == id)
@@ -3179,6 +3215,7 @@ impl Pack {
                 PackItem::Arrow(arrow) => arrows.push(arrow),
                 PackItem::Bow(bow) => bows.push(bow),
                 PackItem::Totem(totem) => totems.push(totem),
+                PackItem::Firework(rocket) => fireworks.push(rocket),
                 PackItem::Splash(splash) => splashes.push(splash),
                 PackItem::Pearl(pearl) => pearls.push(pearl),
                 PackItem::Wind(wind) => winds.push(wind),
@@ -3216,6 +3253,7 @@ impl Pack {
         self.arrows = arrows;
         self.bows = bows;
         self.totems = totems;
+        self.fireworks = fireworks;
         self.splashes = splashes;
         self.pearls = pearls;
         self.winds = winds;
@@ -3256,6 +3294,7 @@ enum PackItem {
     Arrow(ArrowDef),
     Bow(BowDef),
     Totem(TotemDef),
+    Firework(FireworkDef),
     Splash(SplashDef),
     Pearl(PearlDef),
     Wind(WindDef),
@@ -3959,6 +3998,23 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
             icon: icon.to_string(),
         }));
     }
+    if obj.contains_key("firework") {
+        require_only(obj, &["firework", "icon"], &format!("{id}.json"))?;
+        if obj.get("firework") != Some(&Value::Bool(true)) {
+            return Err(format!("{id}.json firework must be true"));
+        }
+        let icon = obj
+            .get("icon")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{id}.json needs an icon"))?;
+        if !valid_name(icon) {
+            return Err(format!("{id}.json icon {icon} is a bad id"));
+        }
+        return Ok(PackItem::Firework(FireworkDef {
+            id: id.to_string(),
+            icon: icon.to_string(),
+        }));
+    }
     if obj.contains_key("splash") {
         require_only(obj, &["splash", "icon"], &format!("{id}.json"))?;
         let effect = obj
@@ -4086,6 +4142,7 @@ impl Pack {
             arrows: Vec::new(),
             bows: Vec::new(),
             totems: Vec::new(),
+            fireworks: Vec::new(),
             splashes: Vec::new(),
             pack_recipes: Vec::new(),
             pearls: Vec::new(),
@@ -7790,6 +7847,15 @@ mod tests {
         assert!(pack
             .totem_ids()
             .contains(&"totem_of_undying".to_string()));
+        assert!(pack.is_elytra("elytra"));
+        assert!(!pack.is_elytra("leather_tunic"));
+        assert_eq!(pack.armor_of("elytra"), Some((1, 1)));
+        assert!(pack.is_firework("firework_rocket"));
+        assert!(!pack.is_firework("wind_charge"));
+        assert_eq!(pack.tool_icon("firework_rocket"), Some("glowstone"));
+        assert!(pack
+            .firework_ids()
+            .contains(&"firework_rocket".to_string()));
         assert!(pack.is_splash("splash_healing_potion"));
         assert!(pack.is_splash("splash_harming_potion"));
         assert!(!pack.is_splash("healing_potion"));

@@ -1122,6 +1122,18 @@ pub struct State {
     airborne: bool,
     /// Creative flight engaged (only while `menu.creative()`).
     flying: bool,
+    /// Elytra wings open — mid-air glide.
+    gliding: bool,
+    /// World-space glide velocity while [`Self::gliding`].
+    elytra_vel: glam::Vec3,
+    /// Soft FOV whoosh when the elytra opens or a rocket boosts.
+    elytra_kick: f32,
+    /// HUD "glide" plate fade.
+    elytra_show: f32,
+    /// Space was released while airborne — next press deploys the elytra.
+    elytra_jump_armed: bool,
+    /// Seconds until the next soft wind whoosh while gliding.
+    elytra_whoosh: f32,
     /// Seconds left to count a second Space press as a double-tap.
     jump_tap_left: f32,
     /// Soft FOV whoosh when flight engages.
@@ -2359,6 +2371,12 @@ impl State {
             air_peak,
             airborne: false,
             flying: false,
+            gliding: false,
+            elytra_vel: glam::Vec3::ZERO,
+            elytra_kick: 0.0,
+            elytra_show: 0.0,
+            elytra_jump_armed: false,
+            elytra_whoosh: 0.0,
             jump_tap_left: 0.0,
             fly_kick: 0.0,
             jump_asked: false,
@@ -3447,6 +3465,99 @@ impl State {
             self.xp.pin(at, crate::xp::MOB_ORB_XP);
             self.drops.lime_spark(at);
         }
+        self.rebuild_drops();
+        let _ = self.window.focus_window();
+    }
+
+    /// Elytra mid-glide: wings open, dive FOV whoosh, tip `glide`.
+    pub fn arm_elytra_glide_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.menu.set_creative(false);
+        self.apply_chosen_size();
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.rain_mix = 0.0;
+        self.found_camp = true;
+        self.found_chart = true;
+        self.found_farm = true;
+        self.found_scarecrow = true;
+        self.found_shrine = true;
+        self.found_mine = true;
+        self.found_lodestone = true;
+        self.found_rails = true;
+        self.found_clay = true;
+        self.found_compound = true;
+        self.found_wolf = true;
+        self.found_cat = true;
+        self.found_parrot = true;
+        self.found_flight = true;
+        self.found_flicker = true;
+        self.found_lily = true;
+        self.found_stable = true;
+        self.compound_flow_told = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("firework_rocket");
+        let elytra = rebuild_world::Block::new("elytra", 0).id;
+        let _ = self.armor.equip(1, elytra);
+        self.hotbar_dirty = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("glide");
+        self.others.clear();
+        self.rebuild_peers();
+        self.clear_motion();
+        self.set_capture(false);
+
+        self.third_person = true;
+        let eye = glam::Vec3::new(6.4, 7.2 + crate::body::EYE_HEIGHT, 12.8);
+        let focus = glam::Vec3::new(8.5, 4.2, 8.5);
+        self.camera = crate::camera::Camera::looking_at(eye, focus);
+        self.camera.on_ground = false;
+        self.camera.velocity_y = -2.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.xp = crate::xp::Xp::new();
+        self.drops = crate::drops::Drops::new();
+        self.arrows = crate::arrows::Arrows::new();
+        self.splash = crate::splash::Splash::new();
+        self.pearls = crate::pearls::Pearls::new();
+        self.gliding = true;
+        self.elytra_vel = self.camera.forward() * 16.0;
+        self.elytra_kick = 0.95;
+        self.elytra_show = 1.0;
+        self.elytra_whoosh = 2.0;
+        self.airborne = true;
+        self.air_peak = eye.y + 2.0;
+        self.crouch = 0.0;
+        self.sprint_show = 0.0;
+        self.shield_show = 0.0;
+        self.boat_show = 0.0;
+        self.cart_show = 0.0;
+        self.horse_show = 0.0;
+        self.pollen_show = 0.0;
+        self.leash_show = 0.0;
+        self.wolf_show = 0.0;
+        self.dusk_show = 0.0;
+        self.cat_show = 0.0;
+        self.player.tick(0.0, 0.0, -1.0, false, false, false);
+        self.rebuild_player();
         self.rebuild_drops();
         let _ = self.window.focus_window();
     }
@@ -7318,12 +7429,83 @@ impl State {
             }
         }
         self.hotbar_dirty = true;
-        let piece = match slot {
-            0 => "cap",
-            1 => "tunic",
-            _ => "boots",
+        let piece = if Pack::builtin().is_elytra(id) {
+            "elytra"
+        } else {
+            match slot {
+                0 => "cap",
+                1 => "tunic",
+                _ => "boots",
+            }
         };
         self.gui.push_chat(&format!("{piece} on"));
+        true
+    }
+
+    /// True when the chest slot holds a wearable elytra.
+    fn wearing_elytra(&self) -> bool {
+        self.armor
+            .worn()
+            .get(1)
+            .copied()
+            .flatten()
+            .is_some_and(|id| Pack::builtin().is_elytra(id))
+    }
+
+    fn stop_elytra(&mut self) {
+        self.gliding = false;
+        self.elytra_vel = glam::Vec3::ZERO;
+        self.elytra_jump_armed = false;
+        self.camera.slide = glam::Vec3::ZERO;
+    }
+
+    /// Open the wings mid-air (second Space after leaving the ground).
+    fn try_deploy_elytra(&mut self) -> bool {
+        if self.gliding || self.flying || !self.wearing_elytra() || self.camera.on_ground {
+            return false;
+        }
+        let look = self.camera.forward();
+        let mut speed = self
+            .elytra_vel
+            .length()
+            .max(self.camera.velocity_y.abs())
+            .max(body::ELYTRA_MIN_SPEED);
+        if speed < body::ELYTRA_MIN_SPEED {
+            speed = body::ELYTRA_MIN_SPEED;
+        }
+        self.elytra_vel = look * speed;
+        if self.camera.velocity_y < 0.0 {
+            self.elytra_vel.y = self.elytra_vel.y.min(self.camera.velocity_y);
+        }
+        self.gliding = true;
+        self.elytra_kick = 1.0;
+        self.elytra_show = 1.0;
+        self.elytra_whoosh = 1.6;
+        self.audio.play(crate::audio::Sound::Gust);
+        self.gui.push_chat("glide");
+        true
+    }
+
+    /// Firework rocket while gliding — consume one and shove along the look.
+    fn try_elytra_boost(&mut self) -> bool {
+        if !self.gliding {
+            return false;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !Pack::builtin().is_firework(id) {
+            return false;
+        }
+        self.hotbar.consume_selected();
+        self.hotbar_dirty = true;
+        let look = self.camera.forward();
+        self.elytra_vel += look * 18.0;
+        self.elytra_kick = self.elytra_kick.max(0.95);
+        self.elytra_whoosh = 0.4;
+        self.audio.play(crate::audio::Sound::Gust);
+        self.gui.push_chat("boost");
+        self.slot_punch = self.slot_punch.max(0.7);
         true
     }
 
@@ -9105,7 +9287,8 @@ impl State {
             }
             return;
         }
-        if self.try_equip()
+        if self.try_elytra_boost()
+            || self.try_equip()
             || self.try_omen()
             || self.try_fox()
             || self.try_frog()
@@ -22657,6 +22840,8 @@ impl State {
         self.splash_kick = (self.splash_kick - dt * 5.0).max(0.0);
         self.jump_kick = (self.jump_kick - dt * 5.5).max(0.0);
         self.fly_kick = (self.fly_kick - dt * 3.2).max(0.0);
+        self.elytra_kick = (self.elytra_kick - dt * 2.8).max(0.0);
+        self.elytra_whoosh = (self.elytra_whoosh - dt).max(0.0);
         self.jump_tap_left = (self.jump_tap_left - dt).max(0.0);
         if !self.boat.aboard() {
             self.boat_kick = (self.boat_kick - dt * 6.0).max(0.0);
@@ -22780,11 +22965,55 @@ impl State {
                 self.flying = false;
                 self.fly_kick = 0.0;
             }
+            if self.flying && self.gliding {
+                self.stop_elytra();
+            }
+            if self.gliding && !self.wearing_elytra() {
+                self.stop_elytra();
+            }
             let mut motion = self.input;
             if motion.crouch && !self.flying {
                 motion.fast = false;
             }
-            if self.flying {
+            // Mid-air Space after a release deploys the elytra (double-jump feel).
+            if !self.flying && !self.gliding && self.airborne && !self.camera.on_ground {
+                if !motion.jump {
+                    self.elytra_jump_armed = true;
+                } else if self.elytra_jump_armed {
+                    self.elytra_jump_armed = false;
+                    let _ = self.try_deploy_elytra();
+                }
+            } else if self.camera.on_ground {
+                self.elytra_jump_armed = false;
+            }
+            if self.gliding {
+                self.jump_asked = false;
+                self.jump_blocked = false;
+                self.sprint_asked = false;
+                self.sprint_blocked = false;
+                self.sprint_run = 0.0;
+                self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
+                let still = self.camera.step_elytra(
+                    &mut self.elytra_vel,
+                    dt,
+                    &self.world,
+                    &obstacles,
+                    0.0,
+                );
+                if !still {
+                    self.stop_elytra();
+                    self.audio.play(crate::audio::Sound::Step);
+                } else {
+                    let speed = self.elytra_vel.length();
+                    self.elytra_kick = self.elytra_kick.max((speed / 28.0).clamp(0.15, 0.85));
+                    self.elytra_show = 1.0;
+                    if self.elytra_whoosh <= 0.0 {
+                        self.audio.play(crate::audio::Sound::Wind);
+                        self.elytra_whoosh = 1.8;
+                    }
+                    self.bob_amount = (self.bob_amount - dt * 4.0).max(0.0);
+                }
+            } else if self.flying {
                 self.jump_asked = false;
                 self.jump_blocked = false;
                 self.sprint_asked = false;
@@ -22883,6 +23112,8 @@ impl State {
         let sprinting_now = self.sprint_asked && !self.sprint_blocked;
         let show_goal = if sprinting_now { 1.0 } else { 0.0 };
         self.sprint_show += (show_goal - self.sprint_show) * (dt * 12.0).min(1.0);
+        let glide_goal = if self.gliding { 1.0 } else { 0.0 };
+        self.elytra_show += (glide_goal - self.elytra_show) * (dt * 10.0).min(1.0);
         let moving = self.input.forward || self.input.back || self.input.left || self.input.right;
         {
             let look = self.camera.walk_axes().0;
@@ -23427,6 +23658,7 @@ impl State {
         };
         let jump = self.jump_kick * crate::camera::JUMP_FOV * bob_scale;
         let fly = self.fly_kick * crate::camera::FLY_FOV * bob_scale;
+        let elytra = self.elytra_kick * crate::camera::ELYTRA_FOV * bob_scale;
         let place = self.slot_punch * crate::camera::PLACE_FOV * bob_scale;
         let swap = self.swap_kick * crate::camera::SWAP_FOV * bob_scale;
         let broken = self.break_kick * crate::camera::BREAK_FOV * bob_scale;
@@ -23443,6 +23675,7 @@ impl State {
         ) + chew
             + jump
             + fly
+            + elytra
             + swap
             - place
             - broken
@@ -24026,6 +24259,9 @@ impl State {
         }
         if self.shield_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::shield_quads(gui_w, gui_h, self.shield_show));
+        }
+        if self.elytra_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::elytra_quads(gui_w, gui_h, self.elytra_show));
         }
         if self.bow_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::bow_quads(gui_w, gui_h, self.bow_show));

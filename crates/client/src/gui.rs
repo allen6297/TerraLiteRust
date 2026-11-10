@@ -4077,6 +4077,10 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         format!("fills {kind}")
     } else if let Some(level) = light {
         format!("lights the air ({level})")
+    } else if pack.is_elytra(id) {
+        "glide — jump again mid-air".to_string()
+    } else if pack.is_firework(id) {
+        "boost while gliding".to_string()
     } else if pack.armor_of(id).is_some() {
         "soaks heart damage".to_string()
     } else if max_uses > 0 {
@@ -4099,7 +4103,10 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     if let Some(heal) = food {
         stats.push(format!("Heal +{heal}"));
     }
-    if let Some((slot, soak)) = pack.armor_of(id) {
+    if pack.is_elytra(id) {
+        stats.push("Chest elytra".to_string());
+        stats.push("Glide mid-air".to_string());
+    } else if let Some((slot, soak)) = pack.armor_of(id) {
         let piece = match slot {
             0 => "Head",
             1 => "Chest",
@@ -4108,6 +4115,9 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         };
         stats.push(format!("{piece} armor"));
         stats.push(format!("Soak {soak}"));
+    }
+    if pack.is_firework(id) {
+        stats.push("Elytra boost".to_string());
     }
     if max_uses > 0 {
         let left = count.unwrap_or(max_uses).min(max_uses);
@@ -5648,6 +5658,11 @@ pub fn shield_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "block")
 }
 
+/// Plate while gliding on an elytra.
+pub fn elytra_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "glide")
+}
+
 /// Plate while a bow is drawn (right-click hold).
 pub fn bow_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "draw")
@@ -6498,6 +6513,11 @@ fn catalog() -> Vec<String> {
         }
     }
     for id in pack.totem_ids() {
+        if !ids.iter().any(|have| have == &id) {
+            ids.push(id);
+        }
+    }
+    for id in pack.firework_ids() {
         if !ids.iter().any(|have| have == &id) {
             ids.push(id);
         }

@@ -195,6 +195,19 @@ impl Camera {
         body::step_fly(self, dt, input, world, obstacles);
     }
 
+    /// Elytra glide step. `boost` is an along-look impulse (firework).
+    /// Returns false when the glide ends.
+    pub fn step_elytra(
+        &mut self,
+        vel: &mut glam::Vec3,
+        dt: f32,
+        world: &Cluster,
+        obstacles: &[([f32; 3], [f32; 3])],
+        boost: f32,
+    ) -> bool {
+        body::step_elytra(self, vel, dt, world, obstacles, boost)
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         self.view_proj_fov(aspect, LOOK_FOV)
@@ -310,6 +323,9 @@ pub const JUMP_FOV: f32 = 4.0;
 
 /// Degrees the view widens when creative flight engages (before view-bob scale).
 pub const FLY_FOV: f32 = 7.0;
+
+/// Degrees the view widens at a full elytra glide (before view-bob scale).
+pub const ELYTRA_FOV: f32 = 11.0;
 
 /// Degrees the view tightens on a successful block place (before view-bob scale).
 pub const PLACE_FOV: f32 = 2.5;

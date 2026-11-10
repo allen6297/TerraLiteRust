@@ -83,6 +83,8 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "leather_cap" => [0.62, 0.42, 0.24],
         "leather_tunic" => [0.48, 0.30, 0.16],
         "leather_boots" => [0.32, 0.20, 0.10],
+        "elytra" => [0.55, 0.62, 0.72],
+        "firework_rocket" => [0.86, 0.28, 0.22],
         "shield" => [0.55, 0.62, 0.72],
         "boat" => [0.55, 0.36, 0.16],
         "bookshelf" => [0.55, 0.32, 0.22],

@@ -221,6 +221,120 @@ pub fn step_paced(
     camera.eye = eye;
 }
 
+/// Soft gravity while the elytra is open (blocks/s²).
+const ELYTRA_GRAVITY: f32 = 8.0;
+/// How strongly velocity steers toward the look, per second.
+const ELYTRA_ALIGN: f32 = 1.8;
+/// Dive pitch (looking down) adds forward speed (blocks/s² at full dive).
+const ELYTRA_DIVE: f32 = 22.0;
+/// Climb drains speed when looking up.
+const ELYTRA_CLIMB_DRAG: f32 = 1.4;
+/// Soft air drag so a flat glide coasts instead of runaway speeding.
+const ELYTRA_DRAG: f32 = 0.35;
+/// Hard speed ceiling while gliding.
+const ELYTRA_MAX: f32 = 38.0;
+/// Minimum deploy speed so opening the wings feels like flight, not a stall.
+pub const ELYTRA_MIN_SPEED: f32 = 4.5;
+
+/// Elytra glide: look steers, dive gains speed, climb bleeds it.
+///
+/// `vel` is world-space velocity. `boost` is an instant along-look impulse
+/// (firework). Returns false when the glide ends (ground / water).
+pub fn step_elytra(
+    camera: &mut Camera,
+    vel: &mut Vec3,
+    dt: f32,
+    world: &Cluster,
+    obstacles: &[([f32; 3], [f32; 3])],
+    boost: f32,
+) -> bool {
+    let extras: Vec<Aabb> = obstacles
+        .iter()
+        .map(|bounds| Aabb {
+            min: Vec3::from(bounds.0),
+            max: Vec3::from(bounds.1),
+        })
+        .collect();
+    let dt = dt.clamp(0.0, 0.05);
+    let look = camera.forward();
+    // Soft gravity, then pull velocity toward the look ray.
+    vel.y -= ELYTRA_GRAVITY * dt;
+    let speed = vel.length().max(0.05);
+    let aligned = look * speed;
+    let align = (ELYTRA_ALIGN * dt).clamp(0.0, 1.0);
+    *vel = *vel * (1.0 - align) + aligned * align;
+    // Dive (look.y < 0) adds speed; climb bleeds it.
+    if look.y < 0.0 {
+        *vel += look * (-look.y) * ELYTRA_DIVE * dt;
+    } else if look.y > 0.15 {
+        let drain = 1.0 - (look.y * ELYTRA_CLIMB_DRAG * dt).min(0.55);
+        *vel *= drain;
+    }
+    if boost > 0.0 {
+        *vel += look * boost;
+    }
+    // Flat air drag + clamp.
+    *vel *= 1.0 - ELYTRA_DRAG * dt;
+    let speed = vel.length();
+    if speed > ELYTRA_MAX {
+        *vel *= ELYTRA_MAX / speed;
+    } else if speed < 0.8 {
+        *vel = look * ELYTRA_MIN_SPEED * 0.55;
+    }
+
+    camera.on_ground = false;
+    camera.velocity_y = vel.y;
+    camera.slide = Vec3::new(vel.x, 0.0, vel.z);
+
+    let mut eye = camera.eye;
+    let mut body = player_box(eye, false);
+    let _ = move_horizontal(
+        &mut body,
+        &mut eye,
+        0,
+        vel.x * dt,
+        0.0,
+        false,
+        world,
+        &extras,
+    );
+    let _ = move_horizontal(
+        &mut body,
+        &mut eye,
+        2,
+        vel.z * dt,
+        0.0,
+        false,
+        world,
+        &extras,
+    );
+    let wanted_y = vel.y * dt;
+    let dy = clip(&body, 1, wanted_y, world, &extras);
+    eye.y += dy;
+    camera.eye = eye;
+
+    // Hit a ceiling — kill upward speed.
+    if wanted_y > 0.0 && dy < wanted_y - 1.0e-4 {
+        vel.y = 0.0;
+    }
+    // Landed — end the glide.
+    if wanted_y < 0.0 && dy > wanted_y + 1.0e-4 {
+        camera.on_ground = true;
+        camera.velocity_y = 0.0;
+        *vel = Vec3::ZERO;
+        camera.slide = Vec3::ZERO;
+        return false;
+    }
+    // Water cancels wings.
+    if overlaps_water(&player_box(camera.eye, false), world) {
+        camera.velocity_y = vel.y;
+        *vel *= 0.2;
+        return false;
+    }
+    camera.velocity_y = vel.y;
+    true
+}
+
 /// Creative flight: no gravity, Space rises, Shift sinks, WASD glides.
 ///
 /// Collision still stops the body against solids so you cannot clip through
@@ -1772,6 +1886,60 @@ mod tests {
         let feet = feet_y(camera.eye.y);
         assert!((feet - 1.0).abs() < 0.02, "landed at {feet}");
         assert!(camera.on_ground);
+    }
+
+    #[test]
+    fn elytra_dive_gains_speed_and_lands() {
+        let world = stone_path(&[]);
+        // High over the pad, looking mostly forward with a mild dive.
+        let mut camera = Camera::looking_at(
+            Vec3::new(0.5, 12.0 + EYE_HEIGHT, 0.5),
+            Vec3::new(0.5, 9.0, -4.0),
+        );
+        camera.on_ground = false;
+        let mut vel = camera.forward() * ELYTRA_MIN_SPEED;
+        let before = vel.length();
+        let mut gliding = true;
+        for _ in 0..40 {
+            gliding = step_elytra(&mut camera, &mut vel, 1.0 / 60.0, &world, &[], 0.0);
+            if !gliding {
+                break;
+            }
+        }
+        assert!(gliding, "should still be airborne after a short dive");
+        assert!(
+            vel.length() > before + 0.35,
+            "dive should speed up {} → {}",
+            before,
+            vel.length()
+        );
+        // Firework boost along the look.
+        let boosted = vel.length();
+        assert!(step_elytra(
+            &mut camera,
+            &mut vel,
+            1.0 / 60.0,
+            &world,
+            &[],
+            18.0
+        ));
+        assert!(
+            vel.length() > boosted + 5.0,
+            "rocket should shove {} → {}",
+            boosted,
+            vel.length()
+        );
+        // Drop straight onto the pad.
+        camera.eye = Vec3::new(0.5, 3.0 + EYE_HEIGHT, 0.5);
+        vel = Vec3::new(0.1, -16.0, 0.0);
+        let mut landed = false;
+        for _ in 0..180 {
+            if !step_elytra(&mut camera, &mut vel, 1.0 / 60.0, &world, &[], 0.0) {
+                landed = true;
+                break;
+            }
+        }
+        assert!(landed && camera.on_ground, "steep glide should end on the ground");
     }
 
     #[test]
