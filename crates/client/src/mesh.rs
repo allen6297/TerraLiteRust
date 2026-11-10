@@ -4450,7 +4450,7 @@ mod tests {
     /// Green channel after the same shadow-map and sky-fill mix the shader uses.
     /// `coverage` is what the shadow map would return for that texel.
     fn shaded_green(vertex: &Vertex, brightness: f32, shadow_strength: f32, coverage: f32) -> f32 {
-        let shadow_mul = 1.0 + (0.42 - 1.0) * (coverage * shadow_strength);
+        let shadow_mul = 1.0 + (0.16 - 1.0) * (coverage * shadow_strength);
         let facing = 0.34 + 0.66 * vertex.normal[1].max(0.0);
         let ambient = vertex.color[1] - vertex.block[1];
         let sky = vertex.ao.clamp(0.0, 1.0);

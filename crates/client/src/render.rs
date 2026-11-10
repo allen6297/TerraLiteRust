@@ -190,13 +190,22 @@ fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
     // A blocked probe is 0 and an open one is 1. The square root lifts the
     // blend between them so a night tile does not drop to black.
     let sun_soft = sqrt(clamp(sun_vis, 0.0, 1.0));
-    let soft_coverage = mix(coverage, 1.0 - sun_soft, weight);
-    let floor_shadow = mix(0.42, 0.62, use_trace);
-    let shadow_mul = mix(1.0, floor_shadow, soft_coverage * u.params.z);
+    // Soft twin keeps the denser of cascade PCF and the ray grid, so umbra
+    // stays readable when the probe is still settling.
+    let traced_cov = 1.0 - sun_soft;
+    let soft_coverage = mix(coverage, max(coverage, traced_cov), weight);
+    // Raise mid coverage so the umbra reads, while PCF still owns the edge.
+    // Do not multiply vertex AO into this term — that looked blocky on sun faces.
+    let occluded = 1.0 - pow(1.0 - clamp(soft_coverage, 0.0, 1.0), 1.85);
+    // Raster and soft (trace) floors both sit clearly below open sun. Soft
+    // stays a hair higher so a night probe is shade, not a black square.
+    let floor_shadow = mix(0.16, 0.24, use_trace);
+    let shadow_mul = mix(1.0, floor_shadow, occluded * u.params.z);
     let sun_shade = facing * u.params.y * shadow_mul;
     let ambient = input.color - input.block;
     let sky = clamp(input.ao, 0.0, 1.0);
     // Vertex sky darkens only where the ray grid does not cover the texel.
+    // Cast shadow coverage already owns sun faces; AO stays fill-only.
     let extra = (1.0 - sky) * (1.0 - coverage) * (1.0 - use_trace);
     let cave_mul = mix(1.0, 0.16, extra);
     let vis = mix(1.0 - coverage, sun_vis, use_trace);
@@ -372,27 +381,32 @@ fn cascade_coverage(index: i32, world_pos: vec3<f32>, n: vec3<f32>, ndotl: f32) 
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
     let ref_z = ndc.z - bias_world / info.y;
     let map_texel = 1.0 / u.shadow.x;
-    // About half a block of penumbra, so a shadow edge fades across a face
-    // instead of drawing a line on the block border. Clamped so a far cascade
-    // does not smear past its own texels.
-    let penumbra = clamp(0.55 / max(texel_world, 1.0e-3), 1.0, 40.0);
-    let taps = array<vec2<f32>, 9>(
+    // About three-quarters of a block of penumbra, so a shadow edge fades
+    // across a face instead of drawing a line on the block border. A 13-tap
+    // disk keeps the umbra dense while the rim stays soft. Clamped so a far
+    // cascade does not smear past its own texels.
+    let penumbra = clamp(0.48 / max(texel_world, 1.0e-3), 1.0, 40.0);
+    let taps = array<vec2<f32>, 13>(
         vec2<f32>(0.0, 0.0),
-        vec2<f32>(0.75, 0.0),
-        vec2<f32>(-0.75, 0.0),
-        vec2<f32>(0.0, 0.75),
-        vec2<f32>(0.0, -0.75),
-        vec2<f32>(0.5, 0.5),
-        vec2<f32>(-0.5, 0.5),
-        vec2<f32>(0.5, -0.5),
-        vec2<f32>(-0.5, -0.5),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(-1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+        vec2<f32>(0.7, 0.7),
+        vec2<f32>(-0.7, 0.7),
+        vec2<f32>(0.7, -0.7),
+        vec2<f32>(-0.7, -0.7),
+        vec2<f32>(1.2, 0.4),
+        vec2<f32>(-1.2, -0.4),
+        vec2<f32>(0.4, -1.2),
+        vec2<f32>(-0.4, 1.2),
     );
     var lit = 0.0;
-    for (var i = 0; i < 9; i++) {
+    for (var i = 0; i < 13; i++) {
         lit += textureSampleCompare(shadow_map, shadow_samp, uv + taps[i] * map_texel * penumbra, index, ref_z);
     }
     var hit: ShadowHit;
-    hit.coverage = 1.0 - lit / 9.0;
+    hit.coverage = 1.0 - lit / 13.0;
     hit.edge = edge;
     return hit;
 }
@@ -864,6 +878,13 @@ pub struct State {
     crouch_shot_eye: glam::Vec3,
     crouch_shot_yaw: f32,
     crouch_shot_pitch: f32,
+    /// One-shot sun/moon cast shadow on open grass, then quit.
+    shadows_shot_path: Option<std::path::PathBuf>,
+    shadows_shot_frames: u32,
+    shadows_shot_time: f32,
+    shadows_shot_eye: glam::Vec3,
+    shadows_shot_yaw: f32,
+    shadows_shot_pitch: f32,
     /// One-shot walk FOV vs sprint FOV stitch, then quit.
     sprint_shot_path: Option<std::path::PathBuf>,
     sprint_shot_frames: u32,
@@ -2039,6 +2060,12 @@ impl State {
             crouch_shot_eye: glam::Vec3::ZERO,
             crouch_shot_yaw: 0.0,
             crouch_shot_pitch: 0.0,
+            shadows_shot_path: None,
+            shadows_shot_frames: 0,
+            shadows_shot_time: 0.42,
+            shadows_shot_eye: glam::Vec3::ZERO,
+            shadows_shot_yaw: 0.0,
+            shadows_shot_pitch: 0.0,
             sprint_shot_path: None,
             sprint_shot_frames: 0,
             sprint_shot_phase: SprintShotPhase::Idle,
@@ -7920,6 +7947,133 @@ impl State {
         self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
         self.gui.push_chat("PLAYER and CRAFT tabs");
         let _ = self.window.focus_window();
+    }
+
+    /// Tall stone wall casting sun/moon shade onto open grass, then quit with a PNG.
+    /// `time_of_day` 0.30 ≈ morning sun (long cast); 0.0 ≈ midnight moon.
+    pub fn arm_shadows_shot(&mut self, path: std::path::PathBuf, time_of_day: f32) {
+        self.shadows_shot_path = Some(path);
+        self.shadows_shot_frames = 0;
+        self.shadows_shot_time = time_of_day;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Soft sun (ray grid) stays on — stronger floors apply on both paths.
+        self.clock.set_time_of_day(time_of_day);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        // Keep hostiles, critters, and dusk fireflies out so the cast edge is the subject.
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Hide sheep/fox meshes; their default homes sit on this lawn.
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        // Wall on the grass plane (y=1) so shade falls on open lawn to the west.
+        let mut changes = Vec::new();
+        for z in 7..=11 {
+            for y in 1..=5 {
+                changes.push(CellChange {
+                    x: 10,
+                    y,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+            }
+        }
+        for z in 6..=12 {
+            for x in 5..=9 {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y: 2,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        // Warm the soft-sun ray grid so umbra is settled before the PNG.
+        let eye_warm = [7.5_f32, 3.0, 10.0];
+        for _ in 0..48 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        // Look across the lawn at the wall so the soft penumbra fills the frame.
+        let eye = glam::Vec3::new(5.4, 2.4 + body::EYE_HEIGHT, 13.2);
+        let target = glam::Vec3::new(9.2, 1.4, 9.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.shadows_shot_eye = eye;
+        self.shadows_shot_yaw = yaw;
+        self.shadows_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        let label = if time_of_day < 0.2 {
+            "shadows: moon"
+        } else {
+            "shadows: sun"
+        };
+        self.gui.push_chat(label);
+        let _ = self.window.focus_window();
+    }
+
+    fn pin_shadows_shot_camera(&mut self) {
+        if self.shadows_shot_path.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(self.shadows_shot_time);
+        self.dusk_show = 0.0;
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.shadows_shot_eye,
+            self.shadows_shot_yaw,
+            self.shadows_shot_pitch,
+        );
+        self.camera.on_ground = true;
+        self.posed_eye = self.shadows_shot_eye;
+        self.posed_yaw = self.shadows_shot_yaw;
+        self.posed_pitch = self.shadows_shot_pitch;
+        self.pose_dirty = true;
+        // Keep sheep/fox hidden if a tick rebuilt them.
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
     }
 
     /// Stairs overlook with full health/hunger + worn armor plates, then quit with a PNG.
@@ -15721,6 +15875,38 @@ impl State {
         }
     }
 
+    fn poll_shadows_shot(&mut self) {
+        let Some(path) = self.shadows_shot_path.clone() else {
+            return;
+        };
+        self.pin_shadows_shot_camera();
+        self.shadows_shot_frames = self.shadows_shot_frames.saturating_add(1);
+        // Wait for the wall mesh + soft-grid / cascade fills so the umbra settles.
+        if self.shadows_shot_frames < 220 || !self.chunk_bake.is_idle() {
+            if self.shadows_shot_frames > 900 {
+                eprintln!("shadows shot timed out");
+                self.shadows_shot_path = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("shadows shot wrote {}", path.display());
+                self.shadows_shot_path = None;
+                self.quit = true;
+            }
+            Err(err) => {
+                eprintln!("shadows shot failed: {err}");
+                if self.shadows_shot_frames > 280 {
+                    self.shadows_shot_path = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_bed_sleep_shot(&mut self) {
         let Some(path) = self.bed_sleep_shot_path.clone() else {
             return;
@@ -18746,7 +18932,12 @@ impl State {
         } else {
             0.0
         };
-        if self.playing && !self.menu.is_open() && !self.dead && firefly_mood > 0.25 {
+        if self.playing
+            && !self.menu.is_open()
+            && !self.dead
+            && firefly_mood > 0.25
+            && self.shadows_shot_path.is_none()
+        {
             if self.firefly_wait <= 0.0 {
                 self.firefly_wait = 0.22 + (1.0 - firefly_mood) * 0.55;
                 let base = shore_at.unwrap_or([
@@ -18777,7 +18968,10 @@ impl State {
                 }
             }
         }
-        if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0 {
+        if self.shadows_shot_path.is_some() {
+            self.dusk_show = 0.0;
+        } else if self.playing && !self.menu.is_open() && !self.dead && self.drops.firefly_count() > 0
+        {
             self.dusk_show = (self.dusk_show + 0.35).min(1.0);
         } else {
             self.dusk_show = (self.dusk_show - dt * 0.8).max(0.0);
@@ -19196,10 +19390,19 @@ impl State {
             self.hooks.drive_entities(&mut self.world, steps);
             self.flush_script_writes();
             let feet = [self.camera.eye.x, self.camera.eye.z];
-            self.sheep.tick_near(steps, feet, &self.world);
-            self.rebuild_sheep();
-            self.pig.tick_near(steps, feet, &self.world);
-            self.rebuild_pig();
+            if self.shadows_shot_path.is_none() {
+                self.sheep.tick_near(steps, feet, &self.world);
+                self.rebuild_sheep();
+                self.pig.tick_near(steps, feet, &self.world);
+                self.rebuild_pig();
+            } else {
+                self.sheep_buf = None;
+                self.sheep_count = 0;
+                self.pig_buf = None;
+                self.pig_count = 0;
+                self.fox_buf = None;
+                self.fox_count = 0;
+            }
             self.horse.tick_near(steps, feet, &self.world);
             self.rebuild_horse();
             let (zmin, zmax) = self.zombie.bounds();
@@ -19442,16 +19645,21 @@ impl State {
             } else {
                 None
             };
-            if self.fox.tick(steps, feet, treat, &self.world) {
-                if let Some(id) = self.drops.take_food(self.fox.origin(), 1.6) {
-                    self.fox.hold(id);
-                    if self.fox.holding() == Some(id) {
-                        self.gui.push_chat("held");
-                        self.rebuild_drops();
+            if self.shadows_shot_path.is_some() {
+                self.fox_buf = None;
+                self.fox_count = 0;
+            } else {
+                if self.fox.tick(steps, feet, treat, &self.world) {
+                    if let Some(id) = self.drops.take_food(self.fox.origin(), 1.6) {
+                        self.fox.hold(id);
+                        if self.fox.holding() == Some(id) {
+                            self.gui.push_chat("held");
+                            self.rebuild_drops();
+                        }
                     }
                 }
+                self.rebuild_fox();
             }
-            self.rebuild_fox();
             let feet_at = [
                 self.camera.eye.x,
                 self.camera.eye.y - body::EYE_HEIGHT,
@@ -20389,6 +20597,7 @@ impl State {
         self.poll_night_spawn_shot();
         self.poll_bed_sleep_shot();
         self.poll_crouch_shot();
+        self.poll_shadows_shot();
         self.poll_sprint_shot();
         self.poll_swim_shot();
         self.poll_boat_shot();
@@ -22451,12 +22660,18 @@ mod tests {
         assert!(src.contains("2.0 + 2.0 * tan_theta"));
         assert!(src.contains("texel_world * 4.0"));
         assert!(src.contains("miss.edge = 2.0"));
-        assert!(src.contains("i < 9"));
+        assert!(src.contains("i < 13"));
+        assert!(src.contains("0.48 / max(texel_world"));
+        assert!(src.contains("mix(0.16, 0.24, use_trace)"));
+        assert!(src.contains("pow(1.0 - clamp(soft_coverage, 0.0, 1.0), 1.85)"));
         assert!(src.contains("smoothstep(0.85, 1.0, primary.edge)"));
         assert!(src.contains("input.ao"));
         assert!(!src.contains("input.shadow"));
         assert!(!src.contains("shadow_kernel_angle"));
         assert!(!src.contains("0.0012"));
+        // Corner AO must not scale sun coverage (that looked blocky).
+        assert!(!src.contains("coverage * input.ao"));
+        assert!(!src.contains("soft_coverage * input.ao"));
 
         assert!(
             super::shadow_texel_world() <= 64.0 / 4096.0 + 1.0e-6,

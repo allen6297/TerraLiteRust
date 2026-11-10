@@ -15,7 +15,7 @@ const MOONLIGHT: f32 = 0.22;
 #[cfg(test)]
 const SUN_FLOOR: f32 = 0.34;
 #[cfg(test)]
-const CAST_SHADOW: f32 = 0.42;
+const CAST_SHADOW: f32 = 0.16;
 
 /// South keeps noon in the north. North mirrors that arc so noon stands in the south.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,7 +212,8 @@ pub fn sample_at(clock: Clock, hemisphere: Hemisphere) -> Light {
     let shadow = if sun[1] > 0.0 {
         smoothstep(0.08, 0.35, sun[1])
     } else {
-        0.55 * smoothstep(0.02, 0.40, moon[1])
+        // Moon keeps most of the day cast strength so night shade still reads.
+        0.82 * smoothstep(0.02, 0.40, moon[1])
     };
     Light {
         direction,

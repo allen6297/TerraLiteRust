@@ -172,6 +172,10 @@ struct Args {
     shot_tabs: Option<std::path::PathBuf>,
     /// On-world HUD health/hunger/armor plates, then quit.
     shot_hud: Option<std::path::PathBuf>,
+    /// Morning sun cast shadow on grass, then quit.
+    shot_shadows_day: Option<std::path::PathBuf>,
+    /// Midnight moon cast shadow on grass, then quit.
+    shot_shadows_night: Option<std::path::PathBuf>,
     /// Southeast shrine ruin, then quit.
     shot_shrine: Option<std::path::PathBuf>,
     /// West mine-mouth chest, then quit.
@@ -379,6 +383,8 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_tips: args.shot_tips,
         shot_tabs: args.shot_tabs,
         shot_hud: args.shot_hud,
+        shot_shadows_day: args.shot_shadows_day,
+        shot_shadows_night: args.shot_shadows_night,
         shot_shrine: args.shot_shrine,
         shot_mine: args.shot_mine,
         shot_keybinds: args.shot_keybinds,
@@ -482,6 +488,8 @@ struct App {
     shot_tips: Option<std::path::PathBuf>,
     shot_tabs: Option<std::path::PathBuf>,
     shot_hud: Option<std::path::PathBuf>,
+    shot_shadows_day: Option<std::path::PathBuf>,
+    shot_shadows_night: Option<std::path::PathBuf>,
     shot_shrine: Option<std::path::PathBuf>,
     shot_mine: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -671,6 +679,13 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_hud.take() {
                     state.arm_hud_plates_shot(path);
+                }
+                if let Some(path) = self.shot_shadows_day.take() {
+                    // Morning sun: long cast so the umbra reads past the penumbra.
+                    state.arm_shadows_shot(path, 0.30);
+                }
+                if let Some(path) = self.shot_shadows_night.take() {
+                    state.arm_shadows_shot(path, 0.0);
                 }
                 if let Some(path) = self.shot_shrine.take() {
                     state.arm_shrine_shot(path);
@@ -999,6 +1014,8 @@ where
         shot_tips: None,
         shot_tabs: None,
         shot_hud: None,
+        shot_shadows_day: None,
+        shot_shadows_night: None,
         shot_shrine: None,
         shot_mine: None,
         shot_keybinds: None,
@@ -1262,6 +1279,18 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-hud".to_string())?;
                 parsed.shot_hud = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-shadows-day" | "--shot-shadows-sun" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-shadows-day".to_string())?;
+                parsed.shot_shadows_day = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-shadows-night" | "--shot-shadows-moon" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-shadows-night".to_string())?;
+                parsed.shot_shadows_night = Some(std::path::PathBuf::from(value));
             }
             "--shot-shrine" => {
                 let value = iter
