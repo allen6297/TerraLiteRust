@@ -1245,46 +1245,27 @@ fn draw_player_inventory_panel(
         ui.set_min_width(grid_w.min(panel_w));
         title_label(ui, "INVENTORY");
         ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            for (tab, label) in [
-                (PlayerInvTab::Player, "PLAYER"),
-                (PlayerInvTab::Craft, "Craft"),
-            ] {
-                let selected = gui.inv_tab() == tab;
-                let fill = if selected { SELECT } else { BUTTON };
-                let btn = egui::Button::new(RichText::new(label).size(14.0).color(
-                    if selected {
-                        Color32::from_rgb(20, 18, 12)
-                    } else {
-                        INK
-                    },
-                ))
-                .fill(fill)
-                .stroke(Stroke::new(
-                    1.0,
-                    if selected { SELECT } else { SLOT_EDGE },
-                ))
-                .corner_radius(CornerRadius::same(3))
-                .min_size(Vec2::new(88.0, 28.0));
-                if ui.add(btn).clicked() {
-                    gui.set_inv_tab(tab);
-                }
-            }
-        });
+        draw_inv_tab_strip(ui, gui);
         ui.add_space(10.0);
         match gui.inv_tab() {
             PlayerInvTab::Player => {
+                // Equipment + body inventory (GUI plan PLAYER detail).
                 if draw_player_detail(ui, hotbar, bag, armor, icons) {
                     touched = true;
                 }
                 ui.add_space(12.0);
+                ui.label(RichText::new("inventory").color(MUTED).size(12.0));
+                ui.add_space(4.0);
                 draw_inv_body_grid(ui, gui, hotbar, bag, icons);
             }
             PlayerInvTab::Craft => {
+                // Focus the 2×2 + OUT; bag stays for ingredients. EMI stays beside.
                 if draw_craft_detail(ui, gui, hotbar, bag, icons) {
                     touched = true;
                 }
                 ui.add_space(12.0);
+                ui.label(RichText::new("bag").color(MUTED).size(12.0));
+                ui.add_space(4.0);
                 draw_inv_body_grid(ui, gui, hotbar, bag, icons);
             }
         }
@@ -1301,6 +1282,46 @@ fn draw_player_inventory_panel(
         }
     });
     touched
+}
+
+/// Segmented PLAYER | CRAFT strip under the inventory title.
+fn draw_inv_tab_strip(ui: &mut Ui, gui: &mut Gui) {
+    let tabs = [
+        (PlayerInvTab::Player, "PLAYER"),
+        (PlayerInvTab::Craft, "CRAFT"),
+    ];
+    Frame::new()
+        .fill(ROW)
+        .stroke(Stroke::new(1.0, SLOT_EDGE))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(4, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+                let avail = ui.available_width().max(180.0);
+                let each = ((avail - 4.0) / tabs.len() as f32).max(88.0);
+                for (tab, label) in tabs {
+                    let selected = gui.inv_tab() == tab;
+                    let fill = if selected { SELECT } else { BUTTON };
+                    let ink = if selected {
+                        Color32::from_rgb(20, 18, 12)
+                    } else {
+                        INK
+                    };
+                    let btn = egui::Button::new(RichText::new(label).size(14.0).color(ink).strong())
+                        .fill(fill)
+                        .stroke(Stroke::new(
+                            if selected { 1.5 } else { 1.0 },
+                            if selected { SELECT } else { SLOT_EDGE },
+                        ))
+                        .corner_radius(CornerRadius::same(3))
+                        .min_size(Vec2::new(each, 30.0));
+                    if ui.add(btn).clicked() {
+                        gui.set_inv_tab(tab);
+                    }
+                }
+            });
+        });
 }
 
 /// EMI item browser: searchable list + CRAFTING / USES for the selection.
@@ -2383,6 +2404,22 @@ mod tests {
         assert_eq!(gui.catalog_tab(), 0);
         gui.cycle_catalog_tab(true);
         assert_eq!(gui.catalog_tab(), 1);
+    }
+
+    #[test]
+    fn inventory_player_craft_tabs_switch() {
+        let mut gui = Gui::new();
+        gui.open_player_inv();
+        assert!(gui.player_inv_open());
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
+        gui.set_inv_tab(PlayerInvTab::Craft);
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Craft);
+        gui.set_inv_tab(PlayerInvTab::Player);
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
+        // EMI selection is independent of the tab strip.
+        gui.select_emi("torch");
+        assert_eq!(gui.emi_selected(), Some("torch"));
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
     }
 
     #[test]

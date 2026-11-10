@@ -1281,13 +1281,19 @@ impl Gui {
         self.built_at = None;
     }
 
-    /// Open the player inventory (E) on the Craft tab for EMI cook shots.
-    pub fn open_player_craft(&mut self) {
+    /// Open the player inventory (E) on the PLAYER tab.
+    pub fn open_player_inv(&mut self) {
         self.open = true;
         self.extra = None;
         self.built_at = None;
         self.bag_open = false;
         self.selected = 0;
+        self.inv_tab = PlayerInvTab::Player;
+    }
+
+    /// Open the player inventory (E) on the Craft tab for EMI cook shots.
+    pub fn open_player_craft(&mut self) {
+        self.open_player_inv();
         self.inv_tab = PlayerInvTab::Craft;
     }
 
@@ -8389,6 +8395,11 @@ mod tests {
         assert!(gui.player_inv_open());
         assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
         gui.set_inv_tab(PlayerInvTab::Craft);
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Craft);
+        gui.open_player_inv();
+        assert!(gui.player_inv_open());
+        assert_eq!(gui.inv_tab(), PlayerInvTab::Player);
+        gui.open_player_craft();
         assert_eq!(gui.inv_tab(), PlayerInvTab::Craft);
         assert!(!gui.on_press(KeyCode::Digit1));
         assert!(gui.is_open());

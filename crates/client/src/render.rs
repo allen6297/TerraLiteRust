@@ -7829,6 +7829,18 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open inventory on PLAYER with CRAFT tab strip, then quit with a PNG.
+    pub fn arm_tabs_shot(&mut self, path: std::path::PathBuf) {
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+        self.gui.open_player_inv();
+        self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
+        self.gui.push_chat("PLAYER and CRAFT tabs");
+        let _ = self.window.focus_window();
+    }
+
     /// Open inventory with a pinned rich tip (iron pick), then quit with a PNG.
     pub fn arm_tips_shot(&mut self, path: std::path::PathBuf) {
         self.creative_shot_path = Some(path);
