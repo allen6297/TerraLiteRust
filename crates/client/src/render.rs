@@ -16698,6 +16698,104 @@ impl State {
         self.goat_count = 0;
     }
 
+    /// Night flat pad with glowstone markers — soft block-light falloff proof.
+    /// Reuses the shadows-shot poller (same settle + PNG path).
+    pub fn arm_block_light_soft_shot(&mut self, path: std::path::PathBuf) {
+        self.shadows_shot_path = Some(path);
+        self.shadows_shot_frames = 0;
+        self.shadows_shot_time = 0.0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        // Spring night (day 0) so the title matches the Director dislike still.
+        self.clock = crate::daylight::Clock::at(0.0);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.pig = crate::mobs::Pig::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        // Hide critters so the soft floor pool is the subject.
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+
+        // Flat stone pad + glowstone markers. Stone keeps albedo even so soft
+        // block-light gradients read clearly (dirt texture noise hides them).
+        let mut changes = Vec::new();
+        for z in 2..=20 {
+            for x in 2..=20 {
+                for y in 2..=8 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+            }
+        }
+        for &(x, z) in &[(6, 8), (10, 11), (14, 7), (9, 15)] {
+            changes.push(CellChange {
+                x,
+                y: 2,
+                z,
+                block: Block::new("glowstone", 0),
+            });
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        let eye_warm = [10.5_f32, 3.2, 16.0];
+        for _ in 0..48 {
+            self.trace
+                .advance(&self.world, eye_warm, light.direction);
+        }
+
+        // Look across the lit pad so soft rings fill the floor, not the sky.
+        let eye = glam::Vec3::new(10.5, 2.35 + body::EYE_HEIGHT, 17.2);
+        let target = glam::Vec3::new(10.5, 1.4, 9.0);
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.shadows_shot_eye = eye;
+        self.shadows_shot_yaw = yaw;
+        self.shadows_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.gui.push_chat("block light soft");
+        let _ = self.window.focus_window();
+    }
+
     /// Tall stone wall casting sun/moon shade onto open grass, then quit with a PNG.
     /// `time_of_day` 0.30 ≈ morning sun (long cast); 0.0 ≈ midnight moon.
     pub fn arm_shadows_shot(&mut self, path: std::path::PathBuf, time_of_day: f32) {

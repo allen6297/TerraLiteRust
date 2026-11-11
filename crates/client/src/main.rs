@@ -207,6 +207,8 @@ struct Args {
     shot_shadows_day: Option<std::path::PathBuf>,
     /// Midnight moon cast shadow on grass, then quit.
     shot_shadows_night: Option<std::path::PathBuf>,
+    /// Spring night glowstone pad — soft block-light falloff, then quit.
+    shot_block_light_soft: Option<std::path::PathBuf>,
     /// Soft bounce fill on open day shade, then quit.
     shot_bounce_day: Option<std::path::PathBuf>,
     /// Soft bounce fill under a roof / cave mouth, then quit.
@@ -643,6 +645,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_hud: args.shot_hud,
         shot_shadows_day: args.shot_shadows_day,
         shot_shadows_night: args.shot_shadows_night,
+        shot_block_light_soft: args.shot_block_light_soft,
         shot_bounce_day: args.shot_bounce_day,
         shot_bounce_interior: args.shot_bounce_interior,
         shot_water_reflection: args.shot_water_reflection,
@@ -854,6 +857,7 @@ struct App {
     shot_hud: Option<std::path::PathBuf>,
     shot_shadows_day: Option<std::path::PathBuf>,
     shot_shadows_night: Option<std::path::PathBuf>,
+    shot_block_light_soft: Option<std::path::PathBuf>,
     shot_bounce_day: Option<std::path::PathBuf>,
     shot_bounce_interior: Option<std::path::PathBuf>,
     shot_water_reflection: Option<std::path::PathBuf>,
@@ -1159,6 +1163,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_shadows_night.take() {
                     state.arm_shadows_shot(path, 0.0);
+                }
+                if let Some(path) = self.shot_block_light_soft.take() {
+                    state.arm_block_light_soft_shot(path);
                 }
                 if let Some(path) = self.shot_bounce_day.take() {
                     state.arm_bounce_shot(path, false);
@@ -1794,6 +1801,7 @@ where
         shot_hud: None,
         shot_shadows_day: None,
         shot_shadows_night: None,
+        shot_block_light_soft: None,
         shot_bounce_day: None,
         shot_bounce_interior: None,
         shot_water_reflection: None,
@@ -2183,6 +2191,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-shadows-night".to_string())?;
                 parsed.shot_shadows_night = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-block-light-soft" | "--shot-light-soft" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-block-light-soft".to_string())?;
+                parsed.shot_block_light_soft = Some(std::path::PathBuf::from(value));
             }
             "--shot-bounce-day" | "--shot-bounce-shade" => {
                 let value = iter

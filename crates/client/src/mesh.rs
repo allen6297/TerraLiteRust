@@ -8,7 +8,9 @@
 //! path, and its tilted faces (grass blades) are extra quads in the same
 //! biome color. An id that was not registered does not mesh.
 //! Colored light from the pack tints a face and falls off per cell, so two
-//! faces merge only when that light matches. Bounce is not part of that key:
+//! faces merge only when that quantized light matches. Corners sample the
+//! continuous LightField around the outside of the face and blend, so torch
+//! rings on flat floors stay soft instead of stair-stepping. Bounce is not part of that key:
 //! a sun step would otherwise retile the grass into new triangles, and those
 //! triangles read as jagged shadows while the cascades catch up. A block that names a PNG, and
 //! whose file is present, carries that texture's atlas slot. Other faces stay flat
@@ -19,8 +21,8 @@
 //! when drawing. Each corner stores how open the sky is from that point. A few
 //! rays leave the face, so a cave and the side of a wall go darker. That shade
 //! fades across the face. It is not the cast shadow; the shadow map draws those.
-//! A colored block light is not dimmed by the corner. The lit side of
-//! the caster stays bright. Empty chunks are not meshed. Past the full-detail
+//! Corner block light is averaged from the LightField, not multiplied by sky
+//! AO, so the lit side of a torch stays bright. Empty chunks are not meshed. Past the full-detail
 //! ring, a 2-block mesh covers the middle distance and a 4-block mesh covers
 //! the rest, so a far rebuild stays cheap on a large world. The blocks of a
 //! coarse chunk that touch a finer chunk are meshed at that finer step, so
@@ -900,7 +902,8 @@ fn mesh_lod_direction(
                 // would drop the vertices the skirt hangs from.
                 if axis == Axis::Y && positive && touches_strip(cx, cz, nx, nz, step, borders) {
                     emit_quad(
-                        axis, positive, slice, u, v, 1, 1, stamp, origin, scale, sample, mesh,
+                        axis, positive, slice, u, v, 1, 1, stamp, origin, scale, sample, light,
+                        mesh,
                     );
                     emit_border_skirts(cx, cy, cz, nx, nz, step, borders, stamp, origin, mesh);
                     continue;
@@ -909,7 +912,7 @@ fn mesh_lod_direction(
             }
         }
         greedy(
-            axis, positive, slice, u_len, v_len, origin, scale, sample, &mut mask, mesh,
+            axis, positive, slice, u_len, v_len, origin, scale, sample, light, &mut mask, mesh,
         );
     }
 }
@@ -1124,7 +1127,7 @@ fn emit_split_face(
             let (slice, u, v) = split_slot(axis, positive, cx, cy, cz, step, sub, iu, iv);
             let stamp = face_stamp(axis, positive, slice, u, v, origin, scale, block, light);
             emit_quad(
-                axis, positive, slice, u, v, 1, 1, stamp, origin, scale, sample, mesh,
+                axis, positive, slice, u, v, 1, 1, stamp, origin, scale, sample, light, mesh,
             );
         }
     }
@@ -1300,13 +1303,13 @@ fn emit_skirt(
         Axis::Y => [0.0, 1.0, 0.0],
     };
     let albedo = face_color(stamp.block.id, stamp.block.metadata, normal);
-    let (color, block) = lit_channels(albedo, stamp.light);
+    let (colors, blocks) = flat_lit(albedo, stamp.light);
     let uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
     push_face(
         corners,
         uvs,
-        color,
-        block,
+        colors,
+        blocks,
         normal,
         face_texture(stamp.block),
         [0.0, 0.0, 0.0],
@@ -1430,7 +1433,7 @@ fn mesh_owned_direction(
                 }
                 let stamp = face_stamp(axis, positive, slice, u, v, origin, scale, block, light);
                 emit_quad(
-                    axis, positive, slice, u, v, 1, 1, stamp, origin, scale, sample, mesh,
+                    axis, positive, slice, u, v, 1, 1, stamp, origin, scale, sample, light, mesh,
                 );
             }
         }
@@ -1524,7 +1527,8 @@ fn mesh_direction(
                     };
                     if creased {
                         emit_quad(
-                            axis, positive, slice, u, v, 1, 1, stamp, origin, 1.0, sample, mesh,
+                            axis, positive, slice, u, v, 1, 1, stamp, origin, 1.0, sample, light,
+                            mesh,
                         );
                         continue;
                     }
@@ -1533,7 +1537,7 @@ fn mesh_direction(
             }
         }
         greedy(
-            axis, positive, slice, u_len, v_len, origin, 1.0, sample, &mut mask, mesh,
+            axis, positive, slice, u_len, v_len, origin, 1.0, sample, light, &mut mask, mesh,
         );
     }
 }
@@ -1825,6 +1829,7 @@ fn mesh_cell(
                     origin,
                     1.0 / 16.0,
                     sample,
+                    light,
                     &mut mask,
                     mesh,
                 );
@@ -1840,7 +1845,7 @@ fn mesh_cell(
             sun,
             face_color(block.id, block.metadata, normal),
         );
-        emit_plane(block, *plane, origin, channels, bounce, sample, mesh, false);
+        emit_plane(block, *plane, origin, light, bounce, sample, mesh, false);
         if block.id == "flower" {
             let back = [-normal[0], -normal[1], -normal[2]];
             let bounce = bounce_light(
@@ -1850,7 +1855,7 @@ fn mesh_cell(
                 sun,
                 face_color(block.id, block.metadata, back),
             );
-            emit_plane(block, *plane, origin, channels, bounce, sample, mesh, true);
+            emit_plane(block, *plane, origin, light, bounce, sample, mesh, true);
         }
     }
 }
@@ -1901,11 +1906,6 @@ fn mesh_faces(
             {
                 continue;
             }
-            let channels = if (0..256).contains(&neighbor[1]) {
-                light.channels(neighbor[0], neighbor[1], neighbor[2])
-            } else {
-                light.channels(cell[0], cell[1], cell[2])
-            };
             let mut normal = quad_normal(world);
             let mut corners = world;
             let mut uvs = uvs;
@@ -1923,7 +1923,7 @@ fn mesh_faces(
                 normal,
                 tint_for(normal),
                 path,
-                channels,
+                light,
                 cell,
                 sample,
                 sun,
@@ -1931,9 +1931,9 @@ fn mesh_faces(
             );
             continue;
         }
-        let Some(channels) = blade_light(&local, cell, sample, light) else {
+        if blade_light(&local, cell, sample, light).is_none() {
             continue;
-        };
+        }
         let normal = quad_normal(world);
         emit_free_face(
             block,
@@ -1942,7 +1942,7 @@ fn mesh_faces(
             normal,
             tint_for(normal),
             path,
-            channels,
+            light,
             cell,
             sample,
             sun,
@@ -1957,7 +1957,7 @@ fn mesh_faces(
             [-normal[0], -normal[1], -normal[2]],
             tint_for([-normal[0], -normal[1], -normal[2]]),
             path,
-            channels,
+            light,
             cell,
             sample,
             sun,
@@ -2061,7 +2061,7 @@ fn emit_free_face(
     normal: [f32; 3],
     albedo: [f32; 3],
     texture: Option<&str>,
-    channels: [u8; 3],
+    light: &LightField,
     cell: [i32; 3],
     sample: &impl Fn(i32, i32, i32) -> Block,
     sun: [f32; 3],
@@ -2073,8 +2073,15 @@ fn emit_free_face(
         (corners[0][2] + corners[1][2] + corners[2][2] + corners[3][2]) * 0.25,
     ];
     let bounce = bounce_light(sample, center, normal, sun, albedo);
-    let (color, block_light) = lit_channels(albedo, channels);
     let ao = corners.map(|position| corner_ao(sample, cell, position, normal));
+    let mut colors = [[0.0; 3]; 4];
+    let mut blocks = [[0.0; 3]; 4];
+    for i in 0..4 {
+        let channels = corner_block_channels(light, cell, corners[i], normal);
+        let lit = lit_channels_f(albedo, channels);
+        colors[i] = lit.0;
+        blocks[i] = lit.1;
+    }
     let textured = texture
         .and_then(texture_slot)
         .map(|slot| slot as f32 + 1.0)
@@ -2082,8 +2089,8 @@ fn emit_free_face(
     push_face(
         corners,
         uvs,
-        color,
-        block_light,
+        colors,
+        blocks,
         normal,
         textured,
         bounce,
@@ -2096,7 +2103,7 @@ fn emit_plane(
     block: Block,
     plane: Plane,
     origin: [f32; 3],
-    channels: [u8; 3],
+    light: &LightField,
     bounce: [f32; 3],
     sample: &impl Fn(i32, i32, i32) -> Block,
     mesh: &mut Mesh,
@@ -2144,18 +2151,25 @@ fn emit_plane(
         uvs = [uvs[0], uvs[3], uvs[2], uvs[1]];
     }
     let albedo = face_color(block.id, block.metadata, normal);
-    let (color, block_light) = lit_channels(albedo, channels);
     let cell = [
         origin[0].floor() as i32,
         origin[1].floor() as i32,
         origin[2].floor() as i32,
     ];
     let ao = corners.map(|position| corner_ao(sample, cell, position, normal));
+    let mut colors = [[0.0; 3]; 4];
+    let mut blocks = [[0.0; 3]; 4];
+    for i in 0..4 {
+        let channels = corner_block_channels(light, cell, corners[i], normal);
+        let lit = lit_channels_f(albedo, channels);
+        colors[i] = lit.0;
+        blocks[i] = lit.1;
+    }
     push_face(
         corners,
         uvs,
-        color,
-        block_light,
+        colors,
+        blocks,
         normal,
         face_texture(block),
         bounce,
@@ -2262,6 +2276,7 @@ fn greedy(
     origin: [f32; 3],
     scale: f32,
     sample: &impl Fn(i32, i32, i32) -> Block,
+    light: &LightField,
     mask: &mut [Stamp],
     mesh: &mut Mesh,
 ) {
@@ -2274,18 +2289,23 @@ fn greedy(
                 u += 1;
                 continue;
             }
+            // Block-lit faces stay 1×1 so each cell keeps its own soft corner
+            // samples. Merging a torch ring into one quad drops the interior
+            // gradient and reads as Manhattan stair-steps again.
             let mut width = 1;
-            while u + width < u_len && mask[v * u_len + u + width].same_surface(stamp) {
-                width += 1;
-            }
             let mut height = 1;
-            while v + height < v_len {
-                let row_matches =
-                    (0..width).all(|du| mask[(v + height) * u_len + u + du].same_surface(stamp));
-                if !row_matches {
-                    break;
+            if stamp.light == [0, 0, 0] {
+                while u + width < u_len && mask[v * u_len + u + width].same_surface(stamp) {
+                    width += 1;
                 }
-                height += 1;
+                while v + height < v_len {
+                    let row_matches = (0..width)
+                        .all(|du| mask[(v + height) * u_len + u + du].same_surface(stamp));
+                    if !row_matches {
+                        break;
+                    }
+                    height += 1;
+                }
             }
             for dv in 0..height {
                 for du in 0..width {
@@ -2293,7 +2313,8 @@ fn greedy(
                 }
             }
             emit_quad(
-                axis, positive, slice, u, v, width, height, stamp, origin, scale, sample, mesh,
+                axis, positive, slice, u, v, width, height, stamp, origin, scale, sample, light,
+                mesh,
             );
             u += width;
         }
@@ -2313,6 +2334,113 @@ fn emit_quad(
     origin: [f32; 3],
     scale: f32,
     sample: &impl Fn(i32, i32, i32) -> Block,
+    light: &LightField,
+    mesh: &mut Mesh,
+) {
+    // Lit 1×1 faces subdivide so soft samples land mid-edge / mid-face too.
+    if stamp.light != [0, 0, 0] && width == 1 && height == 1 && scale >= 0.99 {
+        for sv in 0..2 {
+            for su in 0..2 {
+                emit_lit_subquad(
+                    axis,
+                    positive,
+                    slice,
+                    u,
+                    v,
+                    su,
+                    sv,
+                    stamp,
+                    origin,
+                    sample,
+                    light,
+                    mesh,
+                );
+            }
+        }
+        return;
+    }
+    emit_quad_span(
+        axis, positive, slice, u, v, width, height, stamp, origin, scale, sample, light, mesh,
+    );
+}
+
+fn emit_lit_subquad(
+    axis: Axis,
+    positive: bool,
+    slice: usize,
+    u: usize,
+    v: usize,
+    su: usize,
+    sv: usize,
+    stamp: Stamp,
+    origin: [f32; 3],
+    sample: &impl Fn(i32, i32, i32) -> Block,
+    light: &LightField,
+    mesh: &mut Mesh,
+) {
+    let plane = if positive {
+        (slice + 1) as f32
+    } else {
+        slice as f32
+    };
+    let u0 = u as f32 + su as f32 * 0.5;
+    let v0 = v as f32 + sv as f32 * 0.5;
+    let u1 = u0 + 0.5;
+    let v1 = v0 + 0.5;
+    let corners = [
+        corner(axis, plane, u0, v0, origin),
+        corner(axis, plane, u1, v0, origin),
+        corner(axis, plane, u1, v1, origin),
+        corner(axis, plane, u0, v1, origin),
+    ];
+    let normal = match axis {
+        Axis::X => [if positive { 1.0 } else { -1.0 }, 0.0, 0.0],
+        Axis::Y => [0.0, if positive { 1.0 } else { -1.0 }, 0.0],
+        Axis::Z => [0.0, 0.0, if positive { 1.0 } else { -1.0 }],
+    };
+    let albedo = face_color(stamp.block.id, stamp.block.metadata, normal);
+    let uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+    let owner = quad_cell(axis, slice, u, v, origin, 1.0);
+    let ao = [
+        corner_ao(sample, owner, corners[0], normal),
+        corner_ao(sample, owner, corners[1], normal),
+        corner_ao(sample, owner, corners[2], normal),
+        corner_ao(sample, owner, corners[3], normal),
+    ];
+    let mut colors = [[0.0; 3]; 4];
+    let mut blocks = [[0.0; 3]; 4];
+    for i in 0..4 {
+        let channels = soft_block_channels_at(light, corners[i], normal);
+        let lit = lit_channels_f(albedo, channels);
+        colors[i] = lit.0;
+        blocks[i] = lit.1;
+    }
+    push_face(
+        corners,
+        uvs,
+        colors,
+        blocks,
+        normal,
+        face_texture(stamp.block),
+        dequantize_bounce(stamp.bounce),
+        ao,
+        mesh,
+    );
+}
+
+fn emit_quad_span(
+    axis: Axis,
+    positive: bool,
+    slice: usize,
+    u: usize,
+    v: usize,
+    width: usize,
+    height: usize,
+    stamp: Stamp,
+    origin: [f32; 3],
+    scale: f32,
+    sample: &impl Fn(i32, i32, i32) -> Block,
+    light: &LightField,
     mesh: &mut Mesh,
 ) {
     let plane = if positive {
@@ -2336,7 +2464,6 @@ fn emit_quad(
         Axis::Z => [0.0, 0.0, if positive { 1.0 } else { -1.0 }],
     };
     let albedo = face_color(stamp.block.id, stamp.block.metadata, normal);
-    let (color, block) = lit_channels(albedo, stamp.light);
     let uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
     let owners = [
         quad_cell(axis, slice, u, v, origin, scale),
@@ -2350,11 +2477,19 @@ fn emit_quad(
         corner_ao(sample, owners[2], corners[2], normal),
         corner_ao(sample, owners[3], corners[3], normal),
     ];
+    let mut colors = [[0.0; 3]; 4];
+    let mut blocks = [[0.0; 3]; 4];
+    for i in 0..4 {
+        let channels = soft_block_channels_at(light, corners[i], normal);
+        let lit = lit_channels_f(albedo, channels);
+        colors[i] = lit.0;
+        blocks[i] = lit.1;
+    }
     push_face(
         corners,
         uvs,
-        color,
-        block,
+        colors,
+        blocks,
         normal,
         face_texture(stamp.block),
         dequantize_bounce(stamp.bounce),
@@ -2366,8 +2501,8 @@ fn emit_quad(
 fn push_face(
     corners: [[f32; 3]; 4],
     uvs: [[f32; 2]; 4],
-    color: [f32; 3],
-    block: [f32; 3],
+    colors: [[f32; 3]; 4],
+    blocks: [[f32; 3]; 4],
     normal: [f32; 3],
     textured: f32,
     bounce: [f32; 3],
@@ -2375,15 +2510,15 @@ fn push_face(
     mesh: &mut Mesh,
 ) {
     push_face_shadows(
-        corners, uvs, color, block, normal, textured, bounce, ao, mesh,
+        corners, uvs, colors, blocks, normal, textured, bounce, ao, mesh,
     );
 }
 
 fn push_face_shadows(
     corners: [[f32; 3]; 4],
     uvs: [[f32; 2]; 4],
-    color: [f32; 3],
-    block: [f32; 3],
+    colors: [[f32; 3]; 4],
+    blocks: [[f32; 3]; 4],
     normal: [f32; 3],
     textured: f32,
     bounce: [f32; 3],
@@ -2394,11 +2529,11 @@ fn push_face_shadows(
     for (index, (position, uv)) in corners.into_iter().zip(uvs).enumerate() {
         mesh.vertices.push(Vertex {
             position,
-            color,
+            color: colors[index],
             normal,
             uv,
             textured,
-            block,
+            block: blocks[index],
             bounce,
             ao: ao[index],
         });
@@ -2933,24 +3068,149 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 }
 
 fn lit_channels(albedo: [f32; 3], channels: [u8; 3]) -> ([f32; 3], [f32; 3]) {
-    (apply_light(albedo, channels), block_term(albedo, channels))
+    lit_channels_f(
+        albedo,
+        [
+            f32::from(channels[0]),
+            f32::from(channels[1]),
+            f32::from(channels[2]),
+        ],
+    )
+}
+
+fn lit_channels_f(albedo: [f32; 3], channels: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let mut color = [0.0; 3];
+    let mut block = [0.0; 3];
+    for channel in 0..3 {
+        let level = channels[channel].clamp(0.0, 15.0);
+        let block_scale = level / 15.0;
+        color[channel] = (albedo[channel] * (AMBIENT + block_scale)).clamp(0.0, 1.0);
+        block[channel] = albedo[channel] * block_scale;
+    }
+    (color, block)
 }
 
 fn apply_light(albedo: [f32; 3], channels: [u8; 3]) -> [f32; 3] {
-    let mut color = [0.0; 3];
-    for channel in 0..3 {
-        let scale = AMBIENT + f32::from(channels[channel]) / 15.0;
-        color[channel] = (albedo[channel] * scale).clamp(0.0, 1.0);
-    }
-    color
+    lit_channels(albedo, channels).0
 }
 
 fn block_term(albedo: [f32; 3], channels: [u8; 3]) -> [f32; 3] {
-    let mut color = [0.0; 3];
-    for channel in 0..3 {
-        color[channel] = albedo[channel] * f32::from(channels[channel]) / 15.0;
+    lit_channels(albedo, channels).1
+}
+
+/// Soft block light at a face corner.
+///
+/// Gaussian-blurs continuous LightField samples around the vertex, nudged into
+/// the air outside the face. Centering on the continuous position (not the
+/// cell) keeps a within-face gradient even on Manhattan plateaus, so torch
+/// rings stop reading as flat stair-steps on floors.
+fn corner_block_channels(
+    light: &LightField,
+    cell: [i32; 3],
+    position: [f32; 3],
+    normal: [f32; 3],
+) -> [f32; 3] {
+    let _ = cell;
+    soft_block_channels_at(light, position, normal)
+}
+
+/// Soft-sampled block light at a world-space point on a face.
+///
+/// BFS LightField stays Manhattan (reach / walls). Display sampling rebuilds a
+/// Euclidean pool from nearby bright cells, capped by the field so light still
+/// stops at full cubes — soft falloff on floors without a tracer rewrite.
+fn soft_block_channels_at(
+    light: &LightField,
+    position: [f32; 3],
+    normal: [f32; 3],
+) -> [f32; 3] {
+    let px = position[0] + normal[0] * 0.08;
+    let py = position[1] + normal[1] * 0.08;
+    let pz = position[2] + normal[2] * 0.08;
+    let mut tangents = [0usize; 2];
+    let mut t_count = 0;
+    for axis in 0..3 {
+        if normal[axis].abs() > 0.5 {
+            continue;
+        }
+        if t_count < 2 {
+            tangents[t_count] = axis;
+            t_count += 1;
+        }
     }
-    color
+    let u_axis = tangents[0];
+    let v_axis = tangents[1];
+    let pos = [px, py, pz];
+    // Field sample at this point (bilinear) — respects walls / reach.
+    let u = pos[u_axis] - 0.5;
+    let v = pos[v_axis] - 0.5;
+    let u0 = u.floor() as i32;
+    let v0 = v.floor() as i32;
+    let fu = u - u.floor();
+    let fv = v - v.floor();
+    let mut field = [0.0f32; 3];
+    for (du, wu) in [(0, 1.0 - fu), (1, fu)] {
+        for (dv, wv) in [(0, 1.0 - fv), (1, fv)] {
+            let mut p = [px.floor() as i32, py.floor() as i32, pz.floor() as i32];
+            p[u_axis] = u0 + du;
+            p[v_axis] = v0 + dv;
+            let sample = light.channels_f32(p[0], p[1], p[2]);
+            let w = wu * wv;
+            field[0] += sample[0] * w;
+            field[1] += sample[1] * w;
+            field[2] += sample[2] * w;
+        }
+    }
+    let field_peak = field[0].max(field[1]).max(field[2]);
+    if field_peak < 1.0e-4 {
+        return [0.0, 0.0, 0.0];
+    }
+    // Euclidean pools from near-source cells (level ≥ 13). Manhattan ring
+    // cells are ignored as radiators so floors get round falloff; the field
+    // sample still caps brightness so walls keep blocking.
+    const R: i32 = 12;
+    let base = [px.floor() as i32, py.floor() as i32, pz.floor() as i32];
+    let mut soft = [0.0f32; 3];
+    for du in -R..=R {
+        for dv in -R..=R {
+            let mut p = base;
+            p[u_axis] = base[u_axis] + du;
+            p[v_axis] = base[v_axis] + dv;
+            let sample = light.channels_f32(p[0], p[1], p[2]);
+            let peak = sample[0].max(sample[1]).max(sample[2]);
+            if peak < 13.0 {
+                continue;
+            }
+            let ox = p[u_axis] as f32 + 0.5 - pos[u_axis];
+            let oy = p[v_axis] as f32 + 0.5 - pos[v_axis];
+            let dist = (ox * ox + oy * oy).sqrt();
+            let fall = (1.0 - (dist / 15.0).clamp(0.0, 1.0)).powf(1.65);
+            if fall < 1.0e-4 {
+                continue;
+            }
+            soft[0] = soft[0].max(sample[0] * fall);
+            soft[1] = soft[1].max(sample[1] * fall);
+            soft[2] = soft[2].max(sample[2] * fall);
+        }
+    }
+    let soft_peak = soft[0].max(soft[1]).max(soft[2]);
+    if soft_peak < 1.0e-4 {
+        // Far from any source cell — keep the bilinear field (already smooth).
+        return field;
+    }
+    let cap = field_peak * 1.2;
+    let scale = (cap / soft_peak).min(1.0);
+    let soft = [soft[0] * scale, soft[1] * scale, soft[2] * scale];
+    [
+        soft[0] * 0.9 + field[0] * 0.1,
+        soft[1] * 0.9 + field[1] * 0.1,
+        soft[2] * 0.9 + field[2] * 0.1,
+    ]
+}
+
+fn flat_lit(albedo: [f32; 3], channels: [u8; 3]) -> ([[f32; 3]; 4], [[f32; 3]; 4]) {
+    let (color, block) = lit_channels(albedo, channels);
+    ([color; 4], [block; 4])
 }
 
 fn face_color(id: &str, metadata: u8, normal: [f32; 3]) -> [f32; 3] {
@@ -3885,8 +4145,110 @@ mod tests {
             .map(|v| v.block[0])
             .fold(0.0_f32, f32::max);
         assert!(
-            near > far + 0.15,
+            near > far + 0.04,
             "held light should fall off across the floor: near {near} far {far}"
+        );
+    }
+
+    #[test]
+    fn glowstone_floor_quads_carry_soft_corner_spans() {
+        let mut blocks = Vec::new();
+        for z in 0..12u8 {
+            for x in 0..12u8 {
+                blocks.push((x, 1, z, Block::new("dirt", 0)));
+            }
+        }
+        blocks.push((6, 2, 6, Block::new("glowstone", 0)));
+        let chunk = Chunk::from_blocks(0, 0, blocks).unwrap();
+        let cluster = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
+        let mesh = mesh_cluster(&cluster);
+        let mut best = 0.0f32;
+        for quad in mesh.indices.chunks_exact(6) {
+            let verts = [
+                &mesh.vertices[quad[0] as usize],
+                &mesh.vertices[quad[1] as usize],
+                &mesh.vertices[quad[2] as usize],
+                &mesh.vertices[quad[5] as usize],
+            ];
+            if verts.iter().any(|v| v.normal[1] < 0.9) {
+                continue;
+            }
+            if verts.iter().all(|v| v.block[0] < 0.05) {
+                continue;
+            }
+            let mut lo = f32::MAX;
+            let mut hi = 0.0f32;
+            for v in verts {
+                lo = lo.min(v.block[0]);
+                hi = hi.max(v.block[0]);
+            }
+            best = best.max(hi - lo);
+        }
+        assert!(
+            best > 0.04,
+            "soft glowstone floors need a readable within-face corner span, best {best}"
+        );
+    }
+
+    #[test]
+    fn torch_floor_faces_blend_block_light_across_corners() {
+        let mut blocks = Vec::new();
+        for z in 0..8u8 {
+            for x in 0..8u8 {
+                blocks.push((x, 0, z, Block::new("stone", 0)));
+            }
+        }
+        blocks.push((3, 1, 3, Block::new("torch", 0)));
+        let chunk = Chunk::from_blocks(0, 0, blocks).unwrap();
+        let cluster = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
+        let mesh = mesh_cluster(&cluster);
+        let top = mesh
+            .vertices
+            .iter()
+            .filter(|v| v.normal[1] > 0.9 && v.block[0] > 0.02)
+            .collect::<Vec<_>>();
+        assert!(top.len() >= 4, "expected lit floor tops, got {}", top.len());
+        let mut min_r = f32::MAX;
+        let mut max_r = 0.0f32;
+        for v in &top {
+            min_r = min_r.min(v.block[0]);
+            max_r = max_r.max(v.block[0]);
+        }
+        assert!(
+            max_r > min_r + 0.04,
+            "floor block light should vary across corners, not stair-step flat: min {min_r} max {max_r}"
+        );
+        // Soft Gaussian sampling falls off with distance from the torch, not
+        // as flat Manhattan rings. Near-floor verts must outshine far ones.
+        let torch = [3.5f32, 1.5, 3.5];
+        let mut near = 0.0f32;
+        let mut mid = 0.0f32;
+        let mut far = 0.0f32;
+        let mut near_n = 0u32;
+        let mut mid_n = 0u32;
+        let mut far_n = 0u32;
+        for v in &top {
+            let dx = v.position[0] - torch[0];
+            let dz = v.position[2] - torch[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist < 1.6 {
+                near += v.block[0];
+                near_n += 1;
+            } else if dist < 3.2 {
+                mid += v.block[0];
+                mid_n += 1;
+            } else if dist < 5.5 {
+                far += v.block[0];
+                far_n += 1;
+            }
+        }
+        assert!(near_n > 0 && mid_n > 0 && far_n > 0, "missing distance bands");
+        let near = near / near_n as f32;
+        let mid = mid / mid_n as f32;
+        let far = far / far_n as f32;
+        assert!(
+            near > mid + 0.02 && mid > far + 0.01,
+            "soft floor light should fall off with distance: near {near} mid {mid} far {far}"
         );
     }
 

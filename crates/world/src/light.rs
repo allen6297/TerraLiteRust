@@ -3,9 +3,10 @@
 //! A pack block can emit a color at a level from 1 to 15. Each channel
 //! spreads through air and through shapes that are not full cubes, dropping
 //! together so the color stays the same hue until the cell is dark. A full
-//! cube stops it. The sun and its shadows are applied when meshing. There is
-//! no path trace. The number in a cell is how much of that channel is left,
-//! from 0 to 15.
+//! cube stops it. Continuous [`LightField::channels_f32`] values let the mesh
+//! blend torch rings across face corners instead of stair-stepping. The sun
+//! and its shadows are applied when meshing. There is no path trace. The
+//! number in a cell is how much of that channel is left, from 0 to 15.
 
 use std::collections::VecDeque;
 
@@ -200,6 +201,13 @@ impl LightField {
     /// Channels left at this cell, `0..=15`. Outside the field, all zero.
     pub fn channels(&self, x: i32, y: i32, z: i32) -> [u8; 3] {
         quantize(self.sample_fp(x, y, z))
+    }
+
+    /// Continuous channels at this cell. Same reach as [`channels`], but keeps
+    /// the fixed-point fraction so mesh corners can blend without stair-steps.
+    pub fn channels_f32(&self, x: i32, y: i32, z: i32) -> [f32; 3] {
+        self.sample_fp(x, y, z)
+            .map(|fp| f32::from(fp) / f32::from(UNIT))
     }
 
     fn sample_fp(&self, x: i32, y: i32, z: i32) -> [u16; 3] {
@@ -406,6 +414,21 @@ mod tests {
         assert!(at[0] > at[1]);
         assert_eq!(at[2], 0);
     }
+
+    #[test]
+    fn continuous_channels_match_integer_falloff() {
+        // Mesh soft-sampling blends neighboring cells; the field itself stays
+        // on the classic one-level drop so reach and wall tests stay honest.
+        let field = LightField::solve(&world([(1, 1, 1, Block::new(LANTERN, 0))]));
+        let near = field.channels_f32(1, 1, 2);
+        let mid = field.channels_f32(1, 1, 3);
+        let far = field.channels_f32(1, 1, 5);
+        assert!(near[0] > mid[0]);
+        assert!(mid[0] > far[0]);
+        let near_i = field.channels(1, 1, 2);
+        assert!((near[0] - f32::from(near_i[0])).abs() < 1.0e-3);
+    }
+
 
     #[test]
     fn dark_terrain_does_not_widen_the_light_field() {
