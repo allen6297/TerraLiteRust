@@ -1356,6 +1356,8 @@ pub struct State {
     dripstone_wait: f32,
     /// One tip when dripstone first drips / spikes this session.
     dripstone_told: bool,
+    /// One tip when moss bone meal first spreads this session.
+    moss_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2748,6 +2750,7 @@ impl State {
             amethyst_told: false,
             dripstone_wait: crate::dripstone::DRIP_PERIOD,
             dripstone_told: false,
+            moss_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9765,6 +9768,39 @@ impl State {
             .world
             .block_at(hit.block[0], hit.block[1], hit.block[2]);
         if !self.pending.is_empty() {
+            return true;
+        }
+        if crate::moss::is_moss_block(block.id) {
+            let planned = crate::moss::plan_spread(&self.world, hit.block);
+            if planned.is_empty() {
+                self.gui.push_chat("no room");
+                return true;
+            }
+            let slot = self.hotbar.selected();
+            self.hotbar.consume_at(slot);
+            let changes: Vec<CellChange> = planned
+                .into_iter()
+                .map(|(at, block)| CellChange {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                    block,
+                })
+                .collect();
+            self.send_places_batch(&changes);
+            let mote = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 1.05,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.drops.puff(mote, [0.45, 0.85, 0.38]);
+            self.rebuild_drops();
+            self.hotbar_dirty = true;
+            self.gui.push_chat("spread");
+            if !self.moss_told {
+                self.moss_told = true;
+                self.gui.push_chat("moss");
+            }
             return true;
         }
         if block.id == "wheat_crop" {
@@ -23470,6 +23506,148 @@ impl State {
         self.gui.push_chat("dripstone");
         self.gui.push_chat("drip");
         self.gui.push_chat("spike");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+
+    pub fn arm_moss_spread_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.34);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        // Build a raised apron above the terrain so the lush patch stays dry.
+        let floor = ground + 1;
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        // Lush pocket: stone/dirt apron, center moss, then apply a spread stamp.
+        for x in (cx - 3)..=(cx + 3) {
+            for z in (cz - 3)..=(cz + 3) {
+                let stoneish = (x + z) % 2 == 0;
+                changes.push(CellChange {
+                    x,
+                    y: floor,
+                    z,
+                    block: if stoneish {
+                        Block::new("stone", 0)
+                    } else {
+                        Block::new("dirt", 0)
+                    },
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+                changes.push(CellChange {
+                    x,
+                    y: y + 1,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: floor,
+            z: cz,
+            block: Block::new("moss_block", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        let spread = crate::moss::plan_spread(&self.world, [cx, floor, cz]);
+        let mut lush: Vec<CellChange> = spread
+            .into_iter()
+            .map(|(at, block)| CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block,
+            })
+            .collect();
+        // Guarantee a readable mix if the hash skipped some covers.
+        lush.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("moss_carpet", 0),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: Block::new("azalea", 0),
+            },
+            CellChange {
+                x: cx - 1,
+                y,
+                z: cz + 1,
+                block: Block::new("flower", 0),
+            },
+        ]);
+        apply_changes(&mut self.world, &lush);
+        for x in (cx - 3)..=(cx + 3) {
+            for z in (cz - 3)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, y as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            y as f32 + 1.55 + body::EYE_HEIGHT,
+            cz as f32 - 5.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bone_meal");
+        let _ = self.hotbar.give_stack("moss_block");
+        let _ = self.hotbar.collect("moss_carpet");
+        let _ = self.hotbar.collect("azalea");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.moss_told = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("moss");
+        self.gui.push_chat("spread");
         self.found_thunk = true;
         self.set_capture(false);
         for dx in -1..=1 {

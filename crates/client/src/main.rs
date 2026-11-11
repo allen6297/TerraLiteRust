@@ -30,6 +30,7 @@ mod redstone;
 mod copper;
 mod amethyst;
 mod dripstone;
+mod moss;
 mod hotbar;
 mod item_icon;
 mod jobs;
@@ -450,6 +451,8 @@ struct Args {
     shot_amethyst: Option<std::path::PathBuf>,
     /// Pointed dripstone cave drip demo, then quit.
     shot_dripstone: Option<std::path::PathBuf>,
+    /// Moss bone-meal lush spread demo, then quit.
+    shot_moss: Option<std::path::PathBuf>,
     /// Mine-mouth lodestone + linked compass, then quit.
     shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
@@ -741,6 +744,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_copper: args.shot_copper,
         shot_amethyst: args.shot_amethyst,
         shot_dripstone: args.shot_dripstone,
+        shot_moss: args.shot_moss,
         shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
@@ -949,6 +953,7 @@ struct App {
     shot_copper: Option<std::path::PathBuf>,
     shot_amethyst: Option<std::path::PathBuf>,
     shot_dripstone: Option<std::path::PathBuf>,
+    shot_moss: Option<std::path::PathBuf>,
     shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
@@ -1485,6 +1490,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_dripstone.take() {
                     state.arm_dripstone_shot(path);
                 }
+                if let Some(path) = self.shot_moss.take() {
+                    state.arm_moss_spread_shot(path);
+                }
                 if let Some(path) = self.shot_lodestone.take() {
                     state.arm_lodestone_shot(path);
                 }
@@ -1852,6 +1860,7 @@ where
         shot_copper: None,
         shot_amethyst: None,
         shot_dripstone: None,
+        shot_moss: None,
         shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
@@ -2856,6 +2865,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-dripstone".to_string())?;
                 parsed.shot_dripstone = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-moss" | "--shot-moss-spread" | "--shot-lush" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-moss".to_string())?;
+                parsed.shot_moss = Some(std::path::PathBuf::from(value));
             }
             "--shot-lodestone" | "--shot-compass-link" => {
                 let value = iter

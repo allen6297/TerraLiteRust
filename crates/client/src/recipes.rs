@@ -611,6 +611,9 @@ mod tests {
                 "tinted_glass".to_string(),
                 "dripstone_block".to_string(),
                 "pointed_dripstone".to_string(),
+                "moss_block".to_string(),
+                "moss_carpet".to_string(),
+                "azalea".to_string(),
 
                 "copper_chest".to_string(),
                 "copper_door".to_string(),

@@ -3463,6 +3463,8 @@ fn is_soft(id: &str) -> bool {
     matches!(
         id,
         "flower"
+            | "azalea"
+            | "moss_carpet"
             | "lily_pad"
             | "button"
             | "lever"
@@ -4021,7 +4023,7 @@ impl Bee {
                     let ok = if hive {
                         block.id == "beehive" && block.metadata < HIVE_FULL
                     } else {
-                        block.id == "flower"
+                        matches!(block.id, "flower" | "azalea" | "moss_carpet")
                     };
                     if !ok {
                         continue;
