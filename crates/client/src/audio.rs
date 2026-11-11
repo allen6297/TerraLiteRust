@@ -67,6 +67,8 @@ pub enum Sound {
     Drip,
     /// Soft leaf rustle in forest under open sky.
     Rustle,
+    /// Soft marsh reed / frog croaks under open sky.
+    Reed,
     /// Soft rain tapping on leaves under a wet canopy.
     Patter,
     /// Soft bee buzz near a beehive.
@@ -298,6 +300,8 @@ pub struct Audio {
     drip_left: f32,
     /// Seconds until the next forest rustle.
     rustle_left: f32,
+    /// Seconds until the next marsh reed croak.
+    reed_left: f32,
     /// Seconds until the next rain-on-leaves patter.
     patter_left: f32,
     /// Seconds until the next bee buzz.
@@ -337,6 +341,7 @@ impl Audio {
             rain_left: 0.0,
             drip_left: 0.0,
             rustle_left: 0.0,
+            reed_left: 0.0,
             patter_left: 0.0,
             buzz_left: 0.0,
             bubble_left: 0.0,
@@ -541,6 +546,24 @@ impl Audio {
         Some(0.10 + mix * 0.20)
     }
 
+    /// Loudness for the next marsh reed croak, or `None` this frame.
+    ///
+    /// `mix` is marsh open-sky amount (`0` elsewhere → `1` in inland marsh).
+    pub fn reed_ready(&mut self, dt: f32, mix: f32) -> Option<f32> {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix < 0.05 {
+            self.reed_left = 0.0;
+            return None;
+        }
+        self.reed_left -= dt;
+        if self.reed_left > 0.0 {
+            return None;
+        }
+        // Sparse at the edge (~3.0s); steadier deep in marsh (~1.6s).
+        self.reed_left = 3.0 - mix * 1.4;
+        Some(0.11 + mix * 0.22)
+    }
+
     /// Loudness for the next rain-on-leaves patter, or `None` this frame.
     ///
     /// `mix` is wet×canopy amount (`0` clear/open → `1` under wet leaves).
@@ -685,6 +708,7 @@ impl Audio {
             Sound::Lap => water_lap(),
             Sound::Drip => cave_drip(),
             Sound::Rustle => leaf_rustle(),
+            Sound::Reed => reed_croak(),
             Sound::Patter => rain_on_leaves(),
             Sound::Buzz => bee_buzz(),
             Sound::Hiss => lantern_hiss(),
@@ -1239,6 +1263,25 @@ fn leaf_rustle() -> Vec<i16> {
         let scratch = (t * 780.0 * std::f32::consts::TAU).sin() * 0.15;
         let env = (t / 0.03).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((n * 0.7 + scratch) * 0.08 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
+/// Soft marsh reed croak. Lower and wetter than a cricket chirp.
+fn reed_croak() -> Vec<i16> {
+    let seconds = 0.2;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 211u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let croak = (t * 220.0 * std::f32::consts::TAU).sin() * 0.42
+            + (t * 380.0 * std::f32::consts::TAU).sin() * 0.18;
+        let wet = (t * 1_100.0 * std::f32::consts::TAU).sin() * 0.08;
+        let env = (t / 0.02).min(1.0) * (1.0 - t / seconds).max(0.0).powf(1.2);
+        samples.push(((n * 0.22 + croak + wet) * 0.11 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1849,6 +1892,21 @@ mod tests {
         audio.set_muted(true);
         audio.play_heard(Sound::Rustle, Hearing::even(1.0));
         assert_eq!(audio.played, vec![Sound::Rustle]);
+    }
+
+    #[test]
+    fn marsh_reed_waits_for_wetland_and_respects_mute() {
+        let mut audio = Audio::new();
+        assert!(audio.reed_ready(0.1, 0.0).is_none());
+        let level = audio
+            .reed_ready(0.1, 1.0)
+            .expect("marsh reed on the first beat");
+        assert!(level > 0.2 && level <= 0.35);
+        audio.play_heard(Sound::Reed, Hearing::even(level));
+        assert_eq!(audio.played, vec![Sound::Reed]);
+        audio.set_muted(true);
+        audio.play_heard(Sound::Reed, Hearing::even(1.0));
+        assert_eq!(audio.played, vec![Sound::Reed]);
     }
 
     #[test]

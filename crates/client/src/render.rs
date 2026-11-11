@@ -1527,6 +1527,12 @@ pub struct State {
     drip_mix: f32,
     /// Eased forest leaf rustle, `0` elsewhere through `1` in open woods.
     rustle_mix: f32,
+    /// Eased marsh reed mix, `0` elsewhere through `1` in open marsh.
+    reed_mix: f32,
+    /// Once: stood in open marsh and heard the reed croak.
+    found_reed: bool,
+    /// Once: stood near the ancient city and heard the hush drip bed.
+    found_hush: bool,
     /// Eased night cricket mix, `0` day through `1` deep night.
     cricket_mix: f32,
     /// Eased dawn bird mix, `0` elsewhere through `1` at sunrise peak.
@@ -2885,6 +2891,9 @@ impl State {
             told_generator: false,
             drip_mix: 0.0,
             rustle_mix: 0.0,
+            reed_mix: 0.0,
+            found_reed: false,
+            found_hush: false,
             cricket_mix: 0.0,
             bird_mix: 0.0,
             crackle_mix: 0.0,
@@ -34511,12 +34520,23 @@ impl State {
             0.0
         };
         let was_dry = self.rain_mix < 0.35;
-        self.cricket_mix += (night - self.cricket_mix) * (dt * 0.7).min(1.0);
-        self.bird_mix += (dawn - self.bird_mix) * (dt * 0.8).min(1.0);
+        let cover = cave_drip_mix(&self.world, eye);
+        let city = ancient_city_hush(eye, cover);
+        // A5: duck surface highs under roof; mouth/hall proximity also ducks.
+        let surface = surface_bed_open(sky_open, city);
+        let want_cricket = night * surface;
+        let want_bird = dawn * surface;
+        self.cricket_mix += (want_cricket - self.cricket_mix) * (dt * 0.7).min(1.0);
+        self.bird_mix += (want_bird - self.bird_mix) * (dt * 0.8).min(1.0);
         self.rain_mix += (wet - self.rain_mix) * (dt * 1.1).min(1.0);
         self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
-        let cover = cave_drip_mix(&self.world, eye);
-        self.drip_mix += (cover - self.drip_mix) * (dt * 1.4).min(1.0);
+        // A5 city hush: boost drip near mouth / under cover in the remnant.
+        let want_drip = cover.max(city * 0.85).clamp(0.0, 1.0);
+        self.drip_mix += (want_drip - self.drip_mix) * (dt * 1.4).min(1.0);
+        if city > 0.35 && self.drip_mix > 0.3 && !self.found_hush {
+            self.found_hush = true;
+            self.gui.push_chat("hush");
+        }
         // Rain still hits the canopy when leaves block open sky.
         let (leaf_cover, leaf_at) = leaf_canopy_mix(&self.world, eye);
         let want_patter = (mood * leaf_cover).clamp(0.0, 1.0);
@@ -34526,14 +34546,24 @@ impl State {
             self.found_patter = true;
             self.gui.push_chat("patter");
         }
-        let woods = if sky_open
-            && rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32)
-                == rebuild_world::Biome::Forest
-        {
+        let underfoot =
+            rebuild_world::biome_at(eye[0].floor() as i32, eye[2].floor() as i32);
+        let woods = if sky_open && underfoot == rebuild_world::Biome::Forest {
             (1.0 - wet * 0.45).clamp(0.0, 1.0)
         } else {
             0.0
         };
+        // A1: inland marsh gets a reed bed without walking to shore.
+        let marsh = if sky_open && underfoot == rebuild_world::Biome::Marsh {
+            (1.0 - wet * 0.35).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.reed_mix += (marsh - self.reed_mix) * (dt * 1.0).min(1.0);
+        if self.reed_mix > 0.35 && !self.found_reed {
+            self.found_reed = true;
+            self.gui.push_chat("reed");
+        }
         let (wheat_mix, wheat_at) = nearest_wheat(&self.world, eye);
         let crop = if sky_open {
             (wheat_mix * (1.0 - wet * 0.4) * open.max(0.35)).clamp(0.0, 1.0)
@@ -34930,6 +34960,12 @@ impl State {
                     crate::audio::Hearing::even(level),
                 );
             }
+            if let Some(level) = self.audio.reed_ready(dt, self.reed_mix) {
+                self.audio.play_heard(
+                    crate::audio::Sound::Reed,
+                    crate::audio::Hearing::even(level),
+                );
+            }
             if let Some(level) = self.audio.wind_ready(dt, self.wind_mix) {
                 self.audio.play_heard(
                     crate::audio::Sound::Wind,
@@ -34997,6 +35033,7 @@ impl State {
             let _ = self.audio.rain_ready(dt, 0.0);
             let _ = self.audio.drip_ready(dt, 0.0);
             let _ = self.audio.rustle_ready(dt, 0.0);
+            let _ = self.audio.reed_ready(dt, 0.0);
             let _ = self.audio.wind_ready(dt, 0.0);
             let _ = self.audio.lap_ready(dt, 0.0);
             let _ = self.audio.crackle_ready(dt, 0.0);
@@ -38379,6 +38416,28 @@ fn open_sky(world: &Cluster, eye: [f32; 3]) -> bool {
     true
 }
 
+/// How open surface beds (cricket/bird) should stay. Roof zeros them; city hush ducks.
+fn surface_bed_open(sky_open: bool, city_hush: f32) -> f32 {
+    let open = if sky_open { 1.0 } else { 0.0 };
+    (open * (1.0 - city_hush * 0.85)).clamp(0.0, 1.0)
+}
+
+/// Proximity hush near the ancient-city mouth / hall (`0` far → `1` at the remnant).
+///
+/// Cover inside the hall raises the bed; the open mouth still reads within ~12 blocks.
+fn ancient_city_hush(eye: [f32; 3], cover: f32) -> f32 {
+    let (mx, mz) = rebuild_world::ANCIENT_CITY_MOUTH;
+    let (cx, cz) = rebuild_world::ANCIENT_CITY;
+    let mouth = ((eye[0] - mx as f32).powi(2) + (eye[2] - mz as f32).powi(2)).sqrt();
+    let hall = ((eye[0] - cx as f32).powi(2) + (eye[2] - cz as f32).powi(2)).sqrt();
+    let near = (1.0 - mouth.min(hall) / 12.0).clamp(0.0, 1.0);
+    if near <= 0.0 {
+        return 0.0;
+    }
+    // Open mouth still hushes a bit; under cover the dark bed takes over.
+    (near * cover.max(0.4)).clamp(0.0, 1.0)
+}
+
 /// Cave-like cover above the eye. Needs a few solids so thin roofs stay quiet.
 fn cave_drip_mix(world: &Cluster, eye: [f32; 3]) -> f32 {
     let x = eye[0].floor() as i32;
@@ -39913,6 +39972,30 @@ mod tests {
             }],
         );
         assert!(!super::open_sky(&cluster, eye));
+    }
+
+    #[test]
+    fn surface_beds_duck_under_roof_and_near_city() {
+        assert_eq!(super::surface_bed_open(true, 0.0), 1.0);
+        assert_eq!(super::surface_bed_open(false, 0.0), 0.0);
+        let hush = super::surface_bed_open(true, 1.0);
+        assert!(hush < 0.2, "city hush ducks open-sky highs {hush}");
+        let mouth = [
+            rebuild_world::ANCIENT_CITY_MOUTH.0 as f32 + 0.5,
+            6.0,
+            rebuild_world::ANCIENT_CITY_MOUTH.1 as f32 + 0.5,
+        ];
+        let near = super::ancient_city_hush(mouth, 0.0);
+        assert!(near > 0.3, "open mouth still hushes {near}");
+        let far = super::ancient_city_hush([200.0, 6.0, 200.0], 1.0);
+        assert_eq!(far, 0.0);
+        let hall = [
+            rebuild_world::ANCIENT_CITY.0 as f32 + 0.5,
+            5.0,
+            rebuild_world::ANCIENT_CITY.1 as f32 + 0.5,
+        ];
+        let deep = super::ancient_city_hush(hall, 1.0);
+        assert!(deep > 0.7, "covered hall hush {deep}");
     }
 
     #[test]
