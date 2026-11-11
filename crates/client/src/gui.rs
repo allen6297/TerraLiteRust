@@ -4174,6 +4174,10 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         "slows without soul speed boots".to_string()
     } else if id == "warped_fungus_on_a_stick" {
         "steer a strider — or just WASD".to_string()
+    } else if id == "gunpowder" {
+        "ghast drop — blast powder".to_string()
+    } else if id == "ghast_tear" {
+        "ghast drop — brew ingredient".to_string()
     } else if id == "respawn_anchor" {
         "charge with glowstone — nether spawn".to_string()
     } else if id == "bed" {

@@ -218,6 +218,8 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "flint_and_steel" => [0.62, 0.62, 0.68],
         "fire_charge" => [0.92, 0.42, 0.18],
         "blaze_rod" => [0.95, 0.62, 0.12],
+        "gunpowder" => [0.55, 0.55, 0.52],
+        "ghast_tear" => [0.65, 0.88, 0.95],
         "blaze_powder" => [0.98, 0.72, 0.18],
         "awkward_potion" => [0.55, 0.72, 0.82],
         "strength_potion" => [0.72, 0.28, 0.18],

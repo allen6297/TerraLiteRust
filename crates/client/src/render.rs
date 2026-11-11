@@ -1685,10 +1685,15 @@ pub struct State {
     blaze: crate::mobs::Blaze,
     blaze_buf: Option<wgpu::Buffer>,
     blaze_count: u32,
-    /// In-flight blaze fireballs.
+    ghast: crate::mobs::Ghast,
+    ghast_buf: Option<wgpu::Buffer>,
+    ghast_count: u32,
+    /// In-flight blaze / ghast fireballs.
     fireballs: crate::fireballs::Fireballs,
     /// Hand over a blaze rod once inventory has room.
     blaze_due: bool,
+    /// Hand over ghast loot once inventory has room.
+    ghast_due: bool,
     piglin: crate::mobs::Piglin,
     piglin_buf: Option<wgpu::Buffer>,
     piglin_count: u32,
@@ -2910,8 +2915,12 @@ impl State {
             blaze: crate::mobs::Blaze::new(),
             blaze_buf: None,
             blaze_count: 0,
+            ghast: crate::mobs::Ghast::new(),
+            ghast_buf: None,
+            ghast_count: 0,
             fireballs: crate::fireballs::Fireballs::new(),
             blaze_due: false,
+            ghast_due: false,
             piglin: crate::mobs::Piglin::new(),
             piglin_buf: None,
             piglin_count: 0,
@@ -3030,6 +3039,7 @@ impl State {
         state.rebuild_trader();
         state.rebuild_iron_golem();
         state.rebuild_blaze();
+        state.rebuild_ghast();
         state.rebuild_piglin();
         state.rebuild_guardian();
         state.rebuild_wither();
@@ -4716,7 +4726,11 @@ impl State {
             }
             return;
         }
-        if self.try_script_attack() || self.hop_egg() || self.blast_crystal() {
+        if self.try_script_attack()
+            || self.try_punch_fireball()
+            || self.hop_egg()
+            || self.blast_crystal()
+        {
             self.dig.set_held(false);
             if was {
                 self.pose_dirty = true;
@@ -5185,6 +5199,23 @@ impl State {
             },
         ));
         self.blaze_count = vertices.len() as u32;
+    }
+
+    fn rebuild_ghast(&mut self) {
+        let vertices = self.ghast.vertices();
+        if vertices.is_empty() {
+            self.ghast_buf = None;
+            self.ghast_count = 0;
+            return;
+        }
+        self.ghast_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("ghast"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.ghast_count = vertices.len() as u32;
     }
 
     fn rebuild_piglin(&mut self) {
@@ -5787,21 +5818,29 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && self.blaze.aimed(eye, forward);
+        let ghast_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && self.ghast.aimed(eye, forward);
         let piglin_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !ghast_aimed
             && self.piglin.aimed(eye, forward);
         let guardian_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !ghast_aimed
             && !piglin_aimed
             && self.guardian.aimed(eye, forward);
         let wither_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !ghast_aimed
             && !piglin_aimed
             && !guardian_aimed
             && self.wither.aimed(eye, forward);
@@ -5809,6 +5848,7 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !ghast_aimed
             && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
@@ -5817,6 +5857,7 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !ghast_aimed
             && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
@@ -5826,6 +5867,7 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !ghast_aimed
             && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
@@ -5836,6 +5878,7 @@ impl State {
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || ghast_aimed
             || piglin_aimed
             || guardian_aimed
             || wither_aimed
@@ -5895,6 +5938,15 @@ impl State {
             let dropped = self.hurt_mob("blaze", amount, origin, |s, n| s.blaze.hurt(n));
             if dropped {
                 xp_at = Some(origin);
+            }
+            dropped
+        };
+        let dropped_ghast = ghast_aimed && {
+            let origin = self.ghast.origin();
+            let dropped = self.hurt_mob("ghast", amount, origin, |s, n| s.ghast.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+                self.grant_ghast_loot();
             }
             dropped
         };
@@ -5965,6 +6017,7 @@ impl State {
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || ghast_aimed
             || piglin_aimed
             || guardian_aimed
             || wither_aimed
@@ -5976,6 +6029,7 @@ impl State {
             || dropped_night
             || dropped_breeze
             || dropped_blaze
+            || dropped_ghast
             || dropped_piglin
             || dropped_guardian
             || dropped_wither
@@ -6045,6 +6099,7 @@ impl State {
         self.rebuild_zombie();
         self.rebuild_breeze();
         self.rebuild_blaze();
+        self.rebuild_ghast();
         self.rebuild_piglin();
         self.rebuild_guardian();
         self.rebuild_wither();
@@ -6631,6 +6686,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_blaze();
+                return true;
+            }
+            let ghast = self.ghast.origin();
+            let (gmin, gmax) = self.ghast.bounds();
+            if point_in_box(tip, gmin, gmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("ghast", amount, ghast, |s, n| s.ghast.hurt(n));
+                if dropped {
+                    self.grant_xp_at(ghast, true);
+                    self.grant_ghast_loot();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_ghast();
                 return true;
             }
             let piglin = self.piglin.origin();
@@ -8639,6 +8710,30 @@ impl State {
         self.gui.push_chat("blaze rod");
     }
 
+    /// Hand over gunpowder + ghast tear. A full bar leaves the debt for a later tick.
+    fn grant_ghast_loot(&mut self) {
+        let need_gun = !self.hotbar.room_for("gunpowder") && !self.bag.room_for("gunpowder");
+        let need_tear = !self.hotbar.room_for("ghast_tear") && !self.bag.room_for("ghast_tear");
+        if need_gun && need_tear {
+            if !self.ghast_due {
+                self.gui.push_chat("full");
+            }
+            self.ghast_due = true;
+            return;
+        }
+        if !need_gun && !self.hotbar.collect("gunpowder") {
+            self.bag.collect("gunpowder");
+            self.bag_dirty = true;
+        }
+        if !need_tear && !self.hotbar.collect("ghast_tear") {
+            self.bag.collect("ghast_tear");
+            self.bag_dirty = true;
+        }
+        self.hotbar_dirty = true;
+        self.ghast_due = false;
+        self.gui.push_chat("ghast tear");
+    }
+
     /// Hand over a nether star. A full bar leaves the debt for a later tick.
     fn grant_nether_star(&mut self) {
         if !self.hotbar.room_for("nether_star") && !self.bag.room_for("nether_star") {
@@ -9786,6 +9881,100 @@ impl State {
         self.rebuild_chicken();
         self.gui.push_chat("egg");
         true
+    }
+
+    /// Nether pocket ghast mid-fireball, then quit with a PNG.
+    pub fn arm_ghast_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.16);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        // Clear ceiling + return portal so the body/face are unobstructed.
+        let mut cells = Vec::new();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                cells.push(CellChange {
+                    x: px + dx,
+                    y: fy + 4,
+                    z: pz + dz,
+                    block: Block::AIR,
+                });
+            }
+        }
+        for dx in 0..=3 {
+            for dy in 0..=4 {
+                cells.push(CellChange {
+                    x: px + dx,
+                    y: fy + dy,
+                    z: pz,
+                    block: Block::AIR,
+                });
+            }
+        }
+        apply_changes(&mut self.world, &cells);
+        for dx in -2..=3 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(px + dx, pz + dz);
+            }
+        }
+        // Chamber center — portal cleared for the still.
+        let origin = [px as f32 + 0.5, fy as f32 + 1.25, pz as f32 + 0.5];
+        self.ghast.place_at(origin);
+        // Mid-flight bolt off the right cheek (not between camera and body).
+        self.fireballs.pin_ghast(
+            [origin[0] + 1.15, origin[1] + 1.05, origin[2] + 0.4],
+            [2.0, 0.05, 1.2],
+        );
+        self.drops.embers([origin[0], origin[1] + 0.35, origin[2]]);
+        self.rebuild_ghast();
+        self.rebuild_drops();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("ghast");
+        self.gui.push_chat("fireball");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("bow");
+        let _ = self.hotbar.collect("arrow");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        // Face-on from the south (+Z face), inside the hollow chamber.
+        let focus = glam::Vec3::new(origin[0], origin[1] + 0.85, origin[2] + 0.25);
+        let eye = glam::Vec3::new(origin[0] + 0.35, origin[1] + 0.9, origin[2] + 2.85);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.lava_heat = 0.15;
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        self.set_capture(false);
+        let _ = self.window.focus_window();
     }
 
     /// Fortress blaze mid-fireball over the cage, then quit.
@@ -13058,6 +13247,7 @@ impl State {
             ("zombie", self.zombie.bounds()),
             ("breeze", self.breeze.bounds()),
             ("blaze", self.blaze.bounds()),
+            ("ghast", self.ghast.bounds()),
             ("piglin", self.piglin.bounds()),
             ("wither_skeleton", self.wither.bounds()),
             ("wither", self.wither_boss.bounds()),
@@ -13153,6 +13343,9 @@ impl State {
         }
         if self.blaze.aimed(eye, forward) {
             return Some("blaze");
+        }
+        if self.ghast.aimed(eye, forward) {
+            return Some("ghast");
         }
         if self.piglin.aimed(eye, forward) {
             return Some("piglin");
@@ -27182,6 +27375,20 @@ impl State {
     }
 
     /// Punch. True when the look hits an end crystal.
+    /// Punch a ghast fireball back toward the ghast.
+    fn try_punch_fireball(&mut self) -> bool {
+        let eye = self.camera.eye.to_array();
+        let forward = self.camera.forward().to_array();
+        let toward = self.ghast.origin();
+        if !self.fireballs.try_punch(eye, forward, toward) {
+            return false;
+        }
+        self.hit_kick = self.hit_kick.max(0.45);
+        self.gui.push_chat("punched");
+        self.play_world(crate::audio::Sound::Gust, eye);
+        true
+    }
+
     fn blast_crystal(&mut self) -> bool {
         let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
             return false;
@@ -28678,24 +28885,41 @@ impl State {
             if self.try_arrow_mob_hits() {
                 drops_dirty = true;
             }
-            let (fire_dirty, fire_bursts, fire_hit) =
-                self.fireballs.tick(dt, &self.world, eye);
+            let ghast_target = self.ghast.alive().then(|| self.ghast.origin());
+            let (fire_dirty, fire_bursts, fire_hearts, fire_hit_ghast) =
+                self.fireballs.tick(dt, &self.world, eye, ghast_target);
             if fire_dirty {
                 drops_dirty = true;
             }
             for at in &fire_bursts {
                 self.drops.embers(*at);
                 self.drops.puff(*at, [1.0, 0.45, 0.1]);
+                // Impact read — a short gust + kick when a large ball lands.
+                self.play_world(crate::audio::Sound::Gust, *at);
             }
-            if fire_hit {
+            if fire_hearts > 0 {
                 let blocked = self.try_shield_block();
-                let amount = body::bite_hearts(
-                    blocked,
-                    crate::fireballs::HIT_HEARTS,
-                    self.armor_soak(),
-                );
+                let amount = body::bite_hearts(blocked, fire_hearts, self.armor_soak());
                 self.apply_damage(amount);
-                self.gui.push_chat(if blocked { "block" } else { "burn" });
+                self.hit_kick = self.hit_kick.max(0.7);
+                self.gui.push_chat(if blocked {
+                    "block"
+                } else if fire_hearts >= crate::fireballs::GHAST_HIT_HEARTS {
+                    "blast"
+                } else {
+                    "burn"
+                });
+            }
+            if fire_hit_ghast {
+                let origin = self.ghast.origin();
+                let dropped =
+                    self.hurt_mob("ghast", 4, origin, |s, n| s.ghast.hurt(n));
+                if dropped {
+                    self.grant_xp_at(origin, true);
+                    self.grant_ghast_loot();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_ghast();
             }
             if !fire_bursts.is_empty() {
                 drops_dirty = true;
@@ -30037,19 +30261,39 @@ impl State {
                 self.camera.eye.y,
                 self.camera.eye.z,
             ];
-            if self.blaze.tick_near(steps, eye3) {
-                let from = self.blaze.origin();
-                let muzzle = [from[0], from[1] + 0.7, from[2]];
-                self.fireballs.shoot(muzzle, eye3);
-                self.play_world(crate::audio::Sound::Gust, muzzle);
-                self.drops.embers(muzzle);
-                self.gui.push_chat("fireball");
-                self.rebuild_drops();
-            }
-            if self.blaze.rest(dt) {
-                self.rebuild_blaze();
+            // Still shots freeze hover/flee so the armed pose stays in frame.
+            if self.cook_shot_path.is_none() {
+                if self.blaze.tick_near(steps, eye3) {
+                    let from = self.blaze.origin();
+                    let muzzle = [from[0], from[1] + 0.7, from[2]];
+                    self.fireballs.shoot(muzzle, eye3);
+                    self.play_world(crate::audio::Sound::Gust, muzzle);
+                    self.drops.embers(muzzle);
+                    self.gui.push_chat("fireball");
+                    self.rebuild_drops();
+                }
+                if self.blaze.rest(dt) {
+                    self.rebuild_blaze();
+                }
+                if self.ghast.tick_near(steps, eye3) {
+                    let from = self.ghast.origin();
+                    let muzzle = [from[0], from[1] + 0.85, from[2]];
+                    self.fireballs.shoot_ghast(muzzle, eye3);
+                    self.play_world(crate::audio::Sound::Gust, muzzle);
+                    self.drops.embers(muzzle);
+                    self.drops.puff(muzzle, [1.0, 0.55, 0.2]);
+                    self.gui.push_chat("fireball");
+                    self.rebuild_drops();
+                }
+                if self.ghast.rest(dt) {
+                    self.rebuild_ghast();
+                }
             }
             self.rebuild_blaze();
+            self.rebuild_ghast();
+            if self.ghast_due {
+                self.grant_ghast_loot();
+            }
             {
                 let feet = [self.camera.eye.x, self.camera.eye.z];
                 let from = [
@@ -31087,6 +31331,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, blaze.slice(..));
                     pass.draw(0..self.blaze_count, 0..1);
+                }
+            }
+            if let Some(ghast) = &self.ghast_buf {
+                if self.ghast_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, ghast.slice(..));
+                    pass.draw(0..self.ghast_count, 0..1);
                 }
             }
             if let Some(piglin) = &self.piglin_buf {

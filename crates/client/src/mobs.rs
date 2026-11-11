@@ -5529,11 +5529,21 @@ impl Guardian {
 /// Fortress blaze pad — floats above [`rebuild_world::NETHER_FORTRESS_BLAZE`].
 pub const BLAZE_PAD: (i32, i32) = (-29, -41);
 
+/// Ghast hover pad — over the open nether pocket chamber (`NETHER_PAD`).
+pub const GHAST_PAD: (i32, i32) = rebuild_world::NETHER_PAD;
+
 const BLAZE_HEARTS: i32 = 5;
 const BLAZE_SHOOT_EVERY: u32 = 36;
 const BLAZE_HOVER: f32 = 5.0;
 const BLAZE_STEP: f32 = 0.08;
 const BLAZE_HOME_Y: f32 = 5.6;
+
+const GHAST_HEARTS: i32 = 8;
+const GHAST_SHOOT_EVERY: u32 = 48;
+const GHAST_HOVER: f32 = 8.0;
+const GHAST_STEP: f32 = 0.06;
+/// Hover just under the pocket ceiling (`NETHER_FORTRESS_FLOOR` + ~2).
+const GHAST_HOME_Y: f32 = 6.15;
 
 /// Floating hostile over the nether fortress blaze cage. Shoots fireballs.
 pub struct Blaze {
@@ -5733,7 +5743,7 @@ impl Blaze {
                 flame,
             );
         }
-        // Ember underglow.
+        // Ember underglow (blaze).
         push_box(
             &mut out,
             [x, y + 0.12 + bob, z],
@@ -5741,6 +5751,288 @@ impl Blaze {
             flame,
         );
         out
+    }
+}
+
+/// Large floating ghast over the nether pocket. Shoots impact fireballs.
+pub struct Ghast {
+    origin: [f32; 3],
+    home: [f32; 3],
+    swing: u32,
+    hearts: i32,
+    down: f32,
+    loose: u32,
+}
+
+impl Ghast {
+    pub fn new() -> Self {
+        let (x, z) = GHAST_PAD;
+        let home = [x as f32 + 0.5, GHAST_HOME_Y, z as f32 + 0.5];
+        Self {
+            origin: home,
+            home,
+            swing: 0,
+            hearts: GHAST_HEARTS,
+            down: 0.0,
+            loose: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = GHAST_HEARTS;
+        self.down = 0.0;
+        self.swing = 0;
+        self.loose = 0;
+    }
+
+    pub fn bump(&mut self, from: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        bump_origin(&mut self.origin, &mut self.loose, from)
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 1.1, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=14.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 2.4
+    }
+
+    /// Spend hearts. True when this hit drops the ghast.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.down = 14.0;
+        true
+    }
+
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if self.hearts > 0 {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.hearts = GHAST_HEARTS;
+        self.origin = self.home;
+        self.swing = 0;
+        self.down = 0.0;
+        true
+    }
+
+    /// Drift and bob. True when a fireball is due.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if self.loose > 0 {
+            self.loose = self.loose.saturating_sub(count);
+            return false;
+        }
+        if self.hearts <= 0 {
+            return false;
+        }
+        let mut shot = false;
+        for _ in 0..count {
+            let dx = player[0] - self.origin[0];
+            let dz = player[2] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            self.origin[1] = self.home[1] + (self.swing as f32 * 0.08).sin() * 0.22;
+            if dist > GHAST_HOVER + 2.0 && dist > 0.05 {
+                let step = GHAST_STEP.min(dist - GHAST_HOVER);
+                self.origin[0] += dx / dist * step;
+                self.origin[2] += dz / dist * step;
+            } else if dist < GHAST_HOVER - 2.5 && dist > 0.05 {
+                self.origin[0] -= dx / dist * GHAST_STEP;
+                self.origin[2] -= dz / dist * GHAST_STEP;
+            } else if dist > 22.0 {
+                let hx = self.home[0] - self.origin[0];
+                let hz = self.home[2] - self.origin[2];
+                let hd = (hx * hx + hz * hz).sqrt();
+                if hd > 0.05 {
+                    self.origin[0] += hx / hd * GHAST_STEP;
+                    self.origin[2] += hz / hd * GHAST_STEP;
+                }
+            }
+            self.swing = self.swing.wrapping_add(1);
+            if (4.0..20.0).contains(&dist) && self.swing % GHAST_SHOOT_EVERY == 0 {
+                shot = true;
+            }
+        }
+        shot
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if self.hearts <= 0 {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.9, y, z - 0.9], [x + 0.9, y + 1.9, z + 0.9])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bob = (self.swing as f32 * 0.1).sin() * 0.06;
+        // Parchment body + cool block light (avoids lantern warm-pulse dimming).
+        let body = [1.0, 0.95, 0.88];
+        let body_glow = [0.55, 0.6, 0.85];
+        let shade = [0.78, 0.7, 0.58];
+        let shade_glow = [0.4, 0.42, 0.55];
+        let tear = [0.45, 0.88, 1.0];
+        let eye = [0.08, 0.06, 0.06];
+        let mouth = [0.7, 0.18, 0.2];
+        let mut out = Vec::new();
+        // Big soft cube body (fits under the pocket ceiling).
+        push_box_lit(
+            &mut out,
+            [x, y + 0.95 + bob, z],
+            [0.82, 0.82, 0.82],
+            body,
+            body_glow,
+        );
+        // Face — eyes + open mouth toward +Z.
+        push_box_lit(
+            &mut out,
+            [x - 0.28, y + 1.15 + bob, z + 0.8],
+            [0.12, 0.16, 0.06],
+            eye,
+            eye,
+        );
+        push_box_lit(
+            &mut out,
+            [x + 0.28, y + 1.15 + bob, z + 0.8],
+            [0.12, 0.16, 0.06],
+            eye,
+            eye,
+        );
+        push_box_lit(
+            &mut out,
+            [x, y + 0.72 + bob, z + 0.82],
+            [0.24, 0.14, 0.06],
+            mouth,
+            mouth,
+        );
+        // Tentacles.
+        for (ox, oz, len) in [
+            (-0.48f32, -0.3, 0.5),
+            (-0.18, -0.48, 0.62),
+            (0.18, -0.48, 0.58),
+            (0.48, -0.3, 0.45),
+            (0.0, 0.12, 0.4),
+        ] {
+            push_box_lit(
+                &mut out,
+                [x + ox, y + 0.12 + bob - len * 0.35, z + oz],
+                [0.09, len * 0.5, 0.09],
+                shade,
+                shade_glow,
+            );
+        }
+        // Tear glint under the eye when about to shoot.
+        if self.swing % GHAST_SHOOT_EVERY > GHAST_SHOOT_EVERY - 8 {
+            push_box_lit(
+                &mut out,
+                [x, y + 0.92 + bob, z + 0.86],
+                [0.08, 0.1, 0.05],
+                tear,
+                tear,
+            );
+        }
+        out
+    }
+}
+
+/// Like [`push_box`], but keeps a separate block-light channel (fireball-style).
+fn push_box_lit(
+    out: &mut Vec<Vertex>,
+    center: [f32; 3],
+    half: [f32; 3],
+    color: [f32; 3],
+    block: [f32; 3],
+) {
+    let min = [
+        center[0] - half[0],
+        center[1] - half[1],
+        center[2] - half[2],
+    ];
+    let max = [
+        center[0] + half[0],
+        center[1] + half[1],
+        center[2] + half[2],
+    ];
+    let corner = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], max[2]],
+        [min[0], max[1], max[2]],
+    ];
+    const FACES: [[usize; 4]; 6] = [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [3, 2, 6, 7],
+        [0, 3, 7, 4],
+        [1, 2, 6, 5],
+    ];
+    const NORMALS: [[f32; 3]; 6] = [
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+    ];
+    for (face, normal) in FACES.into_iter().zip(NORMALS) {
+        let tri = [face[0], face[1], face[2], face[0], face[2], face[3]];
+        for index in tri {
+            out.push(Vertex {
+                position: corner[index],
+                color,
+                normal,
+                uv: [0.0, 0.0],
+                textured: 0.0,
+                block,
+                bounce: [0.0, 0.0, 0.0],
+                ao: 1.0,
+            });
+        }
     }
 }
 
@@ -7219,6 +7511,23 @@ mod tests {
         assert!(blaze.alive());
         blaze.rouse([2.0, 4.0, 3.0]);
         assert!((blaze.origin()[1] - 5.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_ghast_shoots_when_the_player_is_near() {
+        let mut ghast = Ghast::new();
+        ghast.place_at([0.0, 8.0, 0.0]);
+        let mut fired = false;
+        for _ in 0..80 {
+            if ghast.tick_near(1, [6.0, 5.0, 0.0]) {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "ghast should queue a fireball in hover range");
+        assert!(ghast.hurt(GHAST_HEARTS));
+        assert!(!ghast.alive());
+        assert!(ghast.vertices().is_empty());
     }
 
     #[test]
