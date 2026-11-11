@@ -1704,6 +1704,8 @@ pub struct State {
     dragon_buf: Option<wgpu::Buffer>,
     dragon_count: u32,
     found_end: bool,
+    /// Once: walked up to the End city remnant tower by the pad.
+    found_end_city: bool,
 
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
@@ -2891,6 +2893,7 @@ impl State {
             dragon_buf: None,
             dragon_count: 0,
             found_end: false,
+            found_end_city: false,
             nether_star_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
@@ -7230,6 +7233,12 @@ impl State {
                 self.gui.push_chat("the dragon rises");
             }
         }
+        if !self.found_end_city
+            && near(rebuild_world::END_CITY.0, rebuild_world::END_CITY.1)
+        {
+            self.found_end_city = true;
+            self.gui.push_chat("an end city");
+        }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
         {
@@ -7823,6 +7832,7 @@ impl State {
             .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_monument(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_stronghold(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_end_city(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_village(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen))
@@ -9540,6 +9550,61 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// End city remnant tower by the End pad, then quit with a PNG.
+    pub fn arm_end_city_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::END_CITY;
+        let floor = i32::from(rebuild_world::END_CITY_FLOOR);
+        self.found_end = true;
+        self.found_end_city = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("the end");
+        self.gui.push_chat("an end city");
+
+        // Stand on the pad rim looking at the full purpur tower silhouette.
+        let (px, pz) = rebuild_world::END_PAD;
+        let focus = glam::Vec3::new(cx as f32 + 0.5, floor as f32 + 5.2, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            px as f32 + 2.2,
+            floor as f32 + 2.0,
+            pz as f32 + 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("ender_pearl");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -30746,6 +30811,11 @@ fn stronghold_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::STRONGHOLD_CHEST
 }
 
+/// The End city remnant tower chest.
+fn end_city_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::END_CITY_CHEST
+}
+
 /// The north village-remnant west-house chest.
 fn village_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::VILLAGE_CHEST
@@ -31405,6 +31475,28 @@ fn fresh_stronghold(has_record: bool, x: i32, z: i32, omen: bool) -> Option<Stri
         return None;
     }
     stronghold_loot(x, z, omen)
+}
+
+/// One drop from the End city tower chest, read from the data pack.
+fn end_city_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !end_city_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_end_city_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the End city remnant chest.
+fn fresh_end_city(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    end_city_loot(x, z, omen)
 }
 
 /// One drop from the village-remnant chest, read from the data pack.
@@ -32075,6 +32167,34 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_stronghold(true, x, z, false).is_none());
         assert!(super::fresh_stronghold(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_end_city_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::END_CITY_CHEST;
+        assert!(super::end_city_cell(x, z));
+        assert!(!super::end_city_cell(
+            rebuild_world::END_PAD.0,
+            rebuild_world::END_PAD.1
+        ));
+        assert!(!super::stronghold_cell(x, z));
+        assert!(!super::camp_cell(x, z));
+        let table = crate::loot::load_end_city_chest().unwrap();
+        let paid = super::fresh_end_city(false, x, z, false).unwrap();
+        let rich = super::fresh_end_city(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_end_city(true, x, z, false).is_none());
+        assert!(super::fresh_end_city(false, 0, 0, false).is_none());
+        assert!(
+            table.drops.iter().any(|id| id == "elytra")
+                || table.omen.iter().any(|id| id == "elytra"),
+            "elytra in the table"
+        );
+        assert!(
+            table.drops.iter().any(|id| id == "shulker_box"),
+            "shulker stub in the table"
+        );
     }
 
     #[test]

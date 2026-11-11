@@ -9,6 +9,7 @@
 //! `data/terralite/loot/shipwreck_chest.json` is the west beach shipwreck.
 //! `data/terralite/loot/monument_chest.json` is the ocean monument remnant.
 //! `data/terralite/loot/stronghold_chest.json` is the stronghold portal room.
+//! `data/terralite/loot/end_city_chest.json` is the End city remnant tower.
 //! `data/terralite/loot/village_chest.json` is the north village remnant.
 //! `data/terralite/loot/dungeon_chest.json` is the underground mine dungeon.
 //! `data/terralite/loot/mineshaft_chest.json` is the abandoned mineshaft spur.
@@ -120,6 +121,15 @@ pub fn stronghold_chest_file() -> PathBuf {
 /// The stronghold portal-room chest table from the data pack.
 pub fn load_stronghold_chest() -> Result<Table, String> {
     load_chest("stronghold_chest", &stronghold_chest_file())
+}
+
+pub fn end_city_chest_file() -> PathBuf {
+    loot_file("end_city_chest")
+}
+
+/// The End city remnant tower chest table from the data pack.
+pub fn load_end_city_chest() -> Result<Table, String> {
+    load_chest("end_city_chest", &end_city_chest_file())
 }
 
 pub fn village_chest_file() -> PathBuf {

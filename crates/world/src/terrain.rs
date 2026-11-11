@@ -163,6 +163,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_ocean_monument(&mut blocks, chunk_x, chunk_z);
     stamp_stronghold(&mut blocks, chunk_x, chunk_z);
     stamp_end_pocket(&mut blocks, chunk_x, chunk_z);
+    stamp_end_city(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
@@ -547,6 +548,18 @@ pub const END_RETURN: (i32, i32) = END_PAD;
 
 /// Obsidian platform floor in the End pocket.
 pub const END_FLOOR: u16 = 16;
+
+/// End city remnant tower just west of the End pad (same chunk).
+///
+/// Tall purpur / end-stone ruin with a chest near the top. Reach it by stepping
+/// stones off the pad, or flying after the dragon drops an elytra.
+pub const END_CITY: (i32, i32) = (20, -36);
+
+/// Loot chest inside the End city tower.
+pub const END_CITY_CHEST: (i32, i32) = END_CITY;
+
+/// Standing floor of the End city tower base.
+pub const END_CITY_FLOOR: u16 = END_FLOOR;
 
 const END_CHUNK: (i32, i32) = (1, -3);
 
@@ -1442,6 +1455,75 @@ fn stamp_end_pocket(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_
     let rod_lx = (cx + 2 - chunk_x * 16) as u8;
     let rod_lz = (cz - chunk_z * 16) as u8;
     blocks.push((rod_lx, floor + 1, rod_lz, Block::new("end_rod", 0)));
+}
+
+/// Tall purpur / end-stone tower west of the End pad. Guaranteed in [`END_CHUNK`].
+fn stamp_end_city(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != END_CHUNK {
+        return;
+    }
+    let (cx, cz) = END_CITY;
+    let floor = END_CITY_FLOOR;
+    let end_stone = Block::new("end_stone", 0);
+    let purpur = Block::new("purpur", 0);
+    let pillar = Block::new("purpur_pillar", 0);
+    let rod = Block::new("end_rod", 0);
+    // Stepping stones from the pad rim toward the tower base.
+    for &(wx, wz) in &[(22i32, -38), (21, -37)] {
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (wz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor));
+        blocks.push((lx, floor, lz, end_stone));
+    }
+    // 3×3 floating foundation.
+    for dz in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y >= floor && *y <= floor + 12));
+            blocks.push((lx, floor, lz, end_stone));
+        }
+    }
+    // Hollow purpur shell with pillar corners; skip a few cells for ruin gaps.
+    for y in 1u16..=10 {
+        for dz in -1i32..=1 {
+            for dx in -1i32..=1 {
+                let edge = dx.abs() == 1 || dz.abs() == 1;
+                if !edge {
+                    continue;
+                }
+                // Broken openings on the south face and mid east wall.
+                if (dx == 0 && dz == 1 && (y == 2 || y == 6))
+                    || (dx == 1 && dz == 0 && y == 4)
+                {
+                    continue;
+                }
+                let lx = (cx + dx - chunk_x * 16) as u8;
+                let lz = (cz + dz - chunk_z * 16) as u8;
+                let corner = dx.abs() == 1 && dz.abs() == 1;
+                blocks.push((lx, floor + y, lz, if corner { pillar } else { purpur }));
+            }
+        }
+    }
+    // Cap + spire rod.
+    for dz in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.push((lx, floor + 11, lz, if dx == 0 && dz == 0 { end_stone } else { purpur }));
+        }
+    }
+    let tip_lx = (cx - chunk_x * 16) as u8;
+    let tip_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((tip_lx, floor + 12, tip_lz, rod));
+    // Chest on an interior shelf near the top.
+    let chest_lx = (END_CITY_CHEST.0 - chunk_x * 16) as u8;
+    let chest_lz = (END_CITY_CHEST.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == chest_lx && *z == chest_lz && *y == floor + 8));
+    blocks.push((chest_lx, floor + 8, chest_lz, Block::new("chest", 0)));
+    // Inner floor under the chest so it does not hang in air.
+    blocks.retain(|(x, y, z, _)| !(*x == chest_lx && *z == chest_lz && *y == floor + 7));
+    blocks.push((chest_lx, floor + 7, chest_lz, purpur));
 }
 
 /// Ruined plaza + three house shells + well. Guaranteed in [`VILLAGE_CHUNK`].
@@ -2662,6 +2744,41 @@ mod tests {
         assert_ne!(END_CHUNK, STRONGHOLD_CHUNK);
         assert_ne!(END_CHUNK, NETHER_CHUNK);
         assert_ne!(END_CHUNK, PORTAL_CHUNK);
+    }
+
+    #[test]
+    fn an_end_city_tower_stands_west_of_the_pad() {
+        let pocket = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+        let (cx, cz) = END_CITY;
+        let lx = (cx - END_CHUNK.0 * 16) as u8;
+        let lz = (cz - END_CHUNK.1 * 16) as u8;
+        let floor = END_CITY_FLOOR;
+        assert_eq!(
+            pocket.block(lx, floor, lz).id,
+            "end_stone",
+            "tower foundation"
+        );
+        assert!(
+            matches!(
+                pocket.block(lx + 1, floor + 3, lz + 1).id,
+                "purpur" | "purpur_pillar"
+            ),
+            "purpur shell"
+        );
+        let chest_lx = (END_CITY_CHEST.0 - END_CHUNK.0 * 16) as u8;
+        let chest_lz = (END_CITY_CHEST.1 - END_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            pocket.block(chest_lx, floor + 8, chest_lz).id,
+            "chest",
+            "loot chest near the top"
+        );
+        assert_eq!(
+            pocket.block(lx, floor + 12, lz).id,
+            "end_rod",
+            "spire rod"
+        );
+        assert_eq!(END_CITY_FLOOR, END_FLOOR);
+        assert_ne!((cx, cz), END_PAD);
     }
 
     #[test]

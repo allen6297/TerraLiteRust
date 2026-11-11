@@ -320,6 +320,8 @@ struct Args {
     shot_end_portal: Option<std::path::PathBuf>,
     /// Ender dragon circling the End pad, then quit.
     shot_ender_dragon: Option<std::path::PathBuf>,
+    /// End city remnant tower by the End pad, then quit.
+    shot_end_city: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
     shot_wreck_heart: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
@@ -618,6 +620,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_stronghold: args.shot_stronghold,
         shot_end_portal: args.shot_end_portal,
         shot_ender_dragon: args.shot_ender_dragon,
+        shot_end_city: args.shot_end_city,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
@@ -792,6 +795,7 @@ struct App {
     shot_stronghold: Option<std::path::PathBuf>,
     shot_end_portal: Option<std::path::PathBuf>,
     shot_ender_dragon: Option<std::path::PathBuf>,
+    shot_end_city: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
@@ -1189,6 +1193,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_ender_dragon.take() {
                     state.arm_ender_dragon_shot(path);
                 }
+                if let Some(path) = self.shot_end_city.take() {
+                    state.arm_end_city_shot(path);
+                }
                 if let Some(path) = self.shot_wreck_heart.take() {
                     state.arm_shipwreck_heart_shot(path);
                 }
@@ -1583,6 +1590,7 @@ where
         shot_stronghold: None,
         shot_end_portal: None,
         shot_ender_dragon: None,
+        shot_end_city: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
         shot_axolotl: None,
@@ -2260,6 +2268,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-ender-dragon".to_string())?;
                 parsed.shot_ender_dragon = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-end-city" | "--shot-city" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-end-city".to_string())?;
+                parsed.shot_end_city = Some(std::path::PathBuf::from(value));
             }
             "--shot-wreck-heart" | "--shot-shipwreck-heart" | "--shot-heart" => {
                 let value = iter
@@ -2998,6 +3012,17 @@ mod tests {
         assert_eq!(
             args.shot_ender_dragon.as_deref(),
             Some(std::path::Path::new("ender-dragon.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-end-city".into(),
+            "end-city.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_end_city.as_deref(),
+            Some(std::path::Path::new("end-city.png"))
         );
     }
 }
