@@ -290,12 +290,19 @@ struct ScriptRecipe {
     source: String,
 }
 
-/// Break or chest loot from `loot.block` / `loot.chest`.
+    /// Break, chest, or entity loot from `loot.block` / `loot.chest` / `loot.entity`.
 struct ScriptLoot {
-    /// Block id or chest table id (`camp_chest`, …).
+    /// Block id, chest table id (`camp_chest`, …), or entity id.
     id: String,
     drops: Vec<String>,
     source: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LootKind {
+    Block,
+    Chest,
+    Entity,
 }
 
 /// Heat cook from `recipe.smelt` / `smoke` / `blast` or datapack smelting.
@@ -337,6 +344,29 @@ struct ScriptEntity {
     hostile: bool,
     /// Creative item id that spawns this mob on use.
     spawn_egg: Option<String>,
+    /// Max hearts for the Guest body (`1..=40`, default 4).
+    hearts: i32,
+    /// Aim sphere radius in blocks (default `0.9`).
+    hurtbox: f32,
+    /// Chase step scale (default `1.0`).
+    speed: f32,
+}
+
+/// Public snapshot of a script entity for Guest spawn.
+#[derive(Clone, Debug)]
+pub struct ScriptEntityDef {
+    pub id: String,
+    pub model: Option<String>,
+    pub hostile: bool,
+    pub hearts: i32,
+    pub hurtbox: f32,
+    pub speed: f32,
+}
+
+impl ScriptEntityDef {
+    pub const DEFAULT_HEARTS: i32 = 4;
+    pub const DEFAULT_HURTBOX: f32 = 0.9;
+    pub const DEFAULT_SPEED: f32 = 1.0;
 }
 
 struct ScriptSpawn {
@@ -357,6 +387,8 @@ struct ScriptRegistry {
     block_loots: Vec<ScriptLoot>,
     /// Chest `drops` overrides from `loot.chest`.
     chest_loots: Vec<ScriptLoot>,
+    /// Guest death drops from `loot.entity`.
+    entity_loots: Vec<ScriptLoot>,
     screens: Vec<ScriptScreen>,
     gui: Vec<StoredGui>,
     settings: Vec<StoredSetting>,
@@ -726,6 +758,7 @@ impl Pack {
                 smelts: Vec::new(),
                 block_loots: Vec::new(),
                 chest_loots: Vec::new(),
+                entity_loots: Vec::new(),
                 screens: Vec::new(),
                 gui: Vec::new(),
                 settings: Vec::new(),
@@ -784,6 +817,9 @@ impl Pack {
             model: None,
             hostile: false,
             spawn_egg: None,
+            hearts: ScriptEntityDef::DEFAULT_HEARTS,
+            hurtbox: ScriptEntityDef::DEFAULT_HURTBOX,
+            speed: ScriptEntityDef::DEFAULT_SPEED,
         });
         Ok(())
     }
@@ -849,6 +885,54 @@ impl Pack {
         Ok(())
     }
 
+    /// Max hearts for a script Guest (`1..=40`).
+    pub fn set_entity_hearts(&self, id: &str, hearts: i32, source: &str) -> Result<(), String> {
+        if !(1..=40).contains(&hearts) {
+            return Err(format!("entity {id} hearts must be 1..=40"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entity) = script.entities.iter_mut().find(|entity| entity.id == id) else {
+            return Err(format!("unknown entity {id}"));
+        };
+        if !source.is_empty() && entity.source != source {
+            return Err(format!("entity {id} belongs to another script"));
+        }
+        entity.hearts = hearts;
+        Ok(())
+    }
+
+    /// Aim sphere radius for a script Guest (blocks).
+    pub fn set_entity_hurtbox(&self, id: &str, radius: f32, source: &str) -> Result<(), String> {
+        if !(0.2..=4.0).contains(&radius) || !radius.is_finite() {
+            return Err(format!("entity {id} hurtbox must be 0.2..=4.0"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entity) = script.entities.iter_mut().find(|entity| entity.id == id) else {
+            return Err(format!("unknown entity {id}"));
+        };
+        if !source.is_empty() && entity.source != source {
+            return Err(format!("entity {id} belongs to another script"));
+        }
+        entity.hurtbox = radius;
+        Ok(())
+    }
+
+    /// Chase step scale for a hostile script Guest.
+    pub fn set_entity_speed(&self, id: &str, scale: f32, source: &str) -> Result<(), String> {
+        if !(0.25..=4.0).contains(&scale) || !scale.is_finite() {
+            return Err(format!("entity {id} speed must be 0.25..=4.0"));
+        }
+        let mut script = self.script.lock().expect("script registry");
+        let Some(entity) = script.entities.iter_mut().find(|entity| entity.id == id) else {
+            return Err(format!("unknown entity {id}"));
+        };
+        if !source.is_empty() && entity.source != source {
+            return Err(format!("entity {id} belongs to another script"));
+        }
+        entity.speed = scale;
+        Ok(())
+    }
+
     /// Model path for a script entity, when set.
     pub fn entity_model(&self, id: &str) -> Option<String> {
         self.script
@@ -883,14 +967,39 @@ impl Pack {
             .map(|entity| entity.id.clone())
     }
 
-    /// `(id, model, hostile)` for every script entity, registration order.
-    pub fn script_entity_defs(&self) -> Vec<(String, Option<String>, bool)> {
+    /// Full def for one script entity, when registered.
+    pub fn script_entity_def(&self, id: &str) -> Option<ScriptEntityDef> {
         self.script
             .lock()
             .expect("script registry")
             .entities
             .iter()
-            .map(|entity| (entity.id.clone(), entity.model.clone(), entity.hostile))
+            .find(|entity| entity.id == id)
+            .map(|entity| ScriptEntityDef {
+                id: entity.id.clone(),
+                model: entity.model.clone(),
+                hostile: entity.hostile,
+                hearts: entity.hearts,
+                hurtbox: entity.hurtbox,
+                speed: entity.speed,
+            })
+    }
+
+    /// Defs for every script entity, registration order.
+    pub fn script_entity_defs(&self) -> Vec<ScriptEntityDef> {
+        self.script
+            .lock()
+            .expect("script registry")
+            .entities
+            .iter()
+            .map(|entity| ScriptEntityDef {
+                id: entity.id.clone(),
+                model: entity.model.clone(),
+                hostile: entity.hostile,
+                hearts: entity.hearts,
+                hurtbox: entity.hurtbox,
+                speed: entity.speed,
+            })
             .collect()
     }
 
@@ -1553,7 +1662,7 @@ impl Pack {
         drops: &[&str],
         source: &str,
     ) -> Result<(), String> {
-        self.set_loot_list(true, block, drops, source)
+        self.set_loot_list(LootKind::Block, block, drops, source)
     }
 
     /// Override a named chest table's `drops` list (`camp_chest`, …).
@@ -1563,12 +1672,25 @@ impl Pack {
         drops: &[&str],
         source: &str,
     ) -> Result<(), String> {
-        self.set_loot_list(false, table, drops, source)
+        self.set_loot_list(LootKind::Chest, table, drops, source)
+    }
+
+    /// Guest death drops for `entity` from `loot.entity`. Every listed id must exist.
+    pub fn set_entity_loot(
+        &self,
+        entity: &str,
+        drops: &[&str],
+        source: &str,
+    ) -> Result<(), String> {
+        if self.script_entity_def(entity).is_none() {
+            return Err(format!("unknown loot entity {entity}"));
+        }
+        self.set_loot_list(LootKind::Entity, entity, drops, source)
     }
 
     fn set_loot_list(
         &self,
-        block: bool,
+        kind: LootKind,
         id: &str,
         drops: &[&str],
         source: &str,
@@ -1579,7 +1701,7 @@ impl Pack {
         if drops.iter().any(|drop| drop.is_empty()) {
             return Err("loot id is empty".into());
         }
-        if block && !self.contains_block(id) {
+        if kind == LootKind::Block && !self.contains_block(id) {
             return Err(format!("unknown loot block {id}"));
         }
         for drop in drops {
@@ -1593,10 +1715,10 @@ impl Pack {
             source: source.to_string(),
         };
         let mut script = self.script.lock().expect("script registry");
-        let list = if block {
-            &mut script.block_loots
-        } else {
-            &mut script.chest_loots
+        let list = match kind {
+            LootKind::Block => &mut script.block_loots,
+            LootKind::Chest => &mut script.chest_loots,
+            LootKind::Entity => &mut script.entity_loots,
         };
         if let Some(existing) = list.iter_mut().find(|loot| loot.id == id) {
             if existing.drops == entry.drops
@@ -1631,6 +1753,16 @@ impl Pack {
             .chest_loots
             .iter()
             .find(|loot| loot.id == table)
+            .map(|loot| loot.drops.clone())
+    }
+
+    /// Mod-registered Guest death drops for `entity`, when present.
+    pub fn script_entity_loot(&self, entity: &str) -> Option<Vec<String>> {
+        let script = self.script.lock().expect("script registry");
+        script
+            .entity_loots
+            .iter()
+            .find(|loot| loot.id == entity)
             .map(|loot| loot.drops.clone())
     }
 
@@ -4242,6 +4374,7 @@ impl Pack {
                 smelts: Vec::new(),
                 block_loots: Vec::new(),
                 chest_loots: Vec::new(),
+                entity_loots: Vec::new(),
                 screens: Vec::new(),
                 gui: Vec::new(),
                 settings: Vec::new(),
@@ -8144,5 +8277,30 @@ mod tests {
         assert!(pack.load_mod_data(&root, source).is_err());
         assert_eq!(pack.hardness_of(Block::new("datakit:brick", 0)), Some(3.25));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn entity_lifecycle_attrs_and_loot_stick() {
+        let pack = Pack::builtin();
+        let source = "entity-lifecycle-test";
+        let id = pack
+            .register_entity_from("life", "slug", source)
+            .expect("register");
+        pack.set_entity_hearts(&id, 8, source).unwrap();
+        pack.set_entity_hurtbox(&id, 1.25, source).unwrap();
+        pack.set_entity_speed(&id, 1.5, source).unwrap();
+        pack.set_entity_loot(&id, &["torch", "apple"], source)
+            .unwrap();
+        let def = pack.script_entity_def(&id).expect("def");
+        assert_eq!(def.hearts, 8);
+        assert!((def.hurtbox - 1.25).abs() < 0.001);
+        assert!((def.speed - 1.5).abs() < 0.001);
+        assert_eq!(
+            pack.script_entity_loot(&id),
+            Some(vec!["torch".into(), "apple".into()])
+        );
+        assert!(pack.set_entity_hearts(&id, 0, source).is_err());
+        assert!(pack.set_entity_hurtbox(&id, 0.05, source).is_err());
+        assert!(pack.set_entity_speed(&id, 8.0, source).is_err());
     }
 }

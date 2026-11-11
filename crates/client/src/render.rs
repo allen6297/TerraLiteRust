@@ -6230,12 +6230,10 @@ impl State {
             dropped
         };
         let dropped_guest = if let Some(index) = guest_index {
-            let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
-            let dropped = self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
+            let dropped = self.hurt_guest(index, amount);
             if dropped {
                 xp_at = Some(origin);
-                self.guests.remove(index);
             }
             self.rebuild_guests();
             dropped
@@ -7090,13 +7088,10 @@ impl State {
                 if !self.arrows.take_near(tip, 0.5) {
                     continue;
                 }
-                let id = self.guests[index].id().to_string();
                 let origin = self.guests[index].origin();
-                let dropped =
-                    self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
+                let dropped = self.hurt_guest(index, amount);
                 if dropped {
                     self.grant_xp_at(origin, true);
-                    self.guests.remove(index);
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_guests();
@@ -9600,12 +9595,10 @@ impl State {
                                 .then(|| (index, guest.id().to_string(), o))
                         })
                         .collect();
-                    for (index, id, origin) in guest_hits.into_iter().rev() {
-                        let dropped =
-                            self.hurt_mob(&id, amount, origin, |s, n| s.guests[index].hurt(n));
+                    for (index, _id, origin) in guest_hits.into_iter().rev() {
+                        let dropped = self.hurt_guest(index, amount);
                         if dropped {
                             self.grant_xp_at(origin, true);
-                            self.guests.remove(index);
                             self.rebuild_guests();
                         }
                         hit = true;
@@ -10592,6 +10585,44 @@ impl State {
             self.note_sculk_catalyst(death);
         }
         dropped
+    }
+
+    /// Hurt a Guest. Honors `entity_death` cancel (revives, no loot). Spawns `loot.entity` drops.
+    fn hurt_guest(&mut self, index: usize, amount: i32) -> bool {
+        if index >= self.guests.len() {
+            return false;
+        }
+        let id = self.guests[index].id().to_string();
+        let origin = self.guests[index].origin();
+        let amount = self.hooks.entity_hurt(&mut self.world, &id, amount);
+        if amount <= 0 {
+            return false;
+        }
+        if !self.guests[index].hurt(amount) {
+            return false;
+        }
+        let death = [
+            origin[0].floor() as i32,
+            origin[1].floor() as i32,
+            origin[2].floor() as i32,
+        ];
+        if !self
+            .hooks
+            .entity_death(&mut self.world, &id, death[0], death[1], death[2])
+        {
+            self.guests[index].revive();
+            return false;
+        }
+        if let Some(drops) = rebuild_world::Pack::builtin().script_entity_loot(&id) {
+            for drop in drops {
+                self.drops.spawn(&drop, death, true);
+            }
+        }
+        self.statistics.note_kill();
+        let _ = self.advancements.unlock("kill");
+        self.note_sculk_catalyst(death);
+        self.guests.remove(index);
+        true
     }
 
     /// Spend hearts. At zero the egui death overlay waits instead of respawning now.
@@ -14537,15 +14568,17 @@ impl State {
                         let _ = pack.take_spawn(&id, x, y, z);
                         continue;
                     }
-                    crate::mobs::Guest::push_live(
-                        &mut self.guests,
-                        id.clone(),
-                        x,
-                        y,
-                        z,
-                        pack.entity_model(&id),
-                        pack.entity_hostile(&id),
-                    );
+                    let def = pack
+                        .script_entity_def(&id)
+                        .unwrap_or_else(|| rebuild_world::ScriptEntityDef {
+                            id: id.clone(),
+                            model: pack.entity_model(&id),
+                            hostile: pack.entity_hostile(&id),
+                            hearts: rebuild_world::ScriptEntityDef::DEFAULT_HEARTS,
+                            hurtbox: rebuild_world::ScriptEntityDef::DEFAULT_HURTBOX,
+                            speed: rebuild_world::ScriptEntityDef::DEFAULT_SPEED,
+                        });
+                    crate::mobs::Guest::push_live(&mut self.guests, def, x, y, z);
                     dirty = true;
                 }
                 Err((id, x, y, z)) => {
@@ -14592,9 +14625,17 @@ impl State {
         if pack.note_spawn(&kind, x, y, z, "").is_err() {
             return true;
         }
-        let model = pack.entity_model(&kind);
-        let hostile = pack.entity_hostile(&kind);
-        crate::mobs::Guest::push_live(&mut self.guests, kind, x, y, z, model, hostile);
+        let def = pack
+            .script_entity_def(&kind)
+            .unwrap_or_else(|| rebuild_world::ScriptEntityDef {
+                id: kind.clone(),
+                model: pack.entity_model(&kind),
+                hostile: pack.entity_hostile(&kind),
+                hearts: rebuild_world::ScriptEntityDef::DEFAULT_HEARTS,
+                hurtbox: rebuild_world::ScriptEntityDef::DEFAULT_HURTBOX,
+                speed: rebuild_world::ScriptEntityDef::DEFAULT_SPEED,
+            });
+        crate::mobs::Guest::push_live(&mut self.guests, def, x, y, z);
         self.rebuild_guests();
         self.gui.push_chat("spawn");
         true

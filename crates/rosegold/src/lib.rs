@@ -120,6 +120,8 @@
 //! just east of the oak stairs. `entity.model(id, path)` attaches a Blockbench
 //! `.bbmodel`. `entity.hostile(id, flag)` marks chase/attack AI.
 //! `entity.spawn_egg(id, item)` links a creative item that spawns the mob on use.
+//! `entity.hearts` / `entity.hurtbox` / `entity.speed` set Guest combat attrs.
+//! `loot.entity(id, list)` sets Guest death drops (`a+b`).
 //! `entity.spawn(id, x, y, z)` is `Bool`. During `main` it records a load-time
 //! body; inside a hook the host places a live Guest. False means the id was not
 //! registered or a body already stands in that cell.
@@ -190,6 +192,12 @@ pub struct ScriptLoad {
     pub entity_hostile: Vec<(String, String)>,
     /// `(entity id, item id)` from `entity.spawn_egg`.
     pub entity_spawn_eggs: Vec<(String, String)>,
+    /// `(entity id, hearts text)` from `entity.hearts`.
+    pub entity_hearts: Vec<(String, String)>,
+    /// `(entity id, radius text)` from `entity.hurtbox`.
+    pub entity_hurtboxes: Vec<(String, String)>,
+    /// `(entity id, scale text)` from `entity.speed`.
+    pub entity_speeds: Vec<(String, String)>,
     /// `(block id, seconds text)` from `block.hardness`.
     pub block_hardness: Vec<(String, String)>,
     /// `(block id, level text)` from `block.light`.
@@ -214,6 +222,8 @@ pub struct ScriptLoad {
     pub block_loots: Vec<(String, String)>,
     /// `(table id, "a+b")` from `loot.chest` — overrides datapack `drops`.
     pub chest_loots: Vec<(String, String)>,
+    /// `(entity id, "a+b")` from `loot.entity` — Guest death drops.
+    pub entity_loots: Vec<(String, String)>,
     /// `("note", message)` and `("registry", kind)` from `ModAPI`.
     pub api: Vec<(String, String)>,
     /// `(registry kind, id)` from `TLRegistry.register` when it is not a block or item.
@@ -505,6 +515,9 @@ impl Host {
                                 let mut entity_models = Vec::new();
                                 let mut entity_hostile = Vec::new();
                                 let mut entity_spawn_eggs = Vec::new();
+                                let mut entity_hearts = Vec::new();
+                                let mut entity_hurtboxes = Vec::new();
+                                let mut entity_speeds = Vec::new();
                                 let mut block_hardness = Vec::new();
                                 let mut block_lights = Vec::new();
                                 let mut item_places = Vec::new();
@@ -517,6 +530,7 @@ impl Host {
                                 let mut blasts = Vec::new();
                                 let mut block_loots = Vec::new();
                                 let mut chest_loots = Vec::new();
+                                let mut entity_loots = Vec::new();
                                 let mut api = Vec::new();
                                 let mut entries = Vec::new();
                                 let mut block_entity_binds = Vec::new();
@@ -531,6 +545,9 @@ impl Host {
                                         "entity_model" => entity_models.push(pair),
                                         "hostile" => entity_hostile.push(pair),
                                         "spawn_egg" => entity_spawn_eggs.push(pair),
+                                        "hearts" => entity_hearts.push(pair),
+                                        "hurtbox" => entity_hurtboxes.push(pair),
+                                        "speed" => entity_speeds.push(pair),
                                         "hardness" => block_hardness.push(pair),
                                         "light" => block_lights.push(pair),
                                         "places" => item_places.push(pair),
@@ -543,6 +560,7 @@ impl Host {
                                         "blast" => blasts.push(pair),
                                         "block_loot" => block_loots.push(pair),
                                         "chest_loot" => chest_loots.push(pair),
+                                        "entity_loot" => entity_loots.push(pair),
                                         "note" | "registry" => api.push((kind, pair.0)),
                                         "entry" => entries.push(pair),
                                         "block_entity" => {
@@ -565,6 +583,9 @@ impl Host {
                                     entity_models,
                                     entity_hostile,
                                     entity_spawn_eggs,
+                                    entity_hearts,
+                                    entity_hurtboxes,
+                                    entity_speeds,
                                     block_hardness,
                                     block_lights,
                                     item_places,
@@ -577,6 +598,7 @@ impl Host {
                                     blasts,
                                     block_loots,
                                     chest_loots,
+                                    entity_loots,
                                     api,
                                     entries,
                                     block_entity_binds,

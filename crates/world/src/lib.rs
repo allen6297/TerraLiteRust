@@ -94,10 +94,10 @@ pub use net::{
     write_frame,
 };
 pub use pack::{
-    BlockEntry, HeatStation, ItemDisplay, Light, Pack, ShapeEntry, asset_png, asset_text,
-    block_definitions_file, break_loot_of, data_pack_root, for_each_collider, harvest_of,
-    held_light_of, light_of, load_data_pack, resource_pack_root, shape_of, shelf_facing,
-    shelf_filled, shelf_meta,
+    BlockEntry, HeatStation, ItemDisplay, Light, Pack, ScriptEntityDef, ShapeEntry, asset_png,
+    asset_text, block_definitions_file, break_loot_of, data_pack_root, for_each_collider,
+    harvest_of, held_light_of, light_of, load_data_pack, resource_pack_root, shape_of,
+    shelf_facing, shelf_filled, shelf_meta,
 };
 pub use resource_packs::{
     BASE_PACK_ID, PackEntry, PackKind, PackSelection, RESOURCE_PACKS_DIR, discover_resource_packs,

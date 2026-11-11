@@ -1815,6 +1815,30 @@ fn register(
             .set_entity_spawn_egg(id, egg, source)
             .map_err(|err| format!("entity.spawn_egg: {err}"))?;
     }
+    for (id, hearts) in &found.entity_hearts {
+        let hearts: i32 = hearts
+            .parse()
+            .map_err(|_| format!("entity.hearts: bad hearts {hearts}"))?;
+        Pack::builtin()
+            .set_entity_hearts(id, hearts, source)
+            .map_err(|err| format!("entity.hearts: {err}"))?;
+    }
+    for (id, radius) in &found.entity_hurtboxes {
+        let radius: f32 = radius
+            .parse()
+            .map_err(|_| format!("entity.hurtbox: bad radius {radius}"))?;
+        Pack::builtin()
+            .set_entity_hurtbox(id, radius, source)
+            .map_err(|err| format!("entity.hurtbox: {err}"))?;
+    }
+    for (id, scale) in &found.entity_speeds {
+        let scale: f32 = scale
+            .parse()
+            .map_err(|_| format!("entity.speed: bad scale {scale}"))?;
+        Pack::builtin()
+            .set_entity_speed(id, scale, source)
+            .map_err(|err| format!("entity.speed: {err}"))?;
+    }
     for (id, seconds) in &found.block_hardness {
         let hardness: f32 = seconds
             .parse()
@@ -1898,6 +1922,16 @@ fn register(
         Pack::builtin()
             .set_chest_loot(table, &drops, source)
             .map_err(|err| format!("loot.chest: {err}"))?;
+    }
+    for (entity, list) in &found.entity_loots {
+        let drops: Vec<&str> = list
+            .split('+')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        Pack::builtin()
+            .set_entity_loot(entity, &drops, source)
+            .map_err(|err| format!("loot.entity: {err}"))?;
     }
     for (kind, value) in &found.api {
         if kind == "note" {

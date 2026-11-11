@@ -166,6 +166,10 @@ fn on_init() {
         "shade_egg",
         true
     );
+    shade.setHearts(8);
+    shade.setHurtbox(1.1);
+    shade.setSpeed(1.25);
+    Register.entityLoot(shade.id, "ember:ember");
     shade.spawn(14, 1, 12);
     events.entity_spawn("ember-shade-spawn", on_shade_spawn);
     events.entity_hurt("ember-shade-hurt", on_shade_hurt);

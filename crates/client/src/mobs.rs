@@ -4688,7 +4688,9 @@ fn pig_ground(world: &Cluster, x: f32, z: f32, feet_y: f32) -> bool {
     world.block_at(ix, iy + 1, iz).is_air()
 }
 
-const GUEST_HEARTS: i32 = 4;
+const GUEST_HEARTS: i32 = rebuild_world::ScriptEntityDef::DEFAULT_HEARTS;
+const GUEST_HURTBOX: f32 = rebuild_world::ScriptEntityDef::DEFAULT_HURTBOX;
+const GUEST_SPEED: f32 = rebuild_world::ScriptEntityDef::DEFAULT_SPEED;
 
 /// A mob a script registered. Default pink boxes; optional Blockbench model and hostile AI.
 pub struct Guest {
@@ -4697,6 +4699,9 @@ pub struct Guest {
     model: Option<String>,
     hostile: bool,
     hearts: i32,
+    max_hearts: i32,
+    hurtbox: f32,
+    speed: f32,
     yaw: f32,
     pose: f32,
     swing: u32,
@@ -4705,13 +4710,17 @@ pub struct Guest {
 }
 
 impl Guest {
-    fn bare(id: String, origin: [f32; 3], model: Option<String>, hostile: bool) -> Self {
+    fn bare(def: rebuild_world::ScriptEntityDef, origin: [f32; 3]) -> Self {
+        let hearts = def.hearts.max(1);
         Self {
-            id,
+            id: def.id,
             origin,
-            model,
-            hostile,
-            hearts: GUEST_HEARTS,
+            model: def.model,
+            hostile: def.hostile,
+            hearts,
+            max_hearts: hearts,
+            hurtbox: def.hurtbox.max(0.2),
+            speed: def.speed.max(0.25),
             yaw: 0.0,
             pose: 0.0,
             swing: 0,
@@ -4720,25 +4729,34 @@ impl Guest {
         }
     }
 
+    fn stub_def(id: String) -> rebuild_world::ScriptEntityDef {
+        rebuild_world::ScriptEntityDef {
+            id,
+            model: None,
+            hostile: false,
+            hearts: GUEST_HEARTS,
+            hurtbox: GUEST_HURTBOX,
+            speed: GUEST_SPEED,
+        }
+    }
+
     /// One body per id. The first stands at x = 10.5, z = 12.5. The next ones step east.
     pub fn line(ids: &[String]) -> Vec<Self> {
         Self::line_defs(
             &ids.iter()
-                .map(|id| (id.clone(), None, false))
+                .map(|id| Self::stub_def(id.clone()))
                 .collect::<Vec<_>>(),
         )
     }
 
-    /// Same as [`Self::line`], with per-id model path and hostile flag from the pack.
-    pub fn line_defs(defs: &[(String, Option<String>, bool)]) -> Vec<Self> {
+    /// Same as [`Self::line`], with per-id attrs from the pack.
+    pub fn line_defs(defs: &[rebuild_world::ScriptEntityDef]) -> Vec<Self> {
         defs.iter()
             .enumerate()
-            .map(|(index, (id, model, hostile))| {
+            .map(|(index, def)| {
                 Self::bare(
-                    id.clone(),
+                    def.clone(),
                     [10.5 + index as f32 * 1.25, 1.0, 12.5],
-                    model.clone(),
-                    *hostile,
                 )
             })
             .collect()
@@ -4748,29 +4766,27 @@ impl Guest {
     pub fn placed(ids: &[String], spawns: &[(String, i32, i32, i32)]) -> Vec<Self> {
         Self::placed_defs(
             &ids.iter()
-                .map(|id| (id.clone(), None, false))
+                .map(|id| Self::stub_def(id.clone()))
                 .collect::<Vec<_>>(),
             spawns,
         )
     }
 
-    /// Same as [`Self::placed`], carrying model/hostile from `Pack::script_entity_defs`.
+    /// Same as [`Self::placed`], carrying attrs from `Pack::script_entity_defs`.
     pub fn placed_defs(
-        defs: &[(String, Option<String>, bool)],
+        defs: &[rebuild_world::ScriptEntityDef],
         spawns: &[(String, i32, i32, i32)],
     ) -> Vec<Self> {
         let mut guests = Self::line_defs(defs);
         for (id, x, y, z) in spawns {
-            let (model, hostile) = defs
+            let def = defs
                 .iter()
-                .find(|(known, _, _)| known == id)
-                .map(|(_, model, hostile)| (model.clone(), *hostile))
-                .unwrap_or((None, false));
+                .find(|known| known.id == *id)
+                .cloned()
+                .unwrap_or_else(|| Self::stub_def(id.clone()));
             guests.push(Self::bare(
-                id.clone(),
+                def,
                 [*x as f32 + 0.5, *y as f32, *z as f32 + 0.5],
-                model,
-                hostile,
             ));
         }
         guests
@@ -4779,21 +4795,20 @@ impl Guest {
     /// Append one live body from a hook-time `entity.spawn`.
     pub fn push_live(
         guests: &mut Vec<Self>,
-        id: String,
+        def: rebuild_world::ScriptEntityDef,
         x: i32,
         y: i32,
         z: i32,
-        model: Option<String>,
-        hostile: bool,
     ) {
         let origin = [x as f32 + 0.5, y as f32, z as f32 + 0.5];
-        if guests
-            .iter()
-            .any(|guest| guest.id == id && (guest.origin[0] - origin[0]).abs() < 0.01 && (guest.origin[2] - origin[2]).abs() < 0.01)
-        {
+        if guests.iter().any(|guest| {
+            guest.id == def.id
+                && (guest.origin[0] - origin[0]).abs() < 0.01
+                && (guest.origin[2] - origin[2]).abs() < 0.01
+        }) {
             return;
         }
-        guests.push(Self::bare(id, origin, model, hostile));
+        guests.push(Self::bare(def, origin));
     }
 
     /// Remove one live body from a hook-time `entity.despawn`.
@@ -4847,7 +4862,8 @@ impl Guest {
         let dx = closest[0] - center[0];
         let dy = closest[1] - center[1];
         let dz = closest[2] - center[2];
-        dx * dx + dy * dy + dz * dz < 0.81
+        let radius = self.hurtbox;
+        dx * dx + dy * dy + dz * dz < radius * radius
     }
 
     /// Spend hearts. True when this hit drops the guest.
@@ -4863,6 +4879,13 @@ impl Guest {
         true
     }
 
+    /// Restore hearts after a cancelled `entity_death` (keep the body).
+    pub fn revive(&mut self) {
+        self.hearts = self.max_hearts.max(1);
+        self.moving = false;
+        self.attacking = false;
+    }
+
     /// Chase the player when hostile. True when a bite is due.
     pub fn tick_near(&mut self, count: u32, player: [f32; 2], clear: bool, world: &Cluster) -> bool {
         if self.hearts <= 0 {
@@ -4874,6 +4897,7 @@ impl Guest {
             self.attacking = false;
             return false;
         }
+        let step = STEP * self.speed;
         let mut bite = false;
         let mut stepped = false;
         let mut swinging = false;
@@ -4886,7 +4910,7 @@ impl Guest {
             if dist > REACH {
                 let from = [self.origin[0], self.origin[2]];
                 if let Some(next) =
-                    land_step(world, from, player, STEP.min(dist - REACH), feet_y, 2)
+                    land_step(world, from, player, step.min(dist - REACH), feet_y, 2)
                 {
                     face_forward(&mut self.yaw, next[0] - from[0], next[1] - from[1]);
                     self.origin[0] = next[0];
