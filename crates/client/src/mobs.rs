@@ -7150,6 +7150,239 @@ impl Wither {
     }
 }
 
+const WARDEN_HEARTS: i32 = 12;
+const WARDEN_BITE_EVERY: u32 = 28;
+const WARDEN_REACH: f32 = 1.45;
+const WARDEN_STEP: f32 = 0.11;
+
+/// Deep-dark warden: tall biped that seeks vibration, then the player.
+pub struct Warden {
+    origin: [f32; 3],
+    home: [f32; 3],
+    yaw: f32,
+    swing: u32,
+    hearts: i32,
+    /// True after a kill until the next shrieker summons it again.
+    spent: bool,
+    attacking: bool,
+}
+
+impl Warden {
+    pub fn new() -> Self {
+        Self {
+            origin: [0.0, -8.0, 0.0],
+            home: [0.0, -8.0, 0.0],
+            yaw: 0.0,
+            swing: 0,
+            hearts: 0,
+            spent: true,
+            attacking: false,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0 && !self.spent
+    }
+
+    /// Rise beside a shrieker.
+    pub fn summon(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = WARDEN_HEARTS;
+        self.swing = 0;
+        self.spent = false;
+        self.attacking = false;
+        self.yaw = 0.0;
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.summon(at);
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if !self.alive() {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 1.4, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=8.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 1.2
+    }
+
+    /// Spend hearts. True when this hit drops the warden.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if !self.alive() || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.spent = true;
+        self.attacking = false;
+        true
+    }
+
+    /// Seek `lure` (vibration) when set, else the player. True when a bite is due.
+    pub fn tick_near(
+        &mut self,
+        count: u32,
+        player: [f32; 2],
+        lure: Option<[f32; 2]>,
+        clear: bool,
+        world: &Cluster,
+    ) -> bool {
+        if !self.alive() {
+            return false;
+        }
+        let goal = lure.unwrap_or(player);
+        let mut bite = false;
+        let mut swinging = false;
+        for _ in 0..count {
+            let feet_y = self.origin[1].floor() as i32;
+            let dx = goal[0] - self.origin[0];
+            let dz = goal[1] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist > WARDEN_REACH {
+                let from = [self.origin[0], self.origin[2]];
+                if let Some(next) =
+                    land_step(world, from, goal, WARDEN_STEP.min(dist - WARDEN_REACH), feet_y, 3)
+                {
+                    face_forward(&mut self.yaw, next[0] - from[0], next[1] - from[1]);
+                    self.origin[0] = next[0];
+                    self.origin[2] = next[1];
+                }
+            } else if clear {
+                face_forward(&mut self.yaw, dx, dz);
+                swinging = true;
+                self.swing = self.swing.wrapping_add(1);
+                if self.swing % WARDEN_BITE_EVERY == 0 {
+                    bite = true;
+                }
+            }
+            settle_land(&mut self.origin, world);
+        }
+        self.attacking = swinging;
+        bite
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if !self.alive() {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.45, y, z - 0.45], [x + 0.45, y + 2.55, z + 0.45])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if !self.alive() {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bob = (self.swing as f32 * 0.14).sin() * 0.04;
+        let body = [0.06, 0.1, 0.12];
+        let dark = [0.03, 0.05, 0.06];
+        let glow = [0.2, 0.95, 0.95];
+        let mut out = Vec::new();
+        // Legs.
+        push_box(
+            &mut out,
+            [x - 0.18, y + 0.55 + bob, z],
+            [0.14, 0.55, 0.14],
+            dark,
+        );
+        push_box(
+            &mut out,
+            [x + 0.18, y + 0.55 + bob, z],
+            [0.14, 0.55, 0.14],
+            dark,
+        );
+        // Torso.
+        push_box(
+            &mut out,
+            [x, y + 1.45 + bob, z],
+            [0.42, 0.55, 0.28],
+            body,
+        );
+        // Rib glow.
+        push_box(
+            &mut out,
+            [x, y + 1.5 + bob, z + 0.22],
+            [0.22, 0.28, 0.04],
+            glow,
+        );
+        // Head + horn buds.
+        push_box(
+            &mut out,
+            [x, y + 2.2 + bob, z],
+            [0.28, 0.28, 0.28],
+            dark,
+        );
+        push_box(
+            &mut out,
+            [x - 0.32, y + 2.45 + bob, z],
+            [0.08, 0.18, 0.08],
+            body,
+        );
+        push_box(
+            &mut out,
+            [x + 0.32, y + 2.45 + bob, z],
+            [0.08, 0.18, 0.08],
+            body,
+        );
+        // Tendril sensors.
+        push_box(
+            &mut out,
+            [x - 0.12, y + 2.55 + bob, z + 0.05],
+            [0.04, 0.16, 0.04],
+            glow,
+        );
+        push_box(
+            &mut out,
+            [x + 0.12, y + 2.55 + bob, z + 0.05],
+            [0.04, 0.16, 0.04],
+            glow,
+        );
+        // Arms.
+        let swing = if self.attacking {
+            (self.swing as f32 * 0.35).sin() * 0.25
+        } else {
+            0.0
+        };
+        push_box(
+            &mut out,
+            [x - 0.55, y + 1.35 + bob + swing, z],
+            [0.12, 0.55, 0.12],
+            dark,
+        );
+        push_box(
+            &mut out,
+            [x + 0.55, y + 1.35 + bob - swing, z],
+            [0.12, 0.55, 0.12],
+            dark,
+        );
+        out
+    }
+}
+
 const SHULKER_HEARTS: i32 = 8;
 const SHULKER_SHOOT_EVERY: u32 = 48;
 const SHULKER_OPEN_FOR: u32 = 18;

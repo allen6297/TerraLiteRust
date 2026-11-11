@@ -16,9 +16,13 @@ pub const SCULK: &str = "sculk";
 pub const SCULK_VEIN: &str = "sculk_vein";
 pub const SCULK_SENSOR: &str = "sculk_sensor";
 pub const SCULK_CATALYST: &str = "sculk_catalyst";
+pub const SCULK_SHRIEKER: &str = crate::warden::SCULK_SHRIEKER;
 
 pub fn is_sculk(id: &str) -> bool {
-    matches!(id, SCULK | SCULK_VEIN | SCULK_SENSOR | SCULK_CATALYST)
+    matches!(
+        id,
+        SCULK | SCULK_VEIN | SCULK_SENSOR | SCULK_CATALYST | SCULK_SHRIEKER
+    )
 }
 
 pub fn is_catalyst(id: &str) -> bool {
@@ -31,6 +35,7 @@ pub fn tint(id: &str) -> [f32; 3] {
         SCULK_VEIN => [0.12, 0.38, 0.40],
         SCULK_SENSOR => [0.18, 0.55, 0.58],
         SCULK_CATALYST => [0.15, 0.42, 0.40],
+        SCULK_SHRIEKER => crate::warden::tint(SCULK_SHRIEKER),
         _ => [0.08, 0.22, 0.24],
     }
 }

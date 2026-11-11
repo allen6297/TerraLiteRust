@@ -36,6 +36,7 @@ mod glow_berries;
 mod powder_snow;
 mod mud;
 mod sculk;
+mod warden;
 mod hotbar;
 mod item_icon;
 mod jobs;
@@ -468,6 +469,8 @@ struct Args {
     shot_mud: Option<std::path::PathBuf>,
     /// Sculk catalyst deep-dark bloom demo, then quit.
     shot_sculk: Option<std::path::PathBuf>,
+    /// Sculk shrieker + warden demo, then quit.
+    shot_warden: Option<std::path::PathBuf>,
     /// Mine-mouth lodestone + linked compass, then quit.
     shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
@@ -765,6 +768,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_powder_snow: args.shot_powder_snow,
         shot_mud: args.shot_mud,
         shot_sculk: args.shot_sculk,
+        shot_warden: args.shot_warden,
         shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
@@ -979,6 +983,7 @@ struct App {
     shot_powder_snow: Option<std::path::PathBuf>,
     shot_mud: Option<std::path::PathBuf>,
     shot_sculk: Option<std::path::PathBuf>,
+    shot_warden: Option<std::path::PathBuf>,
     shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
@@ -1533,6 +1538,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_sculk.take() {
                     state.arm_sculk_shot(path);
                 }
+                if let Some(path) = self.shot_warden.take() {
+                    state.arm_warden_shot(path);
+                }
                 if let Some(path) = self.shot_lodestone.take() {
                     state.arm_lodestone_shot(path);
                 }
@@ -1906,6 +1914,7 @@ where
         shot_powder_snow: None,
         shot_mud: None,
         shot_sculk: None,
+        shot_warden: None,
         shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
@@ -2946,6 +2955,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-sculk".to_string())?;
                 parsed.shot_sculk = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-warden" | "--shot-shrieker" | "--shot-sculk-shrieker" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-warden".to_string())?;
+                parsed.shot_warden = Some(std::path::PathBuf::from(value));
             }
             "--shot-lodestone" | "--shot-compass-link" => {
                 let value = iter

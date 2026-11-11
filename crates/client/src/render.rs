@@ -1376,6 +1376,19 @@ pub struct State {
     mud_told: bool,
     /// One tip when a sculk catalyst blooms from a mob death this session.
     sculk_told: bool,
+    /// Per-shrieker warning count this session.
+    shrieker_warn: std::collections::HashMap<[i32; 3], u8>,
+    /// Cooldown so one footing does not spam warnings.
+    shrieker_cd: f32,
+    /// Last vibration lure the warden seeks (xz), with seconds left.
+    vibe_at: Option<[f32; 2]>,
+    vibe_left: f32,
+    /// Darkness veil seconds after a shriek / while the warden hunts.
+    darkness_left: f32,
+    /// One tip when a shrieker warns or a warden rises this session.
+    warden_told: bool,
+    /// Hand over echo shard / catalyst once inventory has room.
+    warden_loot_due: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -1788,6 +1801,9 @@ pub struct State {
     wither_boss: crate::mobs::Wither,
     wither_boss_buf: Option<wgpu::Buffer>,
     wither_boss_count: u32,
+    warden: crate::mobs::Warden,
+    warden_buf: Option<wgpu::Buffer>,
+    warden_count: u32,
     /// Flying wither skull projectiles.
     wither_shots: crate::wither_shots::WitherShots,
     /// Hand over a nether star once inventory has room.
@@ -2778,6 +2794,13 @@ impl State {
             powder_snow_told: false,
             mud_told: false,
             sculk_told: false,
+            shrieker_warn: std::collections::HashMap::new(),
+            shrieker_cd: 0.0,
+            vibe_at: None,
+            vibe_left: 0.0,
+            darkness_left: 0.0,
+            warden_told: false,
+            warden_loot_due: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -3044,6 +3067,9 @@ impl State {
             wither_boss: crate::mobs::Wither::new(),
             wither_boss_buf: None,
             wither_boss_count: 0,
+            warden: crate::mobs::Warden::new(),
+            warden_buf: None,
+            warden_count: 0,
             wither_shots: crate::wither_shots::WitherShots::new(),
             dragon: crate::mobs::EnderDragon::new(),
             dragon_buf: None,
@@ -3148,6 +3174,7 @@ impl State {
         state.rebuild_guardian();
         state.rebuild_wither();
         state.rebuild_wither_boss();
+        state.rebuild_warden();
         state.rebuild_dragon();
         state.rebuild_shulker();
 
@@ -5518,6 +5545,23 @@ impl State {
         self.wither_boss_count = vertices.len() as u32;
     }
 
+    fn rebuild_warden(&mut self) {
+        let vertices = self.warden.vertices();
+        if vertices.is_empty() {
+            self.warden_buf = None;
+            self.warden_count = 0;
+            return;
+        }
+        self.warden_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("warden"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.warden_count = vertices.len() as u32;
+    }
+
     fn rebuild_dragon(&mut self) {
         let vertices = self.dragon.vertices();
         if vertices.is_empty() {
@@ -5984,6 +6028,17 @@ impl State {
             && !guardian_aimed
             && !wither_aimed
             && self.wither_boss.aimed(eye, forward);
+        let warden_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && !ghast_aimed
+            && !magma_aimed
+            && !piglin_aimed
+            && !guardian_aimed
+            && !wither_aimed
+            && !wither_boss_aimed
+            && self.warden.aimed(eye, forward);
         let dragon_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
@@ -5994,6 +6049,7 @@ impl State {
             && !guardian_aimed
             && !wither_aimed
             && !wither_boss_aimed
+            && !warden_aimed
             && self.dragon.aimed(eye, forward);
         let shulker_aimed = !zombie_aimed
             && night_index.is_none()
@@ -6005,6 +6061,7 @@ impl State {
             && !guardian_aimed
             && !wither_aimed
             && !wither_boss_aimed
+            && !warden_aimed
             && !dragon_aimed
             && self.shulker.aimed(eye, forward);
         let guest_index = if zombie_aimed
@@ -6017,6 +6074,7 @@ impl State {
             || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
+            || warden_aimed
             || dragon_aimed
             || shulker_aimed
         {
@@ -6141,6 +6199,14 @@ impl State {
             }
             dropped
         };
+        let dropped_warden = warden_aimed && {
+            let origin = self.warden.origin();
+            let dropped = self.hurt_mob("warden", amount, origin, |s, n| s.warden.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_dragon = dragon_aimed && {
             let origin = self.dragon.origin();
             let dropped = self.hurt_mob("ender_dragon", amount, origin, |s, n| s.dragon.hurt(n));
@@ -6180,6 +6246,7 @@ impl State {
             || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
+            || warden_aimed
             || dragon_aimed
             || shulker_aimed
             || guest_index.is_some();
@@ -6193,6 +6260,7 @@ impl State {
             || dropped_guardian
             || dropped_wither
             || dropped_wither_boss
+            || dropped_warden
             || dropped_dragon
             || dropped_shulker
             || dropped_guest;
@@ -6250,6 +6318,13 @@ impl State {
         if dropped_wither_boss {
             self.grant_nether_star();
         }
+        if dropped_warden {
+            self.grant_warden_loot();
+            self.shrieker_warn
+                .values_mut()
+                .for_each(|n| *n = crate::warden::reset_warn());
+            self.darkness_left = self.darkness_left.min(3.0);
+        }
         if dropped_dragon {
             self.drop_dragon_egg();
         }
@@ -6267,6 +6342,7 @@ impl State {
         self.rebuild_guardian();
         self.rebuild_wither();
         self.rebuild_wither_boss();
+        self.rebuild_warden();
         self.rebuild_dragon();
         self.rebuild_shulker();
     }
@@ -6947,6 +7023,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_wither_boss();
+                return true;
+            }
+            let warden = self.warden.origin();
+            let (wamin, wamax) = self.warden.bounds();
+            if point_in_box(tip, wamin, wamax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("warden", amount, warden, |s, n| s.warden.hurt(n));
+                if dropped {
+                    self.grant_xp_at(warden, true);
+                    self.grant_warden_loot();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_warden();
                 return true;
             }
             let dragon = self.dragon.origin();
@@ -8998,6 +9090,56 @@ impl State {
         self.gui.push_chat("nether star");
     }
 
+    /// Hand over echo shard, else a sculk catalyst stub.
+    fn grant_warden_loot(&mut self) {
+        let drop = if self.hotbar.room_for(crate::warden::ECHO_SHARD)
+            || self.bag.room_for(crate::warden::ECHO_SHARD)
+        {
+            crate::warden::ECHO_SHARD
+        } else if self.hotbar.room_for(crate::sculk::SCULK_CATALYST)
+            || self.bag.room_for(crate::sculk::SCULK_CATALYST)
+        {
+            crate::sculk::SCULK_CATALYST
+        } else {
+            self.warden_loot_due = true;
+            self.gui.push_chat("echo");
+            return;
+        };
+        if !self.hotbar.collect(drop) {
+            self.bag.collect(drop);
+            self.bag_dirty = true;
+        }
+        self.hotbar_dirty = true;
+        self.warden_loot_due = false;
+        self.gui.push_chat(if drop == crate::warden::ECHO_SHARD {
+            "echo"
+        } else {
+            "catalyst"
+        });
+    }
+
+    fn try_summon_warden(&mut self, at: [i32; 3]) {
+        if self.warden.alive() {
+            return;
+        }
+        let feet = crate::warden::summon_feet(at);
+        self.warden.summon(feet);
+        self.rebuild_warden();
+        self.darkness_left = crate::warden::DARKNESS_SECS;
+        self.vibe_at = Some([feet[0], feet[2]]);
+        self.vibe_left = crate::warden::VIBE_SECS;
+        self.play_world(crate::audio::Sound::Gust, feet);
+        self.drops.puff(feet, [0.15, 0.55, 0.6]);
+        self.drops.embers([feet[0], feet[1] + 1.8, feet[2]]);
+        self.rebuild_drops();
+        self.gui.push_chat("warden");
+        if !self.warden_told {
+            self.warden_told = true;
+            self.gui.push_chat("darkness");
+        }
+        let _ = self.advancements.unlock("kill");
+    }
+
     /// Hand over a wither skull and coal. A full bar leaves the debt for later.
     fn grant_wither_loot(&mut self) {
         let mut owed = false;
@@ -9376,6 +9518,17 @@ impl State {
                             self.grant_nether_star();
                         }
                         self.rebuild_wither_boss();
+                        hit = true;
+                    }
+                    let warden = self.warden.origin();
+                    if crate::splash::in_radius(burst.center, warden) {
+                        let dropped =
+                            self.hurt_mob("warden", amount, warden, |s, n| s.warden.hurt(n));
+                        if dropped {
+                            self.grant_xp_at(warden, true);
+                            self.grant_warden_loot();
+                        }
+                        self.rebuild_warden();
                         hit = true;
                     }
                     let dragon = self.dragon.origin();
@@ -14152,6 +14305,7 @@ impl State {
             ("piglin", self.piglin.bounds()),
             ("wither_skeleton", self.wither.bounds()),
             ("wither", self.wither_boss.bounds()),
+            ("warden", self.warden.bounds()),
             ("ender_dragon", self.dragon.bounds()),
             ("shulker", self.shulker.bounds()),
             ("copper_golem", self.golem.bounds()),
@@ -14269,6 +14423,9 @@ impl State {
         }
         if self.wither_boss.aimed(eye, forward) {
             return Some("wither");
+        }
+        if self.warden.aimed(eye, forward) {
+            return Some("warden");
         }
         if self.dragon.aimed(eye, forward) {
             return Some("ender_dragon");
@@ -24162,6 +24319,141 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    pub fn arm_warden_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.gui.close();
+        self.map_open = false;
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.05);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = (ground - 2).max(2);
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 5)..=(cx + 5) {
+            for z in (cz - 4)..=(cz + 4) {
+                for dy in 0..=6 {
+                    let yy = floor + dy;
+                    let wall =
+                        x == cx - 5 || x == cx + 5 || z == cz + 4 || dy == 0 || dy == 6;
+                    changes.push(CellChange {
+                        x,
+                        y: yy,
+                        z,
+                        block: if wall {
+                            if (x + z + dy) % 3 == 0 {
+                                Block::new("cobbled_deepslate", 0)
+                            } else {
+                                Block::new("deepslate", 0)
+                            }
+                        } else if dy == 1 {
+                            Block::new(crate::sculk::SCULK, 0)
+                        } else {
+                            Block::AIR
+                        },
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y,
+            z: cz + 1,
+            block: Block::new(crate::warden::SCULK_SHRIEKER, 0),
+        });
+        changes.push(CellChange {
+            x: cx - 2,
+            y,
+            z: cz,
+            block: Block::new(crate::sculk::SCULK_SENSOR, 0),
+        });
+        changes.push(CellChange {
+            x: cx + 2,
+            y,
+            z: cz,
+            block: Block::new(crate::sculk::SCULK_CATALYST, 0),
+        });
+        changes.push(CellChange {
+            x: cx + 1,
+            y: y + 1,
+            z: cz - 1,
+            block: Block::new(crate::sculk::SCULK_VEIN, 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 5)..=(cx + 5) {
+            for z in (cz - 4)..=(cz + 4) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let feet = crate::warden::summon_feet([cx, y, cz + 1]);
+        self.warden.place_at([feet[0], feet[1], feet[2] - 1.2]);
+        self.rebuild_warden();
+        self.darkness_left = crate::warden::DARKNESS_SECS;
+        self.vibe_at = Some([cx as f32 + 0.5, cz as f32 + 0.5]);
+        self.vibe_left = crate::warden::VIBE_SECS;
+        self.shrieker_warn.insert([cx, y, cz + 1], crate::warden::WARN_MAX);
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, y as f32 + 1.6, cz as f32 + 0.2);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.2,
+            y as f32 + 1.35 + body::EYE_HEIGHT,
+            cz as f32 - 4.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack(crate::warden::SCULK_SHRIEKER);
+        let _ = self.hotbar.give_stack(crate::sculk::SCULK_SENSOR);
+        let _ = self.hotbar.collect(crate::warden::ECHO_SHARD);
+        let _ = self.hotbar.collect(crate::sculk::SCULK_CATALYST);
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.warden_told = true;
+        self.sculk_told = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("shrieker");
+        self.gui.push_chat("warden");
+        self.gui.push_chat("darkness");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_mud_bricks_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -33306,6 +33598,67 @@ impl State {
 
 
     /// Bloom sculk around a mob death when a catalyst is nearby.
+    fn note_shrieker(&mut self, dt: f32) {
+        self.shrieker_cd = (self.shrieker_cd - dt).max(0.0);
+        if self.vibe_left > 0.0 {
+            self.vibe_left = (self.vibe_left - dt).max(0.0);
+            if self.vibe_left <= 0.0 {
+                self.vibe_at = None;
+            }
+        }
+        if self.darkness_left > 0.0 {
+            self.darkness_left = (self.darkness_left - dt).max(0.0);
+        }
+        if self.warden.alive() {
+            self.darkness_left = self.darkness_left.max(4.0);
+        }
+        if self.shrieker_cd > 0.0 || !self.camera.on_ground {
+            return;
+        }
+        let eye = [
+            self.camera.eye.x,
+            self.camera.eye.y,
+            self.camera.eye.z,
+        ];
+        let Some(at) = crate::warden::warn_target(&self.world, eye) else {
+            return;
+        };
+        // Footsteps on sensor / shrieker leave a vibration lure.
+        self.vibe_at = Some([at[0] as f32 + 0.5, at[2] as f32 + 0.5]);
+        self.vibe_left = crate::warden::VIBE_SECS;
+        self.shrieker_cd = 1.35;
+        if self.warden.alive() {
+            self.gui.push_chat("vibe");
+            return;
+        }
+        let prev = self.shrieker_warn.get(&at).copied().unwrap_or(0);
+        let (next, summon) = crate::warden::next_warn(prev);
+        self.shrieker_warn.insert(at, next);
+        self.darkness_left = self
+            .darkness_left
+            .max(crate::warden::DARKNESS_SECS * 0.45);
+        match next {
+            1 => self.gui.push_chat("warn"),
+            2 => self.gui.push_chat("shriek"),
+            _ => self.gui.push_chat("shriek"),
+        }
+        if !self.warden_told {
+            self.warden_told = true;
+            self.gui.push_chat("shrieker");
+        }
+        let pos = [
+            at[0] as f32 + 0.5,
+            at[1] as f32 + 0.8,
+            at[2] as f32 + 0.5,
+        ];
+        self.play_world(crate::audio::Sound::Note(10), pos);
+        self.drops.puff(pos, [0.12, 0.45, 0.5]);
+        self.rebuild_drops();
+        if summon {
+            self.try_summon_warden(at);
+        }
+    }
+
     fn note_sculk_catalyst(&mut self, death: [i32; 3]) {
         let planned = crate::sculk::plan_death_spread(&self.world, death);
         if planned.is_empty() {
@@ -34765,6 +35118,7 @@ impl State {
             self.note_cactus(dt);
             self.note_magma(dt);
             self.note_powder_snow(dt);
+            self.note_shrieker(dt);
         }
         let sprinting_now = self.sprint_asked && !self.sprint_blocked;
         let show_goal = if sprinting_now { 1.0 } else { 0.0 };
@@ -35052,6 +35406,9 @@ impl State {
             if self.nether_star_due {
                 self.grant_nether_star();
             }
+            if self.warden_loot_due {
+                self.grant_warden_loot();
+            }
             if self.horn_due {
                 self.grant_horn();
             }
@@ -35232,6 +35589,24 @@ impl State {
                 self.rebuild_drops();
             }
             self.rebuild_wither_boss();
+            {
+                let lure = if self.vibe_left > 0.0 {
+                    self.vibe_at
+                } else {
+                    None
+                };
+                let from = self.warden.origin();
+                let to = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+                let clear = look::clear_between(from, to, &self.world);
+                if self.warden.tick_near(steps, feet, lure, clear, &self.world) {
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, 2, self.armor_soak());
+                    self.apply_damage(amount);
+                    self.gui.push_chat(if blocked { "block" } else { "sonic" });
+                    self.play_world(crate::audio::Sound::Gust, from);
+                }
+                self.rebuild_warden();
+            }
             {
                 let (ex, ez) = rebuild_world::END_PAD;
                 let near_end = (self.camera.eye.x - (ex as f32 + 0.5)).abs() < 28.0
@@ -35801,6 +36176,17 @@ impl State {
             fog_start = 10.0;
             fog_end = 42.0;
         }
+        // Deep-dark darkness veil after a shriek / while a warden hunts.
+        if self.darkness_left > 0.0 {
+            let (dsky, dfog, dstart, dend) = crate::warden::darkness_fog();
+            let mix = (self.darkness_left / crate::warden::DARKNESS_SECS).clamp(0.35, 1.0);
+            for i in 0..3 {
+                sky_rgb[i] = sky_rgb[i] * (1.0 - mix) + dsky[i] * mix;
+                horizon[i] = horizon[i] * (1.0 - mix) + dfog[i] * mix;
+            }
+            fog_start = fog_start * (1.0 - mix) + dstart * mix;
+            fog_end = fog_end * (1.0 - mix) + dend * mix;
+        }
         let fog_eye = [eye[0], eye[1], eye[2], fog_start];
         let fog_color = [horizon[0], horizon[1], horizon[2], fog_end];
         self.queue
@@ -36210,6 +36596,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, wither_boss.slice(..));
                     pass.draw(0..self.wither_boss_count, 0..1);
+                }
+            }
+            if let Some(warden) = &self.warden_buf {
+                if self.warden_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, warden.slice(..));
+                    pass.draw(0..self.warden_count, 0..1);
                 }
             }
             if let Some(dragon) = &self.dragon_buf {

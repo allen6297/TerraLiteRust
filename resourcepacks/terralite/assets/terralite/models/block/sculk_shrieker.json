@@ -1,0 +1,49 @@
+{
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        8,
+        16
+      ]
+    },
+    {
+      "from": [
+        1,
+        8,
+        1
+      ],
+      "to": [
+        15,
+        15,
+        15
+      ]
+    },
+    {
+      "from": [
+        4,
+        15,
+        4
+      ],
+      "to": [
+        12,
+        16,
+        12
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/sculk_shrieker.png",
+  "light": {
+    "color": [
+      0.15,
+      0.55,
+      0.6
+    ],
+    "level": 2
+  }
+}
