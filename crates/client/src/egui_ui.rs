@@ -4615,6 +4615,7 @@ mod tests {
         // set_min_height + allocate_ui_with_layout + pinned ScrollArea.
         let mut allocated = 0.0_f32;
         let mut panel_h = 0.0_f32;
+        let mut icons = HashMap::new();
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
@@ -4626,7 +4627,7 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let panel_w = clamped_panel_width(chrome_max_width(ui), CREATIVE_COLS, true);
-                    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
+                    show_panel(ui, panel_w, panel_chrome(ui.ctx(), &mut icons), |ui| {
                         ui.set_min_width(grid_pitch(CREATIVE_COLS).min(panel_w));
                         ui.set_min_height(CREATIVE_PANEL_OVERHEAD + grid_h);
                         ui.add_space(40.0); // title
@@ -4651,7 +4652,7 @@ mod tests {
                                             .min_col_width(SLOT)
                                             .show(ui, |ui| {
                                                 for i in 0..cells {
-                                                    let _ = slot_button(ui, icons, None, false, None);
+                                                    let _ = slot_button(ui, &mut icons, None, false, None);
                                                     if (i + 1) % CREATIVE_COLS == 0 {
                                                         ui.end_row();
                                                     }

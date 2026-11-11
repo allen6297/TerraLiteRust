@@ -15,8 +15,15 @@ use crate::palette;
 use crate::texture::{self, decode_png, Image};
 
 /// Soft-render a slot icon for `id` at `size`×`size` RGBA.
+///
+/// Prefer a pack `textures/item` (or block-item) sprite when the active
+/// overlays provide one — Whimscape tools/food match the world pack. Otherwise
+/// fall back to Blockbench / shape soft-raster, then a flat face tint.
 pub fn render(id: &str, size: usize) -> ColorImage {
     let size = size.max(8);
+    if let Some(image) = pack_item_sprite(id, size) {
+        return image;
+    }
     let pack = Pack::builtin();
     if let Some((shape, gui)) = pack.slot_model(id) {
         if let Some(image) = raster_shape(id, shape, gui, size) {
@@ -24,6 +31,51 @@ pub fn render(id: &str, size: usize) -> ColorImage {
         }
     }
     flat_fallback(id, size)
+}
+
+/// Flat inventory sprite from an enabled resource pack (`textures/item/…`).
+fn pack_item_sprite(id: &str, size: usize) -> Option<ColorImage> {
+    let bytes = pack_item_png(id)?;
+    let image = decode_png(&bytes)?;
+    if image.width == 0 || image.height == 0 {
+        return None;
+    }
+    Some(scale_rgba_nearest(&image, size))
+}
+
+fn pack_item_png(id: &str) -> Option<Vec<u8>> {
+    let bare = id.rsplit_once(':').map(|(_, rest)| rest).unwrap_or(id);
+    if bare.is_empty() || bare == "air" || bare == "empty" {
+        return None;
+    }
+    // Terralite bridge path first, then Minecraft-namespaced overlays
+    // (Whimscape ships under `assets/minecraft/textures/item`).
+    for root in [
+        "assets/terralite/textures/item",
+        "assets/minecraft/textures/item",
+    ] {
+        let path = format!("{root}/{bare}.png");
+        if let Some(bytes) = asset_png(&path) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+fn scale_rgba_nearest(image: &Image, size: usize) -> ColorImage {
+    let mut rgba = vec![0u8; size * size * 4];
+    let sw = image.width.max(1) as usize;
+    let sh = image.height.max(1) as usize;
+    for y in 0..size {
+        for x in 0..size {
+            let sx = x * sw / size;
+            let sy = y * sh / size;
+            let src = (sy * sw + sx) * 4;
+            let dst = (y * size + x) * 4;
+            rgba[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+        }
+    }
+    ColorImage::from_rgba_unmultiplied([size, size], &rgba)
 }
 
 /// Atlas key for a HUD / egui-shared slot icon tile.
@@ -708,5 +760,28 @@ mod tests {
         assert!(!shape.boxes().is_empty());
         let img = render("coin", 64);
         assert!(img.pixels.iter().any(|c| c.a() > 200));
+    }
+
+    #[test]
+    fn pack_item_sprite_preferred_when_present() {
+        // Whimscape overlay bridges iron_pickaxe under textures/item — prefer
+        // that flat sprite over any Blockbench/tool-face fallback.
+        let path = "assets/terralite/textures/item/iron_pickaxe.png";
+        if asset_png(path).is_none() {
+            // Base pack alone has no item sprites; skip rather than fail CI
+            // without the Whimscape overlay enabled.
+            return;
+        }
+        assert!(
+            pack_item_png("iron_pickaxe").is_some(),
+            "enabled pack must expose iron_pickaxe item sprite"
+        );
+        let img = render("iron_pickaxe", 64);
+        assert_eq!(img.width(), 64);
+        let opaque = img.pixels.iter().filter(|c| c.a() > 200).count();
+        assert!(opaque > 80, "pickaxe sprite should paint opaque texels, got {opaque}");
+        // Flat pack sprites leave transparent corners (unlike solid block cubes).
+        let clear = img.pixels.iter().filter(|c| c.a() < 16).count();
+        assert!(clear > 200, "item sprite should keep transparent margins, got {clear}");
     }
 }
