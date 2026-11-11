@@ -5181,6 +5181,11 @@ impl Menu {
         self.size_locked = true;
     }
 
+    /// Title / return-to-solo: world size can cycle again.
+    pub fn unlock_world_size(&mut self) {
+        self.size_locked = false;
+    }
+
     pub fn is_open(&self) -> bool {
         self.page != MenuPage::Closed
     }
@@ -5862,6 +5867,9 @@ impl Menu {
                 self.page = MenuPage::Closed;
                 MenuAction::Resume
             }
+            // Already joined: detail says "already on the server"; do not re-enter Host/Join.
+            MenuPage::Pause if label == "host" && self.size_locked => MenuAction::None,
+            MenuPage::Pause if label == "join" && self.size_locked => MenuAction::None,
             MenuPage::Pause if label == "host" => MenuAction::Host,
             MenuPage::Pause if label == "join" => MenuAction::Join,
             MenuPage::Pause if label == "settings" => {
@@ -11982,6 +11990,28 @@ fn main(): Int {
         assert_eq!(menu.detail(), "walk speed, low");
         assert_eq!(menu.on_press(KeyCode::Enter), MenuAction::Setting);
         assert_eq!(menu.detail(), "walk speed, mid");
+    }
+
+    #[test]
+    fn pause_host_and_join_are_noop_when_already_on_server() {
+        let mut menu = Menu::new();
+        menu.lock_world_size(rebuild_world::WorldSize::Small);
+        menu.open_pause();
+        let host = menu
+            .menu_rows()
+            .iter()
+            .position(|row| row == "host")
+            .expect("host row");
+        let join = menu
+            .menu_rows()
+            .iter()
+            .position(|row| row == "join")
+            .expect("join row");
+        assert_eq!(menu.row_detail("host"), "already on the server");
+        assert_eq!(menu.row_detail("join"), "already on the server");
+        assert_eq!(menu.activate_row(host), MenuAction::None);
+        assert_eq!(menu.activate_row(join), MenuAction::None);
+        assert!(menu.is_pause());
     }
 
     #[test]

@@ -173,6 +173,24 @@ pub struct Link {
 }
 
 impl Link {
+    /// Drop the live pump/socket by replacing it with a parked channel pair.
+    ///
+    /// Used before Host starts a listen so the solo `local_pump` can finish an
+    /// in-flight save write and exit before the child server loads the same file.
+    pub fn detached() -> Self {
+        let (outgoing, _jobs) = mpsc::channel();
+        let (_replies, incoming) = mpsc::channel();
+        let (_chat_tx, chat) = mpsc::channel();
+        let (_peer_tx, peers) = mpsc::channel();
+        Self {
+            outgoing,
+            incoming,
+            chat,
+            peers,
+            disconnected: false,
+        }
+    }
+
     pub fn send(&self, body: Vec<u8>) -> Result<(), ()> {
         self.outgoing.send(body).map_err(|_| ())
     }

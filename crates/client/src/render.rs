@@ -960,6 +960,10 @@ pub struct State {
     link: Link,
     pending: VecDeque<PendingEdit>,
     told_disconnect: bool,
+    /// Ticks where send/recv errors are settle noise (Host/Join attach), not a sticky yell.
+    join_grace: u32,
+    /// Hold inventory/pose flushes while parking the solo pump before a new listen.
+    hold_flushes: bool,
     camera: Camera,
     input: MoveInput,
     hotbar: hotbar::Hotbar,
@@ -2502,6 +2506,8 @@ impl State {
             link,
             pending: VecDeque::new(),
             told_disconnect: false,
+            join_grace: 0,
+            hold_flushes: false,
             camera,
             input: MoveInput {
                 forward: false,
@@ -3309,6 +3315,9 @@ impl State {
     }
 
     fn flush_statistics(&mut self) {
+        if self.hold_flushes {
+            return;
+        }
         if !self.statistics.take_dirty() {
             return;
         }
@@ -3336,6 +3345,9 @@ impl State {
             Ok((cluster, link)) => {
                 self.link = link;
                 self.local = false;
+                self.told_disconnect = false;
+                self.hold_flushes = false;
+                self.join_grace = 45;
                 self.menu.lock_world_size(cluster.size());
                 self.menu.note_join("");
                 self.loaded_world = crate::net::DEFAULT_WORLD.to_string();
@@ -3355,6 +3367,49 @@ impl State {
             .note_join(&format!("hosting 127.0.0.1:{}", host.port));
         self.gui.push_chat("host");
         self.host = Some(host);
+        self.told_disconnect = false;
+        self.join_grace = 45;
+    }
+
+    /// Park the solo pump so an in-flight save can finish before Host loads it.
+    fn park_solo_link(&mut self) {
+        self.hold_flushes = true;
+        self.join_grace = self.join_grace.max(45);
+        self.pending.clear();
+        self.link = crate::net::Link::detached();
+        // local_pump exits when its jobs sender drops; give a short beat for store_*.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    /// Title after Host/Join: own a solo world again so Play is not stuck on a dead link.
+    fn return_to_local(&mut self) {
+        let name = self.menu.world_name().to_string();
+        let path = crate::net::world_file(&name);
+        match crate::net::open_local(&path) {
+            Ok((cluster, link)) => {
+                self.link = link;
+                self.local = true;
+                self.told_disconnect = false;
+                self.hold_flushes = false;
+                self.join_grace = 0;
+                self.pending.clear();
+                self.menu.unlock_world_size();
+                self.loaded_world = name;
+                self.install_cluster(cluster);
+                self.load_bag(&path);
+                self.load_hotbar_and_place(&path);
+            }
+            Err(err) => {
+                eprintln!("could not reopen local world: {err}");
+                self.link = crate::net::Link::detached();
+                self.local = true;
+                self.told_disconnect = false;
+                self.hold_flushes = false;
+                self.join_grace = 0;
+                self.pending.clear();
+                self.menu.unlock_world_size();
+            }
+        }
     }
 
     /// Start a private localhost listen, then join it as the host player.
@@ -3371,6 +3426,8 @@ impl State {
             self.join_localhost();
             return;
         }
+        // Solo save writes must settle before the child server opens the same file.
+        self.park_solo_link();
         match crate::net::start_host(self.port) {
             Ok(host) => {
                 self.host = Some(host);
@@ -3378,15 +3435,26 @@ impl State {
                     .note_join(&format!("hosting 127.0.0.1:{}", self.port));
                 self.gui.push_chat("host");
                 self.join_localhost();
+                self.hold_flushes = false;
                 if self.local {
                     // Join failed after listen — keep the process for a second client.
                     self.menu.note_join(&format!(
                         "listening 127.0.0.1:{} (join failed)",
                         self.port
                     ));
+                } else {
+                    self.told_disconnect = false;
+                    self.hotbar_dirty = true;
+                    self.bag_dirty = true;
+                    self.pose_dirty = true;
                 }
             }
-            Err(err) => self.menu.note_join(&err),
+            Err(err) => {
+                self.hold_flushes = false;
+                self.join_grace = 0;
+                self.return_to_local();
+                self.menu.note_join(&err);
+            }
         }
     }
 
@@ -8617,7 +8685,7 @@ impl State {
     }
 
     fn flush_chest(&mut self) {
-        if !self.chest_dirty || self.told_disconnect {
+        if !self.chest_dirty || self.told_disconnect || self.hold_flushes {
             return;
         }
         let Some((x, y, z)) = self.chest_at else {
@@ -15337,10 +15405,15 @@ impl State {
     }
 
     fn note_disconnect(&mut self) {
-        self.pending.clear();
         if self.told_disconnect {
             return;
         }
+        // Host/Join settle and solo-park: a dropped pump or mid-attach send is not final.
+        // Do not clear pending during grace — settle noise must not drop real edits.
+        if self.join_grace > 0 || self.hold_flushes {
+            return;
+        }
+        self.pending.clear();
         self.told_disconnect = true;
         eprintln!("lost the server. Breaks and places stop here.");
     }
@@ -31228,7 +31301,7 @@ impl State {
             self.pose_left = 0.0;
         }
         let due = self.pose_dirty || !self.local;
-        if !due || self.pose_left > 0.0 || self.told_disconnect {
+        if !due || self.pose_left > 0.0 || self.told_disconnect || self.hold_flushes {
             return;
         }
         let (yaw, pitch) = self.camera.yaw_pitch();
@@ -31426,7 +31499,15 @@ impl State {
             gui::MenuAction::Title => {
                 self.playing = false;
                 // Drop the owned listen so a later Host can bind again.
+                let was_remote = !self.local || self.host.is_some();
                 self.host = None;
+                self.hold_flushes = false;
+                self.join_grace = 0;
+                self.told_disconnect = false;
+                self.pending.clear();
+                if was_remote {
+                    self.return_to_local();
+                }
                 if self.dead {
                     self.dead = false;
                     self.hearts = body::HEARTS;
@@ -34116,6 +34197,9 @@ impl State {
         } else {
             self.statistics.clear_walk_anchor();
         }
+        if self.join_grace > 0 {
+            self.join_grace -= 1;
+        }
         self.flush_statistics();
         self.flush_hotbar();
         self.flush_bag();
@@ -36109,7 +36193,7 @@ impl State {
     }
 
     fn flush_hotbar(&mut self) {
-        if !self.hotbar_dirty || self.told_disconnect {
+        if !self.hotbar_dirty || self.told_disconnect || self.hold_flushes {
             return;
         }
         let slots = hotbar_slots(&self.hotbar);
@@ -36122,7 +36206,7 @@ impl State {
     }
 
     fn flush_bag(&mut self) {
-        if !self.bag_dirty || self.told_disconnect {
+        if !self.bag_dirty || self.told_disconnect || self.hold_flushes {
             return;
         }
         let slots = self.bag.wire();
