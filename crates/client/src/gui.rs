@@ -676,6 +676,8 @@ pub struct Gui {
     chest_open: bool,
     chest_selected: usize,
     chest: hotbar::Bag,
+    /// Whimscape panel title (`CHEST`, `BARREL`, `ENDER CHEST`).
+    chest_title: String,
     craft_open: bool,
     /// `0..9` is the grid. `9` is the result.
     craft_selected: usize,
@@ -886,6 +888,7 @@ impl Gui {
                 chest_open: false,
                 chest_selected: 0,
                 chest: hotbar::Bag::new(),
+                chest_title: "CHEST".to_string(),
                 craft_open: false,
                 craft_selected: 0,
                 craft: hotbar::Bag::new(),
@@ -1018,6 +1021,7 @@ impl Gui {
                     chest_open: false,
                     chest_selected: 0,
                     chest: hotbar::Bag::new(),
+                    chest_title: "CHEST".to_string(),
                     craft_open: false,
                     craft_selected: 0,
                     craft: hotbar::Bag::new(),
@@ -1160,6 +1164,7 @@ impl Gui {
             chest_open: false,
             chest_selected: 0,
             chest: hotbar::Bag::new(),
+            chest_title: "CHEST".to_string(),
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
@@ -1766,20 +1771,66 @@ impl Gui {
         self.fletch_open = false;
     }
 
-    /// Start a chat line. Another screen keeps the key.
+    /// Open a container panel. Another screen keeps it closed.
     pub fn open_chest(&mut self, slots: &[rebuild_world::CarriedSlot]) -> bool {
+        self.open_chest_as(slots, "CHEST")
+    }
+
+    /// Open a chest / barrel / ender chest with a Whimscape title.
+    pub fn open_chest_as(
+        &mut self,
+        slots: &[rebuild_world::CarriedSlot],
+        title: &str,
+    ) -> bool {
         if self.is_open() {
             return false;
         }
         self.chest = hotbar::Bag::new();
         self.chest.install(slots);
         self.chest_selected = 0;
+        self.chest_title = title.to_string();
         self.chest_open = true;
         true
     }
 
     pub fn chest_open(&self) -> bool {
         self.chest_open
+    }
+
+    pub fn chest_title(&self) -> &str {
+        &self.chest_title
+    }
+
+    pub fn chest_selected(&self) -> usize {
+        self.chest_selected
+    }
+
+    pub fn select_chest(&mut self, index: usize) {
+        if index < hotbar::PACK {
+            self.chest_selected = index;
+        }
+    }
+
+    pub fn chest_slot(&self, index: usize) -> Option<&str> {
+        self.chest.slot(index)
+    }
+
+    pub fn chest_count(&self, index: usize) -> u16 {
+        self.chest.count(index)
+    }
+
+    pub fn take_chest_at(&mut self, index: usize) -> Option<&'static str> {
+        if index >= hotbar::PACK {
+            return None;
+        }
+        self.chest.take_one(index)
+    }
+
+    pub fn give_chest_at(&mut self, index: usize, id: &str) -> bool {
+        if index >= hotbar::PACK {
+            return false;
+        }
+        self.chest.insert_at(index, id)
     }
 
     pub fn chest_wire(&self) -> Vec<(String, i32)> {
@@ -4008,7 +4059,8 @@ impl Gui {
             return commands_screen().quads(width, height, &rows, selected, &detail);
         }
         if self.chest_open {
-            return chest_quads(width, height, &self.chest, self.chest_selected);
+            // egui draws the Whimscape chest / barrel panel.
+            return Vec::new();
         }
         if self.craft_open {
             // egui draws the Whimscape crafting table panel.
@@ -9678,6 +9730,7 @@ mod tests {
             chest_open: false,
             chest_selected: 0,
             chest: hotbar::Bag::new(),
+            chest_title: "CHEST".to_string(),
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
@@ -11321,7 +11374,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chest_draws_atlas_slots() {
+    fn a_chest_opens_and_moves_with_keys() {
         let mut gui = Gui::from_screen(shipped());
         assert!(gui.open_chest(&[rebuild_world::CarriedSlot {
             slot: 4,
@@ -11329,22 +11382,12 @@ mod tests {
             count: 4,
         }]));
         assert!(gui.chest_open());
+        assert_eq!(gui.chest_title(), "CHEST");
+        assert_eq!(gui.chest_slot(4), Some("dirt"));
+        assert_eq!(gui.chest_count(4), 4);
+        // Whimscape egui owns the chest panel; legacy quads stay empty.
         let drawn = gui.paint(1280.0, 720.0, &hotbar::Bag::new());
-        let dirt = crate::texture::block_face("dirt");
-        assert!(dirt > 0.0 && drawn.iter().any(|quad| quad.tex == dirt));
-        assert!(
-            drawn
-                .iter()
-                .any(|quad| quad.color == PANEL && quad.tex > 0.0)
-        );
-        assert!(
-            drawn
-                .iter()
-                .any(|quad| quad.color == HEADER && quad.tex > 0.0)
-        );
-        assert!(drawn.iter().any(|quad| quad.color == WELL));
-        assert!(drawn.iter().any(|quad| quad.color == LIP));
-        assert!(drawn.iter().any(|quad| quad.color == TITLE_PLATE));
+        assert!(drawn.is_empty());
         assert!(gui.on_press(KeyCode::ArrowRight));
         assert!(gui.on_press(KeyCode::ArrowDown));
         assert!(gui.on_press(KeyCode::Enter));

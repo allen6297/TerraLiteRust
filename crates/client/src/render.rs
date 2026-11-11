@@ -8338,7 +8338,14 @@ impl State {
             }];
             seeded = true;
         }
-        if self.gui.open_chest(&slots) {
+        let title = match block.id {
+            "barrel" => "BARREL",
+            "ender_chest" => "ENDER CHEST",
+            "copper_chest" => "COPPER CHEST",
+            "shulker_box" => "SHULKER BOX",
+            _ => "CHEST",
+        };
+        if self.gui.open_chest_as(&slots, title) {
             self.chest_at = Some((hit.block[0], hit.block[1], hit.block[2]));
             if seeded {
                 self.chest_dirty = true;
@@ -20009,6 +20016,93 @@ impl State {
         self.gui.push_chat("scrape");
         self.play_world(crate::audio::Sound::Scrape, source);
         self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Open a Whimscape chest panel with loot + player inventory, then quit with a PNG.
+    pub fn arm_chest_ui_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CAMP_CHEST;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id == "chest" {
+                cy = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(cx, cz);
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            cy as f32 + 0.2 + body::EYE_HEIGHT,
+            cz as f32 - 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        let slots = vec![
+            rebuild_world::CarriedSlot {
+                slot: 0,
+                id: "torch".into(),
+                count: 8,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 2,
+                id: "apple".into(),
+                count: 3,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 4,
+                id: "map".into(),
+                count: 1,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 7,
+                id: "cobblestone".into(),
+                count: 16,
+            },
+        ];
+        let _ = self.gui.open_chest_as(&slots, "CHEST");
+        self.chest_at = Some((cx, cy, cz));
+        self.found_scrape = true;
+        self.gui.push_chat("scrape");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("dirt");
+        let _ = self.hotbar.collect("oak_log");
+        let _ = self.hotbar.collect("stick");
+        let _ = self.bag.collect("coal_ore");
+        let _ = self.bag.collect("gravel");
+        self.hotbar_dirty = true;
+        self.bag_dirty = true;
+        self.set_capture(false);
+        let source = [cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Scrape, source);
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
@@ -32437,6 +32531,9 @@ impl State {
             } else if touched {
                 self.hotbar_dirty = true;
                 self.bag_dirty = true;
+                if self.gui.chest_open() {
+                    self.chest_dirty = true;
+                }
             }
         }
 

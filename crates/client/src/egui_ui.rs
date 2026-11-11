@@ -231,6 +231,7 @@ impl EguiHost {
             || gui.brew_open()
             || gui.furnace_open()
             || gui.craft_open()
+            || gui.chest_open()
             || map_open
     }
 
@@ -355,6 +356,11 @@ impl EguiHost {
                     crafted = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.chest_open() {
+                if draw_chest(ui, gui, hotbar, bag, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
@@ -369,6 +375,7 @@ impl EguiHost {
                 && !gui.brew_open()
                 && !gui.furnace_open()
                 && !gui.craft_open()
+                && !gui.chest_open()
             {
                 draw_chat_plate(ui, gui, icons);
             }
@@ -3285,6 +3292,256 @@ fn draw_enchanting(
                 });
             });
         });
+    touched
+}
+
+fn draw_chest(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = gui.chest_selected();
+    let title = gui.chest_title().to_string();
+    let cols = 3usize;
+    let rows = hotbar::PACK.div_ceil(cols);
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                let panel_w = (grid_pitch(INV_COLS) + 48.0)
+                    .min(ui.available_width() - 24.0)
+                    .max(420.0);
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, &title);
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Click to take or stash · digit keys put from the hotbar")
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Container").size(12.0).color(DETAIL));
+                    ui.add_space(2.0);
+                    let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, well, ROW, |ui| {
+                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                        for row in 0..rows {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                                for col in 0..cols {
+                                    let index = row * cols + col;
+                                    if index >= hotbar::PACK {
+                                        break;
+                                    }
+                                    if chest_slot_button(
+                                        ui, gui, hotbar, bag, icons, index, selected,
+                                    ) {
+                                        touched = true;
+                                    }
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("Inventory").size(13.0).color(DETAIL));
+                    ui.add_space(4.0);
+                    if draw_chest_inv_body(ui, gui, hotbar, bag, icons) {
+                        touched = true;
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Hotbar").size(13.0).color(DETAIL));
+                    ui.add_space(4.0);
+                    if draw_chest_hotbar(ui, gui, hotbar, bag, icons) {
+                        touched = true;
+                    }
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                        touched = true;
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn chest_slot_button(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+    index: usize,
+    selected: usize,
+) -> bool {
+    let id = gui.chest_slot(index).unwrap_or("").to_string();
+    let count = gui.chest_count(index);
+    let tex = if id.is_empty() {
+        None
+    } else {
+        icon_texture(ui.ctx(), icons, &id)
+    };
+    let resp = slot_button(
+        ui,
+        icons,
+        tex,
+        selected == index,
+        if count > 1 { Some(count) } else { None },
+    );
+    if !id.is_empty() {
+        let tip = gui::tip_for(&id, Some(count.max(1)));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+    }
+    if !resp.clicked() {
+        return false;
+    }
+    gui.select_chest(index);
+    if !id.is_empty() {
+        let Some(taken) = gui.take_chest_at(index) else {
+            return true;
+        };
+        if hotbar.collect(taken) || bag.collect(taken) {
+            return true;
+        }
+        let _ = gui.give_chest_at(index, taken);
+        return true;
+    }
+    let Some(held) = hotbar.slot(hotbar.selected()) else {
+        return true;
+    };
+    let held = held.to_string();
+    if gui.give_chest_at(index, &held) {
+        hotbar.consume_selected();
+    }
+    true
+}
+
+fn draw_chest_inv_body(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    egui::Grid::new("chest_inv_body")
+        .spacing([SLOT_GAP, SLOT_GAP])
+        .min_col_width(SLOT)
+        .show(ui, |ui| {
+            for index in 0..INV_BODY {
+                let (id, count) = if index < hotbar::PACK {
+                    (
+                        bag.slot(index).unwrap_or("").to_string(),
+                        bag.count(index),
+                    )
+                } else {
+                    (String::new(), 0)
+                };
+                let tex = if id.is_empty() {
+                    None
+                } else {
+                    icon_texture(ui.ctx(), icons, &id)
+                };
+                let resp = slot_button(
+                    ui,
+                    icons,
+                    tex,
+                    false,
+                    if count > 1 { Some(count) } else { None },
+                );
+                if !id.is_empty() {
+                    let tip = gui::tip_for(&id, Some(count));
+                    resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                    if resp.hovered() {
+                        gui.select_emi(&id);
+                    }
+                }
+                if resp.clicked() {
+                    if !id.is_empty() {
+                        // Bag → chest (or hotbar if chest full).
+                        if let Some(taken) = bag.take_one(index) {
+                            if gui.give_chest(taken) {
+                                touched = true;
+                            } else if hotbar.collect(taken) {
+                                touched = true;
+                            } else {
+                                let _ = bag.insert_at(index, taken);
+                            }
+                        }
+                    } else if let Some(held) = hotbar.slot(hotbar.selected()) {
+                        let held = held.to_string();
+                        if bag.insert_at(index, &held) {
+                            hotbar.consume_selected();
+                            touched = true;
+                        }
+                    }
+                }
+                if (index + 1) % INV_COLS == 0 {
+                    ui.end_row();
+                }
+            }
+        });
+    touched
+}
+
+fn draw_chest_hotbar(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let row_w = grid_pitch(hotbar::SLOTS);
+    if ui.available_width() + 0.5 >= row_w {
+        ui.set_min_width(row_w);
+    }
+    egui::Grid::new("chest_hotbar_row")
+        .spacing([SLOT_GAP, SLOT_GAP])
+        .min_col_width(SLOT)
+        .show(ui, |ui| {
+            for slot in 0..hotbar::SLOTS {
+                let id = hotbar.slot(slot).unwrap_or("").to_string();
+                let count = hotbar.count(slot);
+                let selected = hotbar.selected() == slot;
+                let tex = if id.is_empty() {
+                    None
+                } else {
+                    icon_texture(ui.ctx(), icons, &id)
+                };
+                let resp = slot_button(
+                    ui,
+                    icons,
+                    tex,
+                    selected,
+                    if count > 1 { Some(count) } else { None },
+                );
+                if !id.is_empty() {
+                    let tip = gui::tip_for_keen(&id, Some(count), hotbar.is_keen(slot));
+                    resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                    if resp.hovered() {
+                        gui.select_emi(&id);
+                    }
+                }
+                if resp.clicked() {
+                    let _ = hotbar.select_digit((slot + 1) as u8);
+                    // Second job: push this stack into the chest when selected again.
+                    if !id.is_empty() && selected {
+                        if gui.give_chest(&id) {
+                            hotbar.consume_at(slot);
+                            touched = true;
+                        }
+                    }
+                }
+            }
+            ui.end_row();
+        });
+    let _ = bag;
     touched
 }
 

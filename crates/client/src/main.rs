@@ -391,6 +391,8 @@ struct Args {
     shot_door: Option<std::path::PathBuf>,
     /// Chest lid scrape, then quit.
     shot_scrape: Option<std::path::PathBuf>,
+    /// Chest Whimscape inventory panel, then quit.
+    shot_chest_ui: Option<std::path::PathBuf>,
     /// Torch place pop, then quit.
     shot_pop: Option<std::path::PathBuf>,
     /// Rain on leaves under canopy, then quit.
@@ -682,6 +684,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_thunk: args.shot_thunk,
         shot_door: args.shot_door,
         shot_scrape: args.shot_scrape,
+        shot_chest_ui: args.shot_chest_ui,
         shot_pop: args.shot_pop,
         shot_patter: args.shot_patter,
         shot_heat: args.shot_heat,
@@ -877,6 +880,7 @@ struct App {
     shot_thunk: Option<std::path::PathBuf>,
     shot_door: Option<std::path::PathBuf>,
     shot_scrape: Option<std::path::PathBuf>,
+    shot_chest_ui: Option<std::path::PathBuf>,
     shot_pop: Option<std::path::PathBuf>,
     shot_patter: Option<std::path::PathBuf>,
     shot_heat: Option<std::path::PathBuf>,
@@ -1348,6 +1352,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_scrape.take() {
                     state.arm_chest_scrape_shot(path);
                 }
+                if let Some(path) = self.shot_chest_ui.take() {
+                    state.arm_chest_ui_shot(path);
+                }
                 if let Some(path) = self.shot_pop.take() {
                     state.arm_torch_pop_shot(path);
                 }
@@ -1728,6 +1735,7 @@ where
         shot_thunk: None,
         shot_door: None,
         shot_scrape: None,
+        shot_chest_ui: None,
         shot_pop: None,
         shot_patter: None,
         shot_heat: None,
@@ -2585,6 +2593,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-scrape".to_string())?;
                 parsed.shot_scrape = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-chest-ui" | "--shot-barrel-ui" | "--shot-container-ui" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-chest-ui".to_string())?;
+                parsed.shot_chest_ui = Some(std::path::PathBuf::from(value));
             }
             "--shot-pop" | "--shot-torch" | "--shot-torch-pop" => {
                 let value = iter
