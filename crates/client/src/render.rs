@@ -1352,6 +1352,10 @@ pub struct State {
     observer_pulse: Vec<([i32; 3], f32)>,
     /// Suppress observer watches while applying observer/dust side-effects.
     observer_suppress: u8,
+    /// Recent redstone-torch flips for burnout: (cell, age seconds).
+    torch_flips: Vec<([i32; 3], f32)>,
+    /// Burned-out torches forced off: (cell, seconds left).
+    torch_burnout: Vec<([i32; 3], f32)>,
     /// Device cells currently considered powered by redstone.
     redstone_powered: HashSet<[i32; 3]>,
     /// One tip when dust first carries power this session.
@@ -2730,6 +2734,8 @@ impl State {
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
             observer_suppress: 0,
+            torch_flips: Vec::new(),
+            torch_burnout: Vec::new(),
             redstone_powered: HashSet::new(),
             redstone_told: false,
             lamp_drain_wait: 0,
@@ -13930,12 +13936,18 @@ impl State {
             block = Block::new("slab", 1);
         }
         if block.id == "torch"
+            || block.id == "redstone_torch"
             || block.id == "end_rod"
             || block.id == "chain"
             || block.id == "hanging_sign"
             || block.id == "lightning_rod"
         {
-            block = Block::new(block.id, look::torch_facing(hit.axis, hit.normal));
+            let facing = look::torch_facing(hit.axis, hit.normal);
+            if block.id == "redstone_torch" {
+                block = crate::redstone::make_redstone_torch(facing, true);
+            } else {
+                block = Block::new(block.id, facing);
+            }
         }
         if block.id == "hopper" {
             // Output faces look (never up). Pulls from above; pushes into facing.
@@ -22659,6 +22671,147 @@ impl State {
 
 
 
+
+    /// Lever powers the support stone → torch inverted off; idle torch → dust → lamp.
+    pub fn arm_redstone_torch_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 8) {
+            for z in (cz - 1)..=(cz + 2) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+                changes.push(CellChange {
+                    x,
+                    y: y + 1,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        let lit = crate::redstone::make_redstone_torch(0, true);
+        let inverted = crate::redstone::make_redstone_torch(0, false);
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: lit,
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 15),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 14),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz,
+                block: Block::new("lamp", 1),
+            },
+            CellChange {
+                x: cx,
+                y: ground,
+                z: cz + 2,
+                block: Block::new("stone", 0),
+            },
+            CellChange {
+                x: cx - 1,
+                y: ground,
+                z: cz + 2,
+                block: Block::new("lever", 1),
+            },
+            CellChange {
+                x: cx,
+                y,
+                z: cz + 2,
+                block: inverted,
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 1)..=(cx + 8) {
+            self.chunk_bake.touch(x, cz);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.5, y as f32 + 0.7, cz as f32 + 0.8);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.5,
+            y as f32 + 1.4 + body::EYE_HEIGHT,
+            cz as f32 - 5.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("redstone_torch");
+        let _ = self.hotbar.collect("redstone_dust");
+        let _ = self.hotbar.collect("lever");
+        let _ = self.hotbar.collect("lamp");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.redstone_told = true;
+        self.redstone_powered.insert([cx + 3, y, cz]);
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("redstone torch");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Dirt update face → observer (pulsing) → dust → lamp, then quit.
     pub fn arm_observer_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -30455,6 +30608,121 @@ impl State {
 
 
 
+
+    fn burned_out_torches(&self) -> std::collections::HashSet<[i32; 3]> {
+        self.torch_burnout.iter().map(|(cell, _)| *cell).collect()
+    }
+
+    fn note_torch_flip(&mut self, at: [i32; 3]) {
+        self.torch_flips.push((at, 0.0));
+        let recent = self
+            .torch_flips
+            .iter()
+            .filter(|(cell, age)| *cell == at && *age <= crate::redstone::TORCH_FLIP_WINDOW)
+            .count();
+        if recent as u8 >= crate::redstone::TORCH_FLIP_LIMIT {
+            self.torch_burnout.retain(|(cell, _)| *cell != at);
+            self.torch_burnout
+                .push((at, crate::redstone::TORCH_BURNOUT));
+            self.gui.push_chat("burnout");
+        }
+    }
+
+    fn tick_torch_burnout(&mut self, dt: f32) {
+        if !self.torch_flips.is_empty() {
+            let flips = std::mem::take(&mut self.torch_flips);
+            self.torch_flips = flips
+                .into_iter()
+                .filter_map(|(cell, age)| {
+                    let next = age + dt;
+                    if next <= crate::redstone::TORCH_FLIP_WINDOW {
+                        Some((cell, next))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        if self.torch_burnout.is_empty() {
+            return;
+        }
+        let mut keep = Vec::new();
+        let mut expired = Vec::new();
+        let locks = std::mem::take(&mut self.torch_burnout);
+        for (cell, left) in locks {
+            let next = left - dt;
+            if next <= 0.0 {
+                expired.push(cell);
+            } else {
+                keep.push((cell, next));
+            }
+        }
+        self.torch_burnout = keep;
+        for cell in expired {
+            self.refresh_redstone(cell);
+        }
+    }
+
+    fn apply_torch_states(
+        &mut self,
+        focus: [i32; 3],
+        radius: i32,
+        buttons: &[[i32; 3]],
+        powers: &std::collections::HashMap<[i32; 3], u8>,
+        observers: &[[i32; 3]],
+    ) {
+        let burned = self.burned_out_torches();
+        let flips = crate::redstone::plan_torch_states(
+            &self.world,
+            focus,
+            radius,
+            buttons,
+            powers,
+            &self.comparator_out,
+            observers,
+            &burned,
+        );
+        if flips.is_empty() {
+            return;
+        }
+        let mut changes = Vec::new();
+        for (at, want) in flips {
+            let block = self.world.block_at(at[0], at[1], at[2]);
+            if !crate::redstone::is_redstone_torch(block.id) {
+                continue;
+            }
+            let final_want = if self.burned_out_torches().contains(&at) {
+                false
+            } else {
+                want
+            };
+            if crate::redstone::torch_is_on(block.metadata) == final_want {
+                continue;
+            }
+            self.note_torch_flip(at);
+            // Burnout may have just armed — force off if locked.
+            let on = if self.burned_out_torches().contains(&at) {
+                false
+            } else {
+                final_want
+            };
+            if crate::redstone::torch_is_on(block.metadata) == on {
+                continue;
+            }
+            changes.push(CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block: crate::redstone::with_torch_lit(block, on),
+            });
+        }
+        if !changes.is_empty() {
+            self.observer_suppress = self.observer_suppress.saturating_add(1);
+            self.send_places_batch(&changes);
+            self.observer_suppress = self.observer_suppress.saturating_sub(1);
+        }
+    }
+
     fn observer_source_cells(&self) -> Vec<[i32; 3]> {
         self.observer_pulse.iter().map(|(cell, _)| *cell).collect()
     }
@@ -30829,6 +31097,32 @@ impl State {
             &observers,
         );
         self.schedule_repeaters(focus, RADIUS, &buttons, &powers);
+        self.apply_torch_states(focus, RADIUS, &buttons, &powers, &observers);
+        // Torches may have flipped — refresh dust once more so lamps follow.
+        let observers = self.observer_source_cells();
+        let powers = crate::redstone::plan_dust_power_with(
+            &self.world,
+            focus,
+            RADIUS,
+            &buttons,
+            &self.comparator_out,
+            &observers,
+        );
+        let torch_dust = crate::redstone::dust_changes(&self.world, &powers);
+        if !torch_dust.is_empty() {
+            let changes: Vec<CellChange> = torch_dust
+                .iter()
+                .map(|(at, block)| CellChange {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                    block: *block,
+                })
+                .collect();
+            self.observer_suppress = self.observer_suppress.saturating_add(1);
+            self.send_places_batch(&changes);
+            self.observer_suppress = self.observer_suppress.saturating_sub(1);
+        }
         let now = crate::redstone::powered_devices_with(
             &self.world,
             focus,
@@ -31411,6 +31705,7 @@ impl State {
         self.tick_piston_pulse(dt);
         self.tick_redstone_pulse(dt);
         self.tick_observer_pulse(dt);
+        self.tick_torch_burnout(dt);
         self.tick_redstone_delay(dt);
         self.tell_landmarks();
         self.tell_cook_heat();

@@ -2118,12 +2118,15 @@ impl Pack {
             };
             return self.shape_named(name);
         }
-        if block.id == "torch" {
-            let name = match block.metadata {
-                1 => "torch_west",
-                2 => "torch_east",
-                3 => "torch_north",
-                4 => "torch_south",
+        if block.id == "torch" || block.id == "redstone_torch" {
+            // Wall sticks reuse torch_* shapes; floor redstone_torch has its own model.
+            let facing = block.metadata & 7;
+            let name = match (block.id, facing) {
+                ("redstone_torch", 0) => "redstone_torch",
+                (_, 1) => "torch_west",
+                (_, 2) => "torch_east",
+                (_, 3) => "torch_north",
+                (_, 4) => "torch_south",
                 _ => "torch",
             };
             return self.shape_named(name);

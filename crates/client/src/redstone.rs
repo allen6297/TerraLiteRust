@@ -12,6 +12,10 @@
 //!
 //! Observers watch the front cell for block updates and emit a short power
 //! pulse out the back.
+//!
+//! Redstone torches are soft sources that stay on until the block they are
+//! attached to is powered (invert). Optional burnout soft-locks a thrashing
+//! torch off for a moment.
 
 use rebuild_world::{Block, CarriedSlot, Cluster, FILL_EMBER, FILL_NONE};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -24,6 +28,15 @@ pub const BUTTON_PULSE: f32 = 0.45;
 
 /// Seconds an observer keeps feeding its back face after a watched update.
 pub const OBSERVER_PULSE: f32 = 0.2;
+
+/// Seconds a burned-out torch stays forced off.
+pub const TORCH_BURNOUT: f32 = 2.5;
+
+/// Flip window used to detect thrashing torch clocks.
+pub const TORCH_FLIP_WINDOW: f32 = 1.0;
+
+/// Flips inside [`TORCH_FLIP_WINDOW`] before burnout soft-lock.
+pub const TORCH_FLIP_LIMIT: u8 = 8;
 
 /// One redstone tick in seconds (Minecraft ≈ 0.1s).
 pub const TICK: f32 = 0.1;
@@ -57,6 +70,10 @@ pub fn is_comparator(id: &str) -> bool {
 
 pub fn is_observer(id: &str) -> bool {
     id == "observer"
+}
+
+pub fn is_redstone_torch(id: &str) -> bool {
+    id == "redstone_torch"
 }
 
 pub fn power_of(metadata: u8) -> u8 {
@@ -101,6 +118,15 @@ pub fn observer_tint(_metadata: u8) -> [f32; 3] {
     [0.62, 0.62, 0.58]
 }
 
+/// Redstone torch tint: bright when on, dull ash when inverted/off.
+pub fn redstone_torch_tint(metadata: u8) -> [f32; 3] {
+    if torch_is_on(metadata) {
+        [0.95, 0.28, 0.12]
+    } else {
+        [0.28, 0.16, 0.14]
+    }
+}
+
 /// Lever is a steady source when flipped on (bit 0).
 pub fn lever_powered(metadata: u8) -> bool {
     metadata & 1 != 0
@@ -113,6 +139,9 @@ pub fn is_source(id: &str, metadata: u8, button_live: bool) -> bool {
     }
     if id == "button" {
         return button_live;
+    }
+    if is_redstone_torch(id) {
+        return torch_is_on(metadata);
     }
     false
 }
@@ -316,6 +345,147 @@ pub fn observers_watching(world: &Cluster, at: [i32; 3]) -> Vec<[i32; 3]> {
         let block = world.block_at(obs[0], obs[1], obs[2]);
         if is_observer(block.id) && front_cell(obs, block.metadata) == at {
             out.push(obs);
+        }
+    }
+    out
+}
+
+// --- Redstone torch: attachment 0..=4 (floor/W/E/N/S), bit 3 = off ---
+
+/// Attachment nibble matching `look::torch_facing` (0 floor, 1–4 wall).
+pub fn torch_attachment(metadata: u8) -> u8 {
+    metadata & 7
+}
+
+/// Lit / emitting when bit 3 is clear.
+pub fn torch_is_on(metadata: u8) -> bool {
+    metadata & 8 == 0
+}
+
+pub fn with_torch_on(metadata: u8, on: bool) -> u8 {
+    let attach = torch_attachment(metadata);
+    if on {
+        attach
+    } else {
+        attach | 8
+    }
+}
+
+pub fn make_redstone_torch(attachment: u8, on: bool) -> Block {
+    let meta = with_torch_on(attachment & 7, on);
+    let block = Block::new("redstone_torch", meta);
+    if on {
+        block.with_fill(FILL_EMBER)
+    } else {
+        block.with_fill(FILL_NONE)
+    }
+}
+
+pub fn with_torch_lit(block: Block, on: bool) -> Block {
+    let meta = with_torch_on(block.metadata, on);
+    Block::new("redstone_torch", meta).with_fill(if on {
+        FILL_EMBER
+    } else {
+        FILL_NONE
+    })
+}
+
+/// Block the torch is stuck to (floor below, or wall support).
+pub fn torch_attach_cell(at: [i32; 3], metadata: u8) -> [i32; 3] {
+    match torch_attachment(metadata) {
+        1 => [at[0] - 1, at[1], at[2]], // west support
+        2 => [at[0] + 1, at[1], at[2]], // east
+        3 => [at[0], at[1], at[2] - 1], // north
+        4 => [at[0], at[1], at[2] + 1], // south
+        _ => [at[0], at[1] - 1, at[2]], // floor
+    }
+}
+
+/// Soft power into an opaque/support cell (neighbor dust / sources / diodes).
+///
+/// Redstone torches attached to `at` do not count — they must not invert
+/// themselves by feeding their own support block.
+pub fn cell_soft_powered(
+    world: &Cluster,
+    at: [i32; 3],
+    button_sources: &[[i32; 3]],
+    powers: &HashMap<[i32; 3], u8>,
+    comparator_out: &HashMap<[i32; 3], u8>,
+    observer_pulse: &[[i32; 3]],
+) -> bool {
+    for step in STEPS {
+        let n = [at[0] + step[0], at[1] + step[1], at[2] + step[2]];
+        if let Some(&p) = powers.get(&n) {
+            if p > 0 {
+                return true;
+            }
+        }
+        let block = world.block_at(n[0], n[1], n[2]);
+        if is_dust(block.id) && power_of(block.metadata) > 0 {
+            return true;
+        }
+        if is_redstone_torch(block.id) && torch_attach_cell(n, block.metadata) == at {
+            continue;
+        }
+        let button_live = button_sources.iter().any(|c| *c == n);
+        if is_source(block.id, block.metadata, button_live) {
+            return true;
+        }
+        if repeater_powered(block) && front_cell(n, block.metadata) == at {
+            return true;
+        }
+        if let Some(&p) = comparator_out.get(&n) {
+            if p > 0 && is_comparator(block.id) && front_cell(n, block.metadata) == at {
+                return true;
+            }
+        }
+        if observer_pulse.iter().any(|c| *c == n)
+            && is_observer(block.id)
+            && back_cell(n, block.metadata) == at
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Desired on/off for every redstone torch near `focus`.
+///
+/// `burned_out` forces off while soft-locked. Torches invert: on unless the
+/// attached cell is soft-powered.
+pub fn plan_torch_states(
+    world: &Cluster,
+    focus: [i32; 3],
+    radius: i32,
+    button_sources: &[[i32; 3]],
+    powers: &HashMap<[i32; 3], u8>,
+    comparator_out: &HashMap<[i32; 3], u8>,
+    observer_pulse: &[[i32; 3]],
+    burned_out: &HashSet<[i32; 3]>,
+) -> Vec<([i32; 3], bool)> {
+    let mut out = Vec::new();
+    for dx in -radius..=radius {
+        for dy in -radius..=radius {
+            for dz in -radius..=radius {
+                let at = [focus[0] + dx, focus[1] + dy, focus[2] + dz];
+                let block = world.block_at(at[0], at[1], at[2]);
+                if !is_redstone_torch(block.id) {
+                    continue;
+                }
+                let attach = torch_attach_cell(at, block.metadata);
+                let powered = cell_soft_powered(
+                    world,
+                    attach,
+                    button_sources,
+                    powers,
+                    comparator_out,
+                    observer_pulse,
+                );
+                let want = !powered && !burned_out.contains(&at);
+                if want != torch_is_on(block.metadata) {
+                    out.push((at, want));
+                }
+            }
         }
     }
     out
@@ -977,5 +1147,70 @@ mod tests {
             &[[2, 1, 1]],
         );
         assert!(devices.contains(&[1, 1, 1]));
+    }
+
+    #[test]
+    fn redstone_torch_powers_neighbor_dust() {
+        let torch = make_redstone_torch(0, true);
+        let cluster = world(vec![
+            (2, 0, 1, Block::new("stone", 0)),
+            (2, 1, 1, torch),
+            (3, 1, 1, Block::new("redstone_dust", 0)),
+        ]);
+        let powers = plan_dust_power(&cluster, [2, 1, 1], 4, &[]);
+        assert_eq!(powers.get(&[3, 1, 1]), Some(&15));
+    }
+
+    #[test]
+    fn redstone_torch_inverts_when_attach_powered() {
+        // Floor torch on stone; lever on the stone side powers the support.
+        let torch = make_redstone_torch(0, true);
+        let cluster = world(vec![
+            (1, 0, 1, Block::new("lever", 1)),
+            (2, 0, 1, Block::new("stone", 0)),
+            (2, 1, 1, torch),
+        ]);
+        let powers = HashMap::new();
+        let flips = plan_torch_states(
+            &cluster,
+            [2, 1, 1],
+            4,
+            &[],
+            &powers,
+            &HashMap::new(),
+            &[],
+            &HashSet::new(),
+        );
+        assert_eq!(flips, vec![([2, 1, 1], false)]);
+    }
+
+    #[test]
+    fn redstone_torch_does_not_invert_itself() {
+        let torch = make_redstone_torch(0, true);
+        let cluster = world(vec![
+            (2, 0, 1, Block::new("stone", 0)),
+            (2, 1, 1, torch),
+            (3, 1, 1, Block::new("redstone_dust", 0)),
+        ]);
+        let powers = plan_dust_power(&cluster, [2, 1, 1], 4, &[]);
+        let flips = plan_torch_states(
+            &cluster,
+            [2, 1, 1],
+            4,
+            &[],
+            &powers,
+            &HashMap::new(),
+            &[],
+            &HashSet::new(),
+        );
+        assert!(flips.is_empty(), "torch must not soft-power its own support");
+    }
+
+    #[test]
+    fn torch_off_bit_clears_source() {
+        assert!(torch_is_on(0));
+        assert!(!torch_is_on(8));
+        assert!(!is_source("redstone_torch", 8, false));
+        assert!(is_source("redstone_torch", 0, false));
     }
 }
