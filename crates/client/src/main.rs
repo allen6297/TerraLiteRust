@@ -335,6 +335,8 @@ struct Args {
     shot_netherite_gear: Option<std::path::PathBuf>,
     /// Nether piglin gold barter, then quit.
     shot_piglin_barter: Option<std::path::PathBuf>,
+    /// Bastion remnant gold stash, then quit.
+    shot_bastion_remnant: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
     shot_wreck_heart: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
@@ -640,6 +642,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_ancient_debris: args.shot_ancient_debris,
         shot_netherite_gear: args.shot_netherite_gear,
         shot_piglin_barter: args.shot_piglin_barter,
+        shot_bastion_remnant: args.shot_bastion_remnant,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
@@ -821,6 +824,7 @@ struct App {
     shot_ancient_debris: Option<std::path::PathBuf>,
     shot_netherite_gear: Option<std::path::PathBuf>,
     shot_piglin_barter: Option<std::path::PathBuf>,
+    shot_bastion_remnant: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
@@ -1239,6 +1243,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_piglin_barter.take() {
                     state.arm_piglin_barter_shot(path);
                 }
+                if let Some(path) = self.shot_bastion_remnant.take() {
+                    state.arm_bastion_remnant_shot(path);
+                }
                 if let Some(path) = self.shot_wreck_heart.take() {
                     state.arm_shipwreck_heart_shot(path);
                 }
@@ -1640,6 +1647,7 @@ where
         shot_ancient_debris: None,
         shot_netherite_gear: None,
         shot_piglin_barter: None,
+        shot_bastion_remnant: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
         shot_axolotl: None,
@@ -2359,6 +2367,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-piglin-barter".to_string())?;
                 parsed.shot_piglin_barter = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-bastion-remnant" | "--shot-bastion" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-bastion-remnant".to_string())?;
+                parsed.shot_bastion_remnant = Some(std::path::PathBuf::from(value));
             }
             "--shot-wreck-heart" | "--shot-shipwreck-heart" | "--shot-heart" => {
                 let value = iter

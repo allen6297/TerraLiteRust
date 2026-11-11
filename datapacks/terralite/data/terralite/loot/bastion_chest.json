@@ -1,0 +1,4 @@
+{
+  "drops": ["gold_block", "gold_ingot", "blackstone", "basalt", "gilded_blackstone"],
+  "omen": ["gold_block", "netherite_scrap", "ancient_debris", "gold_ingot", "diamond_pickaxe"]
+}
