@@ -1352,6 +1352,10 @@ pub struct State {
     amethyst_grow_wait: f32,
     /// One tip when amethyst first grows this session.
     amethyst_told: bool,
+    /// Seconds until the next nearby dripstone drip roll.
+    dripstone_wait: f32,
+    /// One tip when dripstone first drips / spikes this session.
+    dripstone_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2742,6 +2746,8 @@ impl State {
             copper_told: false,
             amethyst_grow_wait: crate::amethyst::GROW_PERIOD,
             amethyst_told: false,
+            dripstone_wait: crate::dripstone::DRIP_PERIOD,
+            dripstone_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9582,6 +9588,58 @@ impl State {
         if !self.amethyst_told {
             self.amethyst_told = true;
             self.gui.push_chat("amethyst");
+        }
+    }
+
+
+    fn tick_dripstone(&mut self, dt: f32) {
+        if self.told_disconnect {
+            return;
+        }
+        self.dripstone_wait -= dt;
+        if self.dripstone_wait > 0.0 {
+            return;
+        }
+        self.dripstone_wait = crate::dripstone::DRIP_PERIOD;
+        let focus = [
+            self.camera.eye.x.floor() as i32,
+            self.camera.eye.y.floor() as i32,
+            self.camera.eye.z.floor() as i32,
+        ];
+        let Some(act) =
+            crate::dripstone::plan_drip(&self.world, focus, crate::dripstone::DRIP_RADIUS)
+        else {
+            return;
+        };
+        match act {
+            crate::dripstone::DripAct::Place(at, block) => {
+                self.send_places_batch(&[CellChange {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                    block,
+                }]);
+                if !self.dripstone_told {
+                    self.dripstone_told = true;
+                    self.gui.push_chat("drip");
+                }
+            }
+            crate::dripstone::DripAct::FillCauldron(at, level) => {
+                self.send_places_batch(&[CellChange {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                    block: Block::new("cauldron", level),
+                }]);
+                let mote = [at[0] as f32 + 0.5, at[1] as f32 + 1.05, at[2] as f32 + 0.5];
+                self.drops.puff(mote, [0.45, 0.65, 0.95]);
+                self.rebuild_drops();
+                if !self.dripstone_told {
+                    self.dripstone_told = true;
+                    self.gui.push_chat("drip");
+                }
+                self.gui.push_chat(crate::hotbar::cauldron_word(level));
+            }
         }
     }
 
@@ -23266,6 +23324,162 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+
+    pub fn arm_dripstone_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.28);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = (ground - 4).max(2);
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        // Cave stamp: open near face, water over dripstone, tips + cauldron.
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                for dy in 0..=5 {
+                    let yy = floor + dy;
+                    let wall =
+                        x == cx - 3 || x == cx + 4 || z == cz + 3 || dy == 0 || dy == 5;
+                    changes.push(CellChange {
+                        x,
+                        y: yy,
+                        z,
+                        block: if wall {
+                            if (x + z + dy) % 4 == 0 {
+                                Block::new("dripstone_block", 0)
+                            } else {
+                                Block::new("stone", 0)
+                            }
+                        } else {
+                            Block::AIR
+                        },
+                    });
+                }
+            }
+        }
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx + 1,
+                y: floor + 4,
+                z: cz,
+                block: Block::new("water", 0),
+            },
+            CellChange {
+                x: cx + 1,
+                y: floor + 3,
+                z: cz,
+                block: Block::new("dripstone_block", 0),
+            },
+            CellChange {
+                x: cx + 1,
+                y: floor + 2,
+                z: cz,
+                block: crate::dripstone::make_pointed(true),
+            },
+            CellChange {
+                x: cx + 1,
+                y: floor + 1,
+                z: cz,
+                block: crate::dripstone::make_pointed(true),
+            },
+            CellChange {
+                x: cx + 2,
+                y: floor + 1,
+                z: cz,
+                block: crate::dripstone::make_pointed(false),
+            },
+            CellChange {
+                x: cx + 3,
+                y: floor + 1,
+                z: cz,
+                block: crate::dripstone::make_pointed(false),
+            },
+            CellChange {
+                x: cx,
+                y: floor + 1,
+                z: cz,
+                block: Block::new("cauldron", 1),
+            },
+            CellChange {
+                x: cx,
+                y: floor + 4,
+                z: cz,
+                block: Block::new("water", 0),
+            },
+            CellChange {
+                x: cx,
+                y: floor + 3,
+                z: cz,
+                block: Block::new("dripstone_block", 0),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.4, y as f32 + 1.0, cz as f32 + 0.4);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.2,
+            y as f32 + 1.4 + body::EYE_HEIGHT,
+            cz as f32 - 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("dripstone_block");
+        let _ = self.hotbar.give_stack("pointed_dripstone");
+        let _ = self.hotbar.collect("cauldron");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.dripstone_told = true;
+        self.dripstone_wait = crate::dripstone::DRIP_PERIOD;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("dripstone");
+        self.gui.push_chat("drip");
+        self.gui.push_chat("spike");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Dirt update face → observer (pulsing) → dust → lamp, then quit.
     pub fn arm_observer_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -32025,7 +32239,18 @@ impl State {
                     self.play_world_soft(crate::audio::step_for(ground), feet, 0.45);
                 }
             }
-            let amount = crate::body::fall_hurt(fallen);
+            let mut amount = crate::body::fall_hurt(fallen);
+            let ground = body::ground_id(&self.world, self.camera.eye);
+            if crate::dripstone::is_pointed(ground) {
+                let bonus = crate::dripstone::spike_bonus(fallen);
+                if bonus > 0 {
+                    amount = amount.max(bonus) + if amount > 0 { 1 } else { 0 };
+                    if !self.dripstone_told {
+                        self.dripstone_told = true;
+                        self.gui.push_chat("spike");
+                    }
+                }
+            }
             if amount > 0 {
                 self.hurt(amount);
             }
@@ -32163,6 +32388,7 @@ impl State {
         self.tick_redstone_delay(dt);
         self.tick_copper_oxide(dt);
         self.tick_amethyst_grow(dt);
+        self.tick_dripstone(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

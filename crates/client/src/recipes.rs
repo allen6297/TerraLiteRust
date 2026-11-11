@@ -609,6 +609,8 @@ mod tests {
                 "amethyst_block".to_string(),
                 "amethyst_shard".to_string(),
                 "tinted_glass".to_string(),
+                "dripstone_block".to_string(),
+                "pointed_dripstone".to_string(),
 
                 "copper_chest".to_string(),
                 "copper_door".to_string(),

@@ -492,6 +492,8 @@ mod tests {
             "assets/terralite/textures/amethyst_cluster.png",
             "assets/terralite/textures/tinted_glass.png",
             "assets/terralite/textures/amethyst_shard.png",
+            "assets/terralite/textures/dripstone_block.png",
+            "assets/terralite/textures/pointed_dripstone.png",
             "assets/terralite/textures/decorated_pot.png",
             "assets/terralite/textures/copper_grate.png",
             "assets/terralite/textures/copper_door.png",

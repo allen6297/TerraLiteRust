@@ -7999,6 +7999,8 @@ fn tab_of(id: &str) -> &'static str {
             | "medium_amethyst_bud"
             | "amethyst_cluster"
             | "tinted_glass"
+            | "dripstone_block"
+            | "pointed_dripstone"
             | "copper_door"
             | "copper_trapdoor"
             | "decorated_pot"

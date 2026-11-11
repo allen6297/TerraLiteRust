@@ -2141,6 +2141,14 @@ impl Pack {
             };
             return self.shape_named(name);
         }
+        if block.id == "pointed_dripstone" {
+            let name = if block.metadata & 1 != 0 {
+                "pointed_dripstone_hang"
+            } else {
+                "pointed_dripstone"
+            };
+            return self.shape_named(name);
+        }
         if block.id == "chain" {
             let name = match block.metadata {
                 1 | 2 => "chain_x",
