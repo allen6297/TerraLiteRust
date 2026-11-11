@@ -984,6 +984,8 @@ impl Pack {
                 | "shulker_box"
                 | "barrel"
                 | "hopper"
+                | "dispenser"
+                | "dropper"
                 | "decorated_pot"
                 | "shelf"
                 | "item_frame"

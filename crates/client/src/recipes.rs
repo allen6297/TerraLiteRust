@@ -570,6 +570,7 @@ mod tests {
                 "boat".to_string(),
                 "book".to_string(),
                 "bookshelf".to_string(),
+                "bow".to_string(),
                 "bread".to_string(),
                 "breeze_rod".to_string(),
                 "brewing_stand".to_string(),
@@ -628,9 +629,11 @@ mod tests {
                 "diamond_shovel".to_string(),
                 "diamond_sword".to_string(),
                 "dirt".to_string(),
+                "dispenser".to_string(),
                 "door".to_string(),
                 "dragon_egg".to_string(),
                 "drain".to_string(),
+                "dropper".to_string(),
                 "emerald".to_string(),
                 "emerald_block".to_string(),
                 "enchanting_table".to_string(),
@@ -667,10 +670,10 @@ mod tests {
                 "grindstone".to_string(),
                 "hanging_sign".to_string(),
                 "hay_bale".to_string(),
-                "hopper".to_string(),
                 "healing_potion".to_string(),
                 "heart_of_the_sea".to_string(),
                 "heavy_core".to_string(),
+                "hopper".to_string(),
                 "ice".to_string(),
                 "iron_block".to_string(),
 
@@ -792,7 +795,7 @@ mod tests {
         assert_eq!(book.detail("lantern"), "iron ore and oak log make lantern");
         assert_eq!(
             book.detail("cobblestone"),
-            "used to make compass and mossy cobblestone and saddle and shield and smooth stone and stone and stone pickaxe"
+            "used to make compass and dispenser and dropper and mossy cobblestone and saddle and shield and smooth stone and stone and stone pickaxe"
         );
         assert_eq!(
             book.match_grid(&["wheat".into(), "wheat".into(), "wheat".into()]),

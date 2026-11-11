@@ -7123,6 +7123,7 @@ impl State {
             {
                 self.toggle_swing(other.id, at, other.metadata);
             }
+            self.power_spitters([hit.block[0], hit.block[1], hit.block[2]]);
             return;
         }
         if block.id == "lever" {
@@ -8350,6 +8351,8 @@ impl State {
             "copper_chest" => "COPPER CHEST",
             "shulker_box" => "SHULKER BOX",
             "hopper" => "HOPPER",
+            "dispenser" => "DISPENSER",
+            "dropper" => "DROPPER",
             _ => "CHEST",
         };
         if self.gui.open_chest_as(&slots, title) {
@@ -13903,6 +13906,13 @@ impl State {
             block = Block::new(
                 "hopper",
                 crate::hopper::hopper_facing_from_look([forward.x, forward.y, forward.z]),
+            );
+        }
+        if block.id == "dispenser" || block.id == "dropper" {
+            let forward = self.camera.forward();
+            block = Block::new(
+                block.id,
+                crate::dispenser::facing_from_look([forward.x, forward.y, forward.z]),
             );
         }
         if block.id == "pump" {
@@ -22444,6 +22454,139 @@ impl State {
     }
 
     /// Open the camp cartography table mid-widen, then quit with a PNG.
+    /// Dispenser facing the camera with an arrow mid-flight, then quit with a PNG.
+    pub fn arm_dispenser_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        // Face −Z toward the camera eye.
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: cx,
+                    y,
+                    z: cz,
+                    block: Block::new("dispenser", 5),
+                },
+                CellChange {
+                    x: cx + 1,
+                    y,
+                    z: cz,
+                    block: Block::new("lever", 1),
+                },
+                CellChange {
+                    x: cx - 1,
+                    y,
+                    z: cz,
+                    block: Block::new("dropper", 5),
+                },
+            ],
+        );
+        self.chunk_bake.touch(cx, cz);
+
+        let save = crate::net::world_file(&self.loaded_world);
+        let slots = vec![
+            rebuild_world::CarriedSlot {
+                slot: 0,
+                id: "arrow".into(),
+                count: 8,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 1,
+                id: "fire_charge".into(),
+                count: 2,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 2,
+                id: "dirt".into(),
+                count: 4,
+            },
+        ];
+        let _ = rebuild_world::store_chest_slots(&save, cx, y, cz, "dispenser", &slots);
+        let drop_slots = vec![rebuild_world::CarriedSlot {
+            slot: 0,
+            id: "cobblestone".into(),
+            count: 6,
+        }];
+        let _ = rebuild_world::store_chest_slots(&save, cx - 1, y, cz, "dropper", &drop_slots);
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, y as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            y as f32 + 0.25 + body::EYE_HEIGHT,
+            cz as f32 - 3.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("dispenser");
+        let _ = self.hotbar.collect("dropper");
+        let _ = self.hotbar.collect("arrow");
+        let _ = self.hotbar.collect("lever");
+        self.hotbar_dirty = true;
+
+        let muzzle = crate::dispenser::muzzle([cx, y, cz], [0, 0, -1]);
+        self.arrows.pin(
+            [muzzle[0], muzzle[1], muzzle[2] - 1.2],
+            [0.0, 0.05, -18.0],
+        );
+        self.fireballs.pin(
+            [muzzle[0] + 0.35, muzzle[1] + 0.1, muzzle[2] - 0.8],
+            [0.0, 0.1, -6.0],
+        );
+        self.drops.pin(
+            "cobblestone",
+            [
+                (cx - 1) as f32 + 0.5,
+                y as f32 + 0.35,
+                cz as f32 - 0.65,
+            ],
+        );
+        self.rebuild_drops();
+        let _ = self.gui.open_chest_as(&slots, "DISPENSER");
+        self.chest_at = Some((cx, y, cz));
+        self.gui.push_chat("dispenser");
+        self.gui.push_chat("shot");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Hopper pulling from a chest above into a chest below, then quit with a PNG.
     pub fn arm_hopper_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -29512,11 +29655,91 @@ impl State {
             self.gui.push_chat(if turning_on { "on" } else { "off" });
         }
         self.toggle_swing("lever", at, metadata);
+        if turning_on {
+            self.power_spitters(at);
+        }
         let Some((cell, other)) = press_target(&self.world, at) else {
             return;
         };
         if let Some(want_open) = lever_wants(turning_on, other.metadata & 1 == 1) {
             self.lever_follow = Some((cell, want_open));
+        }
+    }
+
+    /// Rising-edge power from a lever/button: spit from adjacent dispensers / droppers.
+    fn power_spitters(&mut self, at: [i32; 3]) {
+        const STEPS: [[i32; 3]; 6] = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ];
+        for step in STEPS {
+            let cell = [at[0] + step[0], at[1] + step[1], at[2] + step[2]];
+            let id = self.world.block_at(cell[0], cell[1], cell[2]).id;
+            if crate::dispenser::is_spitter(id) {
+                self.dispense_at(cell);
+            }
+        }
+    }
+
+    /// Spend one inventory item from a dispenser / dropper into the world.
+    fn dispense_at(&mut self, at: [i32; 3]) {
+        if self.chest_at == Some((at[0], at[1], at[2])) {
+            return;
+        }
+        let block = self.world.block_at(at[0], at[1], at[2]);
+        if !crate::dispenser::is_spitter(block.id) {
+            return;
+        }
+        let path = crate::net::world_file(&self.loaded_world);
+        let Ok(mut chests) = rebuild_world::read_chests(&path) else {
+            return;
+        };
+        let mut slots = take_container_slots(&mut chests, at[0], at[1], at[2], block.id);
+        let Some(item) = crate::dispenser::take_one(&mut slots) else {
+            put_container_slots(&mut chests, at[0], at[1], at[2], block.id, slots);
+            self.gui.push_chat("empty");
+            return;
+        };
+        put_container_slots(&mut chests, at[0], at[1], at[2], block.id, slots.clone());
+        if let Err(err) = rebuild_world::write_chests(&path, &chests) {
+            eprintln!("could not save dispense: {err}");
+            return;
+        }
+        let wire = crate::hopper::wire_slots(&slots);
+        let _ = self
+            .link
+            .send(encode_chest(at[0], at[1], at[2], &wire));
+
+        let dir = crate::dispenser::facing_dir(block.metadata);
+        let muzzle = crate::dispenser::muzzle(at, dir);
+        let kind = crate::dispenser::spit_kind(block.id, &item);
+        match kind {
+            crate::dispenser::SpitKind::Arrow => {
+                let forward = [dir[0] as f32, dir[1] as f32, dir[2] as f32];
+                self.arrows.fire(muzzle, forward, 1.0);
+                self.play_world(crate::audio::Sound::Gust, muzzle);
+                self.gui.push_chat("shot");
+                self.rebuild_drops();
+            }
+            crate::dispenser::SpitKind::FireCharge => {
+                let aim = crate::dispenser::toward(at, dir);
+                self.fireballs.shoot(muzzle, aim);
+                self.play_world(crate::audio::Sound::Gust, muzzle);
+                self.gui.push_chat("fire charge");
+                self.rebuild_drops();
+            }
+            crate::dispenser::SpitKind::Drop => {
+                let cell = crate::dispenser::drop_cell(at, dir);
+                let solid = self.world.block_at(cell[0], cell[1], cell[2]).id != "air";
+                self.drops.spawn(&item, cell, solid);
+                self.play_world(crate::audio::Sound::Pop, muzzle);
+                self.gui.push_chat("drop");
+                self.rebuild_drops();
+            }
         }
     }
 
