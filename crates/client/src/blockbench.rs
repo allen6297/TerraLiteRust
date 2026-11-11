@@ -127,6 +127,61 @@ pub fn load_skin_png(bytes: &[u8]) -> Result<Skin, String> {
     Ok(skin)
 }
 
+/// Load an entity sheet from the enabled resource-pack overlays when present.
+///
+/// Tries TerraLite flat bridges (`textures/entity/<id>.png`) then Minecraft
+/// nested paths (`textures/entity/<id>/<id>.png`). Any decodeable size works —
+/// Blockbench zombie skins are 64×64; iron golem is 128×128; breeze is 32×32.
+pub fn pack_entity_skin(id: &str) -> Option<Skin> {
+    let bare = id.rsplit_once(':').map(|(_, rest)| rest).unwrap_or(id);
+    if bare.is_empty() {
+        return None;
+    }
+    let file = format!("{bare}.png");
+    for path in [
+        format!("assets/terralite/textures/entity/{file}"),
+        format!("assets/terralite/textures/entity/{bare}/{file}"),
+        format!("assets/minecraft/textures/entity/{file}"),
+        format!("assets/minecraft/textures/entity/{bare}/{file}"),
+    ] {
+        if let Some(bytes) = rebuild_world::asset_png(&path) {
+            if let Some(skin) = decode_skin(&bytes) {
+                return Some(skin);
+            }
+        }
+    }
+    None
+}
+
+/// Average opaque RGB in a pixel rect (Minecraft entity UV space).
+pub fn skin_average(skin: &Skin, x0: u32, y0: u32, x1: u32, y1: u32) -> Option<[f32; 3]> {
+    let x0 = x0.min(skin.width.saturating_sub(1));
+    let y0 = y0.min(skin.height.saturating_sub(1));
+    let x1 = x1.clamp(x0 + 1, skin.width);
+    let y1 = y1.clamp(y0 + 1, skin.height);
+    let mut r = 0.0f32;
+    let mut g = 0.0f32;
+    let mut b = 0.0f32;
+    let mut n = 0.0f32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if let Some(px) = skin_texel(skin, x as i32, y as i32) {
+                if px[3] < 0.15 {
+                    continue;
+                }
+                r += px[0];
+                g += px[1];
+                b += px[2];
+                n += 1.0;
+            }
+        }
+    }
+    if n < 1.0 {
+        return None;
+    }
+    Some([r / n, g / n, b / n])
+}
+
 fn double_skin_height(skin: Skin) -> Skin {
     let mut rgba = vec![0u8; 64 * 64 * 4];
     let row = 64 * 4;
@@ -377,7 +432,15 @@ fn skin_of(root: &serde_json::Map<String, Value>) -> Option<Skin> {
         }
         if !name.is_empty() {
             let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
-            candidates.push(format!("assets/terralite/textures/entity/{file}"));
+            let stem = file.strip_suffix(".png").unwrap_or(file);
+            // Flat TerraLite bridge, nested MC layout, then block fallbacks.
+            for root in [
+                "assets/terralite/textures/entity",
+                "assets/minecraft/textures/entity",
+            ] {
+                candidates.push(format!("{root}/{file}"));
+                candidates.push(format!("{root}/{stem}/{file}"));
+            }
             candidates.push(format!("assets/terralite/textures/block/{file}"));
             candidates.push(format!("assets/terralite/textures/{file}"));
         }
@@ -1209,9 +1272,26 @@ mod tests {
             .map(|vertex| vertex.position[1])
             .fold(f32::MIN, f32::max);
         assert!(top > 1.7, "the figure stands near two blocks tall, top {top}");
+        // Base TerraLite zombie is green-tinted; Whimscape (when enabled) may
+        // ship a different sheet — either way the mesh must paint opaque skin.
+        let painted = verts
+            .iter()
+            .filter(|vertex| vertex.color.iter().sum::<f32>() > 0.15)
+            .count();
+        assert!(painted > 50, "skin samples should paint body texels, got {painted}");
+    }
+
+    #[test]
+    fn pack_entity_skin_resolves_zombie_when_bridged() {
+        // Whimscape overlay bridges textures/entity/zombie.png — skip cleanly
+        // when the overlay is not enabled in this environment.
+        let Some(skin) = pack_entity_skin("zombie") else {
+            return;
+        };
+        assert!(skin.width() >= 32 && skin.height() >= 32);
         assert!(
-            verts.iter().any(|vertex| vertex.color[1] > vertex.color[0] + 0.05),
-            "skin samples should read green"
+            skin_average(&skin, 8, 8, 16, 16).is_some(),
+            "zombie head UV should yield an average color"
         );
     }
 

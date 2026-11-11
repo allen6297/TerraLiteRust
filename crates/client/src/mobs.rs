@@ -1001,11 +1001,26 @@ fn zombie_figure() -> &'static crate::blockbench::Figure {
     use std::sync::OnceLock;
     static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
     FIGURE.get_or_init(|| {
-        crate::blockbench::parse(include_str!(
+        let mut figure = crate::blockbench::parse(include_str!(
             "../../../resourcepacks/terralite/assets/terralite/models/entity/zombie.bbmodel"
         ))
-        .expect("zombie.bbmodel")
+        .expect("zombie.bbmodel");
+        // Prefer an enabled pack sheet (Whimscape) over the embedded stub.
+        if let Some(skin) = crate::blockbench::pack_entity_skin("zombie") {
+            figure.set_skin(skin);
+        }
+        figure
     })
+}
+
+/// Sample pack entity-sheet colors for procedural box mobs when present.
+fn pack_mob_colors(id: &str, regions: &[(u32, u32, u32, u32)]) -> Option<Vec<[f32; 3]>> {
+    let skin = crate::blockbench::pack_entity_skin(id)?;
+    let mut out = Vec::with_capacity(regions.len());
+    for &(x0, y0, x1, y1) in regions {
+        out.push(crate::blockbench::skin_average(&skin, x0, y0, x1, y1)?);
+    }
+    Some(out)
 }
 
 /// Cap how many natural zombies stand near the player at once.
@@ -1498,18 +1513,22 @@ impl Breeze {
             return Vec::new();
         }
         let [x, y, z] = self.origin;
+        let (body, base) = match pack_mob_colors("breeze", &[(8, 8, 24, 24), (4, 24, 12, 32)]) {
+            Some(c) => (c[0], c[1]),
+            None => ([0.72, 0.90, 0.98], [0.55, 0.78, 0.92]),
+        };
         let mut out = Vec::new();
         push_box(
             &mut out,
             [x, y + 0.45, z],
             [0.28, 0.32, 0.22],
-            [0.72, 0.90, 0.98],
+            body,
         );
         push_box(
             &mut out,
             [x, y + 0.15, z],
             [0.16, 0.1, 0.16],
-            [0.55, 0.78, 0.92],
+            base,
         );
         out
     }
@@ -1632,24 +1651,35 @@ impl Golem {
             return Vec::new();
         }
         let [x, y, z] = self.origin;
+        let (body, head, accent) = match pack_mob_colors(
+            "copper_golem",
+            &[(8, 8, 16, 16), (8, 0, 16, 8), (20, 20, 28, 28)],
+        ) {
+            Some(c) => (c[0], c[1], c[2]),
+            None => (
+                [0.78, 0.46, 0.26],
+                [0.86, 0.62, 0.34],
+                [0.42, 0.64, 0.44],
+            ),
+        };
         let mut out = Vec::new();
         push_box(
             &mut out,
             [x, y + 0.32, z],
             [0.2, 0.22, 0.14],
-            [0.78, 0.46, 0.26],
+            body,
         );
         push_box(
             &mut out,
             [x, y + 0.66, z],
             [0.14, 0.12, 0.12],
-            [0.86, 0.62, 0.34],
+            head,
         );
         push_box(
             &mut out,
             [x, y + 0.34, z + 0.12],
             [0.06, 0.08, 0.04],
-            [0.42, 0.64, 0.44],
+            accent,
         );
         out
     }
@@ -4831,21 +4861,31 @@ impl Trader {
         let [x, y, z] = self.origin;
         let bob = (self.pose * 2.0).sin() * 0.02;
         let mut out = Vec::new();
-        let robe = [0.42, 0.38, 0.55];
-        let skin = [0.86, 0.68, 0.52];
-        let belt = [0.55, 0.42, 0.18];
+        // Villager sheet: head face / body / leg (64×64 humanoid UV).
+        let (robe, skin, belt, leg) = match pack_mob_colors(
+            "villager",
+            &[(8, 8, 16, 16), (20, 20, 28, 32), (4, 20, 8, 32), (4, 20, 8, 32)],
+        ) {
+            Some(c) => (c[1], c[0], [c[1][0] * 0.7, c[1][1] * 0.65, c[1][2] * 0.5], c[2]),
+            None => (
+                [0.42, 0.38, 0.55],
+                [0.86, 0.68, 0.52],
+                [0.55, 0.42, 0.18],
+                [0.28, 0.24, 0.36],
+            ),
+        };
         // Legs.
         push_box(
             &mut out,
             [x - 0.1, y + 0.35 + bob, z],
             [0.1, 0.35, 0.1],
-            [0.28, 0.24, 0.36],
+            leg,
         );
         push_box(
             &mut out,
             [x + 0.1, y + 0.35 + bob, z],
             [0.1, 0.35, 0.1],
-            [0.28, 0.24, 0.36],
+            leg,
         );
         // Body / robe.
         push_box(
@@ -4984,9 +5024,18 @@ impl IronGolem {
     pub fn vertices(&self) -> Vec<Vertex> {
         let [x, y, z] = self.origin;
         let bob = (self.pose * 1.4).sin() * 0.015;
-        let iron = [0.46, 0.48, 0.52];
-        let dark = [0.22, 0.24, 0.28];
-        let vine = [0.16, 0.58, 0.22];
+        // Iron golem sheet is 128×128 — sample torso / leg / vine tuft.
+        let (iron, dark, vine) = match pack_mob_colors(
+            "iron_golem",
+            &[(8, 20, 24, 40), (48, 72, 64, 96), (56, 0, 72, 16)],
+        ) {
+            Some(c) => (c[0], c[1], c[2]),
+            None => (
+                [0.46, 0.48, 0.52],
+                [0.22, 0.24, 0.28],
+                [0.16, 0.58, 0.22],
+            ),
+        };
         let mut out = Vec::new();
         // Legs.
         push_box(
@@ -5711,14 +5760,30 @@ impl Piglin {
         }
         let [x, y, z] = self.origin;
         let bob = (self.pose * 2.2).sin() * 0.02;
-        let hide = if self.angry {
-            [0.62, 0.32, 0.28]
-        } else {
-            [0.72, 0.48, 0.38]
+        // Piglin 64×64: head / body / ear tip.
+        let (mut hide, cloth, snout, ear) = match pack_mob_colors(
+            "piglin",
+            &[(8, 8, 16, 16), (20, 20, 28, 32), (8, 8, 12, 12), (32, 0, 40, 8)],
+        ) {
+            Some(c) => (c[0], [c[1][0] * 0.55, c[1][1] * 0.5, c[1][2] * 0.45], c[2], c[3]),
+            None => (
+                if self.angry {
+                    [0.62, 0.32, 0.28]
+                } else {
+                    [0.72, 0.48, 0.38]
+                },
+                [0.28, 0.22, 0.18],
+                [0.78, 0.42, 0.36],
+                [0.55, 0.28, 0.24],
+            ),
         };
-        let cloth = [0.28, 0.22, 0.18];
-        let snout = [0.78, 0.42, 0.36];
-        let ear = [0.55, 0.28, 0.24];
+        if self.angry {
+            hide = [
+                (hide[0] * 0.85 + 0.2).min(1.0),
+                hide[1] * 0.75,
+                hide[2] * 0.7,
+            ];
+        }
         let mut out = Vec::new();
         // Legs.
         push_box(

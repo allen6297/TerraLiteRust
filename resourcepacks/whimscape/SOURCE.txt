@@ -1,6 +1,7 @@
 ﻿SOURCE=C:\Users\monki\Downloads\Whimscape_26.1-26.3_r4
 BRIDGE=Minecraft block PNGs remapped under assets/terralite/textures/ (+ block/) for TerraLite atlas overlays.
 ITEMS=assets/minecraft/textures/item/*.png -> assets/terralite/textures/item/ (hotbar/inventory prefer these over Blockbench)
+ENTITY=assets/minecraft/textures/entity/** -> assets/minecraft/textures/entity/ + flat aliases under assets/terralite/textures/entity/ (zombie/piglin/villager/golem/…)
 DIRT=optifine/ctm/overlays/10_dirt/0.png (Whimscape omits vanilla dirt.png)
 GRASS_TOP=optifine/ctm/overlays/70_grass_block_top/0.png
 GRASS_SIDE=textures/block/grass_path_side.png
