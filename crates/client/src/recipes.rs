@@ -723,6 +723,7 @@ mod tests {
                 "ominous_bottle".to_string(),
 
                 "painting".to_string(),
+                "paper".to_string(),
                 "pipe".to_string(),
                 "plate".to_string(),
                 "polished_basalt".to_string(),

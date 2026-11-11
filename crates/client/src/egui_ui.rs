@@ -232,6 +232,7 @@ impl EguiHost {
             || gui.furnace_open()
             || gui.craft_open()
             || gui.chest_open()
+            || gui.chart_open()
             || map_open
     }
 
@@ -361,6 +362,11 @@ impl EguiHost {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.chart_open() {
+                if draw_cartography(ui, gui, hotbar, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
@@ -376,6 +382,7 @@ impl EguiHost {
                 && !gui.furnace_open()
                 && !gui.craft_open()
                 && !gui.chest_open()
+                && !gui.chart_open()
             {
                 draw_chat_plate(ui, gui, icons);
             }
@@ -3282,6 +3289,185 @@ fn draw_enchanting(
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(gui.enchant_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn draw_cartography(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = hotbar.selected();
+    let held = hotbar.slot(selected).unwrap_or("").to_string();
+    let holding_map = !held.is_empty() && rebuild_world::Pack::builtin().is_map(&held);
+    let zoom = hotbar.map_zoom();
+    let locked = hotbar.map_locked();
+    let paper = hotbar.map_paper();
+    let can_widen = holding_map && !locked && zoom < crate::map::ZOOM_MAX;
+    let can_narrow = holding_map && !locked && zoom > 0;
+    let can_clone = holding_map && paper > 0 && hotbar.room_for("map");
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(32.0);
+                show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "CARTOGRAPHY");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Zoom {zoom}/{} · paper {paper} · {}",
+                            crate::map::ZOOM_MAX,
+                            if locked { "locked" } else { "unlocked" }
+                        ))
+                        .size(13.0)
+                        .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("Map").size(12.0).color(DETAIL));
+                                ui.add_space(2.0);
+                                if holding_map {
+                                    let tip = gui::tip_for(&held, Some(1));
+                                    let tex = icon_texture(ui.ctx(), icons, &held);
+                                    ui.horizontal(|ui| {
+                                        let _ = slot_button(ui, icons, tex, true, None);
+                                        ui.label(
+                                            RichText::new(&tip.name).size(13.0).color(INK),
+                                        );
+                                    });
+                                } else {
+                                    let _ = slot_button(ui, icons, None, false, None);
+                                    ui.label(
+                                        RichText::new("hold a map")
+                                            .size(13.0)
+                                            .color(MUTED),
+                                    );
+                                }
+                            });
+                            ui.add_space(16.0);
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("Paper").size(12.0).color(DETAIL));
+                                ui.add_space(2.0);
+                                let tex = icon_texture(ui.ctx(), icons, "paper");
+                                ui.horizontal(|ui| {
+                                    let _ = slot_button(
+                                        ui,
+                                        icons,
+                                        tex,
+                                        paper > 0,
+                                        if paper > 0 { Some(paper) } else { None },
+                                    );
+                                    ui.label(
+                                        RichText::new(if paper > 0 {
+                                            "ready to clone"
+                                        } else {
+                                            "need paper"
+                                        })
+                                        .size(13.0)
+                                        .color(if paper > 0 { INK } else { MUTED }),
+                                    );
+                                });
+                            });
+                        });
+                    });
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(can_widen, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                "Widen",
+                                can_widen,
+                                Vec2::new(100.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let word = hotbar.chart_map();
+                                gui.note_chart(word);
+                                gui.push_chat(word);
+                                touched = true;
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.add_enabled_ui(can_narrow, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                "Narrow",
+                                can_narrow,
+                                Vec2::new(100.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                hotbar.zoom_map(false);
+                                gui.note_chart("narrower");
+                                gui.push_chat("narrower");
+                                touched = true;
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.add_enabled_ui(holding_map, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                if locked { "Unlock" } else { "Lock" },
+                                holding_map,
+                                Vec2::new(100.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let word = hotbar.lock_map();
+                                gui.note_chart(word);
+                                gui.push_chat(word);
+                                touched = true;
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.add_enabled_ui(can_clone, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                if can_clone { "Clone" } else { "Need paper" },
+                                can_clone,
+                                Vec2::new(110.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let word = hotbar.clone_map();
+                                gui.note_chart(word);
+                                gui.push_chat(word);
+                                if word == "cloned" {
+                                    let tip = gui::tip_for("map", Some(1));
+                                    gui.pin_tip(tip);
+                                }
+                                touched = true;
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(gui.chart_note())
                             .size(13.0)
                             .color(DETAIL),
                     );

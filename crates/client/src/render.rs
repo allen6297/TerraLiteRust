@@ -22350,6 +22350,8 @@ impl State {
 
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("map");
+        let _ = self.hotbar.collect("paper");
+        let _ = self.hotbar.collect("paper");
         let _ = self.hotbar.chart_map();
         self.hotbar_dirty = true;
         let _ = self.gui.open_chart();

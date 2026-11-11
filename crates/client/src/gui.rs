@@ -2530,13 +2530,17 @@ impl Gui {
         if self.is_open() {
             return false;
         }
-        self.chart_note = "enter widens the held map".to_string();
+        self.chart_note = "widen · lock · clone with paper".to_string();
         self.chart_open = true;
         true
     }
 
     pub fn chart_open(&self) -> bool {
         self.chart_open
+    }
+
+    pub fn chart_note(&self) -> &str {
+        &self.chart_note
     }
 
     /// The word the last chart left on the panel.
@@ -4094,7 +4098,8 @@ impl Gui {
             return loom_quads(width, height, &self.loom_note);
         }
         if self.chart_open {
-            return chart_quads(width, height, &self.chart_note);
+            // egui draws the Whimscape cartography panel.
+            return Vec::new();
         }
         if self.lectern_open {
             return lectern_quads(
@@ -7927,6 +7932,7 @@ fn tab_of(id: &str) -> &'static str {
             | "cartography_table"
             | "lectern"
             | "book"
+            | "paper"
             | "composter"
             | "bone_meal"
             | "bricks"

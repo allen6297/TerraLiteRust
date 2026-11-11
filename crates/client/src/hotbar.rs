@@ -419,6 +419,8 @@ pub struct Hotbar {
     crossbow_loaded: [bool; SLOTS],
     /// How far the held map reaches. `0` is one block per cell.
     map_zoom: u8,
+    /// Cartography lock — chart / scroll zoom refuses while set.
+    map_locked: bool,
     /// `1` after the first campfire Enter. The next Enter finishes the cook.
     camp_heat: u8,
     /// Anvil custom names keyed by hotbar slot (cleared when the slot empties).
@@ -445,6 +447,7 @@ impl Hotbar {
             offhand: None,
             crossbow_loaded: [false; SLOTS],
             map_zoom: 0,
+            map_locked: false,
             camp_heat: 0,
             labels: [const { None }; SLOTS],
         }
@@ -453,6 +456,24 @@ impl Hotbar {
     /// How far the held map reaches. `0` is one block per cell.
     pub fn map_zoom(&self) -> u8 {
         self.map_zoom
+    }
+
+    /// True when cartography locked the chart scale.
+    pub fn map_locked(&self) -> bool {
+        self.map_locked
+    }
+
+    /// Paper stacks on the bar (cartography clone / widen fuel).
+    pub fn map_paper(&self) -> u16 {
+        let mut n = 0u16;
+        for slot in &self.slots {
+            if let Some(item) = slot {
+                if item.id == "paper" {
+                    n = n.saturating_add(item.count);
+                }
+            }
+        }
+        n
     }
 
     /// `1` through `9` and `10` (key 0) select a slot. Other digits do nothing.
@@ -1628,12 +1649,16 @@ impl Hotbar {
     ///
     /// `"wider"` steps out once. `"widest"` is the far chart, left as it is.
     /// `"need a map"` is anything that is not the selected map.
+    /// `"locked"` refuses while [`Self::map_locked`].
     pub fn chart_map(&mut self) -> &'static str {
         let Some(id) = self.slot(self.selected) else {
             return "need a map";
         };
         if !Pack::builtin().is_map(id) {
             return "need a map";
+        }
+        if self.map_locked {
+            return "locked";
         }
         if self.map_zoom >= crate::map::ZOOM_MAX {
             return "widest";
@@ -1644,11 +1669,54 @@ impl Hotbar {
 
     /// Step the held chart in or out. `wider` covers more land per cell.
     pub fn zoom_map(&mut self, wider: bool) {
+        if self.map_locked {
+            return;
+        }
         if wider {
             self.map_zoom = self.map_zoom.saturating_add(1).min(crate::map::ZOOM_MAX);
         } else {
             self.map_zoom = self.map_zoom.saturating_sub(1);
         }
+    }
+
+    /// Toggle cartography lock on the held map.
+    pub fn lock_map(&mut self) -> &'static str {
+        let Some(id) = self.slot(self.selected) else {
+            return "need a map";
+        };
+        if !Pack::builtin().is_map(id) {
+            return "need a map";
+        }
+        self.map_locked = !self.map_locked;
+        if self.map_locked {
+            "locked"
+        } else {
+            "unlocked"
+        }
+    }
+
+    /// Clone the held map onto the bar, spending one paper.
+    pub fn clone_map(&mut self) -> &'static str {
+        let Some(id) = self.slot(self.selected).map(str::to_string) else {
+            return "need a map";
+        };
+        if !Pack::builtin().is_map(&id) {
+            return "need a map";
+        }
+        if self.map_paper() == 0 {
+            return "need paper";
+        }
+        if !self.room_for(&id) {
+            return "no room";
+        }
+        if !self.consume_one("paper") {
+            return "need paper";
+        }
+        if !self.collect(&id) {
+            let _ = self.collect("paper");
+            return "no room";
+        }
+        "cloned"
     }
 
     /// How fast the held tool breaks `block`. Efficiency doubles a real pick factor.
@@ -3483,6 +3551,22 @@ mod tests {
         bar.select_digit(1);
         assert_eq!(bar.chart_map(), "need a map");
         assert_eq!(bar.map_zoom(), 2);
+    }
+
+    #[test]
+    fn cartography_lock_and_clone_use_paper() {
+        let mut bar = Hotbar::new();
+        bar.select_digit(2);
+        assert!(bar.give_stack("map"));
+        assert_eq!(bar.lock_map(), "locked");
+        assert!(bar.map_locked());
+        assert_eq!(bar.chart_map(), "locked");
+        assert_eq!(bar.lock_map(), "unlocked");
+        assert_eq!(bar.clone_map(), "need paper");
+        assert!(bar.collect("paper"));
+        assert_eq!(bar.clone_map(), "cloned");
+        assert_eq!(bar.map_paper(), 0);
+        assert_eq!(bar.slot(2), Some("map"));
     }
 
     #[test]

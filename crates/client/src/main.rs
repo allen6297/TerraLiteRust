@@ -2672,7 +2672,11 @@ where
                     .ok_or_else(|| "missing value for --shot-hang".to_string())?;
                 parsed.shot_hang = Some(std::path::PathBuf::from(value));
             }
-            "--shot-chart" | "--shot-cartography" | "--shot-map-widen" => {
+            "--shot-chart"
+            | "--shot-cartography"
+            | "--shot-map-widen"
+            | "--shot-cartography-ui"
+            | "--shot-chart-ui" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-chart".to_string())?;
