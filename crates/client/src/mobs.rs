@@ -1740,7 +1740,15 @@ impl Breeze {
 pub fn copper_base(id: &str) -> bool {
     matches!(
         id,
-        "copper_grate" | "copper_chest" | "copper_bulb" | "copper_door" | "copper_trapdoor"
+        "copper_grate"
+            | "copper_chest"
+            | "copper_bulb"
+            | "copper_door"
+            | "copper_trapdoor"
+            | "copper_block"
+            | "exposed_copper"
+            | "weathered_copper"
+            | "oxidized_copper"
     )
 }
 

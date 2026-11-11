@@ -27,6 +27,7 @@ mod dispenser;
 mod hopper;
 mod piston;
 mod redstone;
+mod copper;
 mod hotbar;
 mod item_icon;
 mod jobs;
@@ -441,6 +442,8 @@ struct Args {
     shot_observer: Option<std::path::PathBuf>,
     /// Redstone torch soft invert source, then quit.
     shot_redstone_torch: Option<std::path::PathBuf>,
+    /// Copper oxidation / wax / scrape demo, then quit.
+    shot_copper: Option<std::path::PathBuf>,
     /// Mine-mouth lodestone + linked compass, then quit.
     shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
@@ -729,6 +732,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_comparator: args.shot_comparator,
         shot_observer: args.shot_observer,
         shot_redstone_torch: args.shot_redstone_torch,
+        shot_copper: args.shot_copper,
         shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
@@ -934,6 +938,7 @@ struct App {
     shot_comparator: Option<std::path::PathBuf>,
     shot_observer: Option<std::path::PathBuf>,
     shot_redstone_torch: Option<std::path::PathBuf>,
+    shot_copper: Option<std::path::PathBuf>,
     shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
@@ -1461,6 +1466,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_redstone_torch.take() {
                     state.arm_redstone_torch_shot(path);
                 }
+                if let Some(path) = self.shot_copper.take() {
+                    state.arm_copper_oxidation_shot(path);
+                }
                 if let Some(path) = self.shot_lodestone.take() {
                     state.arm_lodestone_shot(path);
                 }
@@ -1825,6 +1833,7 @@ where
         shot_comparator: None,
         shot_observer: None,
         shot_redstone_torch: None,
+        shot_copper: None,
         shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
@@ -2811,6 +2820,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-redstone-torch".to_string())?;
                 parsed.shot_redstone_torch = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-copper" | "--shot-copper-oxidation" | "--shot-oxidation" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-copper".to_string())?;
+                parsed.shot_copper = Some(std::path::PathBuf::from(value));
             }
             "--shot-lodestone" | "--shot-compass-link" => {
                 let value = iter

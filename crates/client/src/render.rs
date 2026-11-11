@@ -1344,6 +1344,10 @@ pub struct State {
     piston_told: bool,
     /// Button cells still feeding redstone dust: (cell, seconds left).
     redstone_pulse: Vec<([i32; 3], f32)>,
+    /// Seconds until the next nearby copper oxidation roll.
+    copper_oxide_wait: f32,
+    /// One tip when copper first ages / waxes / scrapes this session.
+    copper_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2730,6 +2734,8 @@ impl State {
             piston_pulse: Vec::new(),
             piston_told: false,
             redstone_pulse: Vec::new(),
+            copper_oxide_wait: crate::copper::OXIDE_PERIOD,
+            copper_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9415,6 +9421,132 @@ impl State {
         true
     }
 
+
+    fn try_wax_copper(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !crate::copper::is_honeycomb(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        let Some(next) = crate::copper::wax(block) else {
+            self.gui.push_chat("need copper");
+            return true;
+        };
+        let slot = self.hotbar.selected();
+        self.hotbar.consume_at(slot);
+        self.send_places_batch(&[CellChange {
+            x: hit.block[0],
+            y: hit.block[1],
+            z: hit.block[2],
+            block: next,
+        }]);
+        let mote = [
+            hit.block[0] as f32 + 0.5,
+            hit.block[1] as f32 + 1.05,
+            hit.block[2] as f32 + 0.5,
+        ];
+        self.drops.puff(mote, [0.95, 0.78, 0.25]);
+        self.rebuild_drops();
+        self.hotbar_dirty = true;
+        self.gui.push_chat("wax");
+        if !self.copper_told {
+            self.copper_told = true;
+            self.gui.push_chat("copper");
+        }
+        true
+    }
+
+    fn try_scrape_copper(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !crate::copper::is_axe(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let block = self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2]);
+        let Some((next, tip)) = crate::copper::scrape(block) else {
+            self.gui.push_chat("need copper");
+            return true;
+        };
+        let slot = self.hotbar.selected();
+        if !self.hotbar.wear_use(slot) {
+            self.gui.push_chat("broken");
+            return true;
+        }
+        self.send_places_batch(&[CellChange {
+            x: hit.block[0],
+            y: hit.block[1],
+            z: hit.block[2],
+            block: next,
+        }]);
+        let mote = [
+            hit.block[0] as f32 + 0.5,
+            hit.block[1] as f32 + 1.05,
+            hit.block[2] as f32 + 0.5,
+        ];
+        self.drops.puff(mote, [0.55, 0.62, 0.48]);
+        self.rebuild_drops();
+        self.hotbar_dirty = true;
+        self.gui.push_chat(tip);
+        if !self.copper_told {
+            self.copper_told = true;
+            self.gui.push_chat("copper");
+        }
+        if self.hotbar.slot(slot).is_none() {
+            self.gui.push_chat("the axe breaks");
+        }
+        true
+    }
+
+    fn tick_copper_oxide(&mut self, dt: f32) {
+        if self.told_disconnect {
+            return;
+        }
+        self.copper_oxide_wait -= dt;
+        if self.copper_oxide_wait > 0.0 {
+            return;
+        }
+        self.copper_oxide_wait = crate::copper::OXIDE_PERIOD;
+        let focus = [
+            self.camera.eye.x.floor() as i32,
+            self.camera.eye.y.floor() as i32,
+            self.camera.eye.z.floor() as i32,
+        ];
+        let Some((at, next)) =
+            crate::copper::plan_age(&self.world, focus, crate::copper::OXIDE_RADIUS)
+        else {
+            return;
+        };
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: next,
+        }]);
+        if !self.copper_told {
+            self.copper_told = true;
+            self.gui.push_chat("oxidize");
+        }
+    }
+
     /// Till dirt or grass into farmland with a hoe. True when holding a hoe.
     fn try_till(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -13908,6 +14040,8 @@ impl State {
             || self.try_plant_seeds()
             || self.try_till()
             || self.try_fertilize()
+            || self.try_wax_copper()
+            || self.try_scrape_copper()
         {
             return;
         }
@@ -22802,6 +22936,141 @@ impl State {
         self.redstone_powered.insert([cx + 3, y, cz]);
         self.gui.age_chat(60.0);
         self.gui.push_chat("redstone torch");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+
+    /// Four copper stages + waxed + axe scrape demo, then quit.
+    pub fn arm_copper_oxidation_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 8) {
+            for z in (cz - 1)..=(cz + 2) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+                changes.push(CellChange {
+                    x,
+                    y: y + 1,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: crate::copper::make_copper(0, false),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: crate::copper::make_copper(1, false),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: crate::copper::make_copper(2, false),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz,
+                block: crate::copper::make_copper(3, false),
+            },
+            CellChange {
+                x: cx + 5,
+                y,
+                z: cz,
+                block: crate::copper::make_copper(1, true),
+            },
+            CellChange {
+                x: cx + 6,
+                y,
+                z: cz,
+                block: crate::copper::make_copper(2, false),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 1)..=(cx + 8) {
+            self.chunk_bake.touch(x, cz);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 2.5, y as f32 + 0.6, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 2.5,
+            y as f32 + 1.35 + body::EYE_HEIGHT,
+            cz as f32 - 5.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("copper_block");
+        let _ = self.hotbar.collect("honeycomb");
+        let _ = self.hotbar.give_stack("iron_axe");
+        let _ = self.hotbar.collect("exposed_copper");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.copper_told = true;
+        self.copper_oxide_wait = crate::copper::OXIDE_PERIOD;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("copper");
+        self.gui.push_chat("oxidize");
+        self.gui.push_chat("wax");
         self.found_thunk = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -31707,6 +31976,7 @@ impl State {
         self.tick_observer_pulse(dt);
         self.tick_torch_burnout(dt);
         self.tick_redstone_delay(dt);
+        self.tick_copper_oxide(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

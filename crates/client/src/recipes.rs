@@ -604,6 +604,8 @@ mod tests {
                 "composter".to_string(),
                 "conduit".to_string(),
                 "copper_bulb".to_string(),
+                "copper_block".to_string(),
+                "honeycomb".to_string(),
 
                 "copper_chest".to_string(),
                 "copper_door".to_string(),
