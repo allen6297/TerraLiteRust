@@ -162,6 +162,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
     stamp_ocean_monument(&mut blocks, chunk_x, chunk_z);
     stamp_stronghold(&mut blocks, chunk_x, chunk_z);
+    stamp_end_pocket(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
@@ -511,7 +512,43 @@ pub const STRONGHOLD_CHEST: (i32, i32) = (STRONGHOLD.0 - 3, STRONGHOLD.1 - 3);
 /// Standing floor of the demo stronghold portal room.
 pub const STRONGHOLD_FLOOR: u16 = 3;
 
+/// Frame offsets around [`STRONGHOLD`] for the 12-slot end-portal ring.
+pub const STRONGHOLD_FRAMES: [(i32, i32); 12] = [
+    (-1, -2),
+    (0, -2),
+    (1, -2),
+    (2, -1),
+    (2, 0),
+    (2, 1),
+    (1, 2),
+    (0, 2),
+    (-1, 2),
+    (-2, 1),
+    (-2, 0),
+    (-2, -1),
+];
+
+/// Standing cell in the stronghold portal pit once the ring opens.
+pub const STRONGHOLD_PORTAL_IN: (i32, i32) = STRONGHOLD;
+
 const STRONGHOLD_CHUNK: (i32, i32) = (1, -1);
+
+/// End pocket south of the stronghold — obsidian platform over the void.
+///
+/// The chunk is `(1, -3)`. Reached by walking into a completed end portal.
+/// Small return portal on the pad brings you back to the stronghold.
+pub const END_PAD: (i32, i32) = (24, -40);
+
+/// Standing cell on the End platform (beside the return portal).
+pub const END_PORTAL_IN: (i32, i32) = (END_PAD.0, END_PAD.1 + 1);
+
+/// Return end-portal block on the End platform.
+pub const END_RETURN: (i32, i32) = END_PAD;
+
+/// Obsidian platform floor in the End pocket.
+pub const END_FLOOR: u16 = 16;
+
+const END_CHUNK: (i32, i32) = (1, -3);
 
 /// Ruined village plaza north of the demo pad.
 ///
@@ -865,6 +902,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | WRECK_CHUNK
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
+            | END_CHUNK
             | VILLAGE_CHUNK
             | NETHER_CHUNK
             | (0, 0)
@@ -1353,24 +1391,12 @@ fn stamp_stronghold(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_
         }
     }
     // Incomplete 12-frame ring. North row + one east slot already hold eyes.
-    let frames: [((i32, i32), bool); 12] = [
-        ((-1, -2), true),
-        ((0, -2), true),
-        ((1, -2), true),
-        ((2, -1), true),
-        ((2, 0), false),
-        ((2, 1), false),
-        ((1, 2), false),
-        ((0, 2), false),
-        ((-1, 2), false),
-        ((-2, 1), false),
-        ((-2, 0), false),
-        ((-2, -1), false),
-    ];
-    for &((dx, dz), has_eye) in &frames {
+    for (index, &(dx, dz)) in STRONGHOLD_FRAMES.iter().enumerate() {
         let lx = (cx + dx - chunk_x * 16) as u8;
         let lz = (cz + dz - chunk_z * 16) as u8;
         blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor));
+        // First four slots start eyed for the demo.
+        let has_eye = index < 4;
         blocks.push((lx, floor, lz, if has_eye { eyed } else { empty }));
     }
     // Corner chest + torch so the hall reads in a still.
@@ -1380,6 +1406,42 @@ fn stamp_stronghold(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_
     let torch_lx = (cx + 3 - chunk_x * 16) as u8;
     let torch_lz = (cz - 3 - chunk_z * 16) as u8;
     blocks.push((torch_lx, floor, torch_lz, Block::new("torch", 0)));
+}
+
+/// Obsidian platform over empty void + return end portal. Guaranteed in [`END_CHUNK`].
+fn stamp_end_pocket(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != END_CHUNK {
+        return;
+    }
+    let (cx, cz) = END_PAD;
+    let floor = END_FLOOR;
+    let obsidian = Block::new("obsidian", 0);
+    let end_stone = Block::new("end_stone", 0);
+    let portal = Block::new("end_portal", 0);
+    // Clear the whole column so the pocket reads as void around the pad.
+    for lz in 0..16u8 {
+        for lx in 0..16u8 {
+            blocks.retain(|(x, _y, z, _)| !(*x == lx && *z == lz));
+        }
+    }
+    // 5×5 obsidian platform with end-stone rim accents.
+    for dz in -2i32..=2 {
+        for dx in -2i32..=2 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            let rim = dx.abs() == 2 || dz.abs() == 2;
+            blocks.push((lx, floor, lz, if rim { end_stone } else { obsidian }));
+        }
+    }
+    // Return portal in the platform center — walk through to leave the End.
+    let ret_lx = (END_RETURN.0 - chunk_x * 16) as u8;
+    let ret_lz = (END_RETURN.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == ret_lx && *z == ret_lz && *y == floor + 1));
+    blocks.push((ret_lx, floor + 1, ret_lz, portal));
+    // End rod so the pad has a light anchor in the void.
+    let rod_lx = (cx + 2 - chunk_x * 16) as u8;
+    let rod_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((rod_lx, floor + 1, rod_lz, Block::new("end_rod", 0)));
 }
 
 /// Ruined plaza + three house shells + well. Guaranteed in [`VILLAGE_CHUNK`].
@@ -1398,6 +1460,7 @@ fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, c
             | WRECK_CHUNK
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
+            | END_CHUNK
             | (0, 0)
     );
     if !guaranteed {
@@ -2564,6 +2627,41 @@ mod tests {
         assert_ne!(STRONGHOLD_CHUNK, CAMP_CHUNK);
         assert_ne!(STRONGHOLD_CHUNK, SHAFT_CHUNK);
         assert_ne!(STRONGHOLD_CHUNK, MONUMENT_CHUNK);
+        assert_ne!(STRONGHOLD_CHUNK, END_CHUNK);
+    }
+
+    #[test]
+    fn an_end_pocket_holds_a_return_portal_south_of_the_stronghold() {
+        let pocket = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+        let (cx, cz) = END_PAD;
+        let lx = (cx - END_CHUNK.0 * 16) as u8;
+        let lz = (cz - END_CHUNK.1 * 16) as u8;
+        let floor = END_FLOOR;
+        assert_eq!(
+            pocket.block(lx, floor, lz).id,
+            "obsidian",
+            "pad center is obsidian"
+        );
+        assert_eq!(
+            pocket.block(lx + 2, floor, lz).id,
+            "end_stone",
+            "rim accents are end stone"
+        );
+        assert_eq!(
+            pocket.block(lx, floor + 1, lz).id,
+            "end_portal",
+            "return portal on the pad"
+        );
+        assert_eq!((cx, cz + 1), END_PORTAL_IN, "standing cell beside return");
+        assert_eq!((cx, cz), END_RETURN, "return portal cell");
+        assert_eq!(
+            pocket.block(lx + 2, floor + 1, lz).id,
+            "end_rod",
+            "rod lights the void pad"
+        );
+        assert_ne!(END_CHUNK, STRONGHOLD_CHUNK);
+        assert_ne!(END_CHUNK, NETHER_CHUNK);
+        assert_ne!(END_CHUNK, PORTAL_CHUNK);
     }
 
     #[test]

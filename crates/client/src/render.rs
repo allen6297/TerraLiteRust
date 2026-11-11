@@ -5961,7 +5961,7 @@ impl State {
         self.gui.push_chat("step through");
     }
 
-    /// Walk into a purple plane to hop between the ruined portal and the nether pocket.
+    /// Walk into a portal plane to hop between overworld / nether / End pockets.
     fn try_portal_travel(&mut self, dt: f32) {
         if self.portal_cool > 0.0 {
             self.portal_cool = (self.portal_cool - dt).max(0.0);
@@ -5974,6 +5974,23 @@ impl State {
         if self.portal_shot_path.is_some() || self.cook_shot_path.is_some() {
             return;
         }
+        // Void below the End platform dumps you back to the overworld stairs.
+        let (ex, ez) = rebuild_world::END_PAD;
+        let end_floor = i32::from(rebuild_world::END_FLOOR);
+        if (self.camera.eye.x.floor() as i32 - ex).abs() <= 8
+            && (self.camera.eye.z.floor() as i32 - ez).abs() <= 8
+            && self.camera.eye.y < end_floor as f32 - 2.5
+        {
+            let eye = crate::camera::Camera::drop_by_the_stairs().eye;
+            self.camera.eye = eye;
+            self.camera.velocity_y = 0.0;
+            self.posed_eye = eye;
+            self.pose_dirty = true;
+            self.wanted_focus = chunk_of(eye);
+            self.portal_cool = 2.5;
+            self.gui.push_chat("the void takes you");
+            return;
+        }
         let feet = [
             self.camera.eye.x.floor() as i32,
             (self.camera.eye.y - body::EYE_HEIGHT + 0.1).floor() as i32,
@@ -5981,23 +5998,46 @@ impl State {
         ];
         let id = self.world.block_at(feet[0], feet[1], feet[2]).id;
         let id_up = self.world.block_at(feet[0], feet[1] + 1, feet[2]).id;
-        if id != "nether_portal" && id_up != "nether_portal" {
+        let in_nether = id == "nether_portal" || id_up == "nether_portal";
+        let in_end = id == "end_portal" || id_up == "end_portal";
+        if !in_nether && !in_end {
             return;
         }
         let (ox, oz) = rebuild_world::RUINED_PORTAL_IN;
         let (nx, nz) = rebuild_world::NETHER_PORTAL_IN;
-        let to_nether = (feet[0] - ox).abs() <= 2 && (feet[2] - oz).abs() <= 2;
-        let to_over = (feet[0] - nx).abs() <= 2 && (feet[2] - nz).abs() <= 2;
-        if !to_nether && !to_over {
+        let (sx, sz) = rebuild_world::STRONGHOLD_PORTAL_IN;
+        let (ex_in, ez_in) = rebuild_world::END_PORTAL_IN;
+        let (erx, erz) = rebuild_world::END_RETURN;
+        let to_nether = in_nether && (feet[0] - ox).abs() <= 2 && (feet[2] - oz).abs() <= 2;
+        let to_over_nether = in_nether && (feet[0] - nx).abs() <= 2 && (feet[2] - nz).abs() <= 2;
+        let to_end = in_end && (feet[0] - sx).abs() <= 2 && (feet[2] - sz).abs() <= 2;
+        let to_over_end = in_end
+            && ((feet[0] - erx).abs() <= 1 && (feet[2] - erz).abs() <= 1
+                || (feet[0] - ex_in).abs() <= 1 && (feet[2] - ez_in).abs() <= 1);
+        if !to_nether && !to_over_nether && !to_end && !to_over_end {
             return;
         }
-        let (tx, tz, tip) = if to_nether {
+        let (tx, tz, tip, stand_south) = if to_nether {
             let _ = self
                 .world
                 .replace_chunk(rebuild_world::generate_chunk(-2, -3));
-            (nx, nz, "the nether")
+            (nx, nz, "the nether", true)
+        } else if to_over_nether {
+            (ox, oz, "overworld", true)
+        } else if to_end {
+            let _ = self.world.replace_chunk(rebuild_world::generate_chunk(1, -3));
+            (ex_in, ez_in, "the end", false)
         } else {
-            (ox, oz, "overworld")
+            let _ = self
+                .world
+                .replace_chunk(rebuild_world::generate_chunk(1, -1));
+            // Re-light the stronghold plane if the chunk regenerated empty.
+            if self.world.block_at(sx, i32::from(rebuild_world::STRONGHOLD_FLOOR), sz).id
+                != "end_portal"
+            {
+                self.light_end_portal();
+            }
+            (sx, sz + 3, "overworld", false)
         };
         let mut ty = 5;
         for y in (0..80).rev() {
@@ -6005,18 +6045,20 @@ impl State {
             let here = self.world.block_at(tx, y + 1, tz).id;
             if under != "air"
                 && under != "nether_portal"
+                && under != "end_portal"
                 && under != "lava"
-                && (here == "air" || here == "nether_portal")
+                && (here == "air" || here == "nether_portal" || here == "end_portal")
             {
                 ty = y + 1;
                 break;
             }
         }
-        // Stand just south of the plane so we don't immediately re-enter.
+        // Stand just off the plane so we don't immediately re-enter.
+        let z_off = if stand_south { 1.6 } else { 0.5 };
         let eye = glam::Vec3::new(
             tx as f32 + 0.5,
             ty as f32 + body::EYE_HEIGHT,
-            tz as f32 + 1.6,
+            tz as f32 + z_off,
         );
         self.camera.eye = eye;
         self.camera.velocity_y = 0.0;
@@ -9372,6 +9414,61 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Completed end portal over the stronghold lava pit, then quit with a PNG.
+    pub fn arm_end_portal_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (cx, cz) = rebuild_world::STRONGHOLD;
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -1));
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.light_end_portal();
+        self.found_stronghold = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a stronghold");
+        self.gui.push_chat("portal opens");
+
+        let floor = i32::from(rebuild_world::STRONGHOLD_FLOOR);
+        let focus = glam::Vec3::new(cx as f32 + 0.5, floor as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            floor as f32 + 1.65,
+            cz as f32 + 3.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("eye_of_ender");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -25531,6 +25628,8 @@ impl State {
                 }
                 let slot = self.hotbar.selected();
                 let beside = filled_beside(&self.world, at);
+                let opens = stronghold_frame_cell(at)
+                    && stronghold_eyes_filled(&self.world) >= 11;
                 let (min, max) = body::player_box_bounds(self.camera.eye);
                 self.send_edit(
                     encode_place(
@@ -25543,9 +25642,69 @@ impl State {
                     TAG_PLACE,
                     Some(slot),
                 );
-                self.gui.push_chat(ring_word(beside));
+                // Optimistic local set so the ring check can open the plane now.
+                apply_changes(
+                    &mut self.world,
+                    &[CellChange {
+                        x: at[0],
+                        y: at[1],
+                        z: at[2],
+                        block: Block::new("end_portal_frame", 1),
+                    }],
+                );
+                self.chunk_bake.touch(at[0], at[2]);
+                if opens {
+                    self.light_end_portal();
+                } else {
+                    self.gui.push_chat(ring_word(beside));
+                }
             }
         }
+    }
+
+    /// Fill the stronghold pit with black portal planes and ensure the End pocket.
+    fn light_end_portal(&mut self) {
+        let (cx, cz) = rebuild_world::STRONGHOLD;
+        let floor = i32::from(rebuild_world::STRONGHOLD_FLOOR);
+        let mut changes = Vec::new();
+        for &(dx, dz) in &rebuild_world::STRONGHOLD_FRAMES {
+            changes.push(CellChange {
+                x: cx + dx,
+                y: floor,
+                z: cz + dz,
+                block: Block::new("end_portal_frame", 1),
+            });
+        }
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: floor,
+                    z: cz + dz,
+                    block: Block::new("end_portal", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        let _ = self.world.replace_chunk(rebuild_world::generate_chunk(1, -3));
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(
+                    rebuild_world::END_PAD.0 + dx * 8,
+                    rebuild_world::END_PAD.1 + dz * 8,
+                );
+            }
+        }
+        let source = [cx as f32 + 0.5, floor as f32 + 0.7, cz as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Place, source);
+        self.drops.puff(source, [0.12, 0.05, 0.22]);
+        self.rebuild_drops();
+        self.found_stronghold = true;
+        self.gui.push_chat("portal opens");
+        self.gui.push_chat("step through");
     }
 
     fn plant_pot(&mut self, at: [i32; 3], metadata: u8) {
@@ -28760,6 +28919,20 @@ impl State {
             fog_start = fog_start * (1.0 - sub) + 1.5 * sub;
             fog_end = fog_end * (1.0 - sub) + 14.0 * sub;
         }
+        // End pocket: black-void fog while standing near the obsidian pad.
+        let (ex, ez) = rebuild_world::END_PAD;
+        let end_dx = self.camera.eye.x - (ex as f32 + 0.5);
+        let end_dz = self.camera.eye.z - (ez as f32 + 0.5);
+        if end_dx * end_dx + end_dz * end_dz < 18.0 * 18.0 {
+            let void_sky = [0.02, 0.01, 0.04];
+            let void_fog = [0.04, 0.02, 0.08];
+            for i in 0..3 {
+                sky_rgb[i] = void_sky[i];
+                horizon[i] = void_fog[i];
+            }
+            fog_start = 2.0;
+            fog_end = 28.0;
+        }
         let fog_eye = [eye[0], eye[1], eye[2], fog_start];
         let fog_color = [horizon[0], horizon[1], horizon[2], fog_end];
         self.queue
@@ -30149,6 +30322,32 @@ fn ring_word(filled_beside: u8) -> &'static str {
     } else {
         "the eye sets"
     }
+}
+
+/// True when `at` is one of the twelve stronghold frame cells.
+fn stronghold_frame_cell(at: [i32; 3]) -> bool {
+    let (cx, cz) = rebuild_world::STRONGHOLD;
+    let floor = i32::from(rebuild_world::STRONGHOLD_FLOOR);
+    if at[1] != floor {
+        return false;
+    }
+    rebuild_world::STRONGHOLD_FRAMES
+        .iter()
+        .any(|&(dx, dz)| at[0] == cx + dx && at[2] == cz + dz)
+}
+
+/// How many stronghold ring frames already hold an eye.
+fn stronghold_eyes_filled(world: &Cluster) -> u8 {
+    let (cx, cz) = rebuild_world::STRONGHOLD;
+    let floor = i32::from(rebuild_world::STRONGHOLD_FLOOR);
+    let mut count = 0u8;
+    for &(dx, dz) in &rebuild_world::STRONGHOLD_FRAMES {
+        let block = world.block_at(cx + dx, floor, cz + dz);
+        if block.id == "end_portal_frame" && block.metadata & 1 == 1 {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Planting spends a held flower. A full pot stays full.
@@ -32122,6 +32321,31 @@ mod tests {
         let world = Cluster::try_from_chunks(0, 0, [chunk]).unwrap();
         assert_eq!(super::filled_beside(&world, [2, 1, 2]), 2);
         assert_eq!(super::filled_beside(&world, [1, 1, 2]), 0);
+    }
+
+    #[test]
+    fn a_full_stronghold_ring_is_twelve_eyed_frames() {
+        use rebuild_world::{Block, Chunk, Cluster, STRONGHOLD, STRONGHOLD_FLOOR, STRONGHOLD_FRAMES};
+        let (cx, cz) = STRONGHOLD;
+        let floor = STRONGHOLD_FLOOR;
+        let chunk_x = cx.div_euclid(16);
+        let chunk_z = cz.div_euclid(16);
+        let mut blocks = Vec::new();
+        for &(dx, dz) in &STRONGHOLD_FRAMES {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.push((lx, floor, lz, Block::new("end_portal_frame", 1)));
+        }
+        let chunk = Chunk::from_blocks(chunk_x, chunk_z, blocks).unwrap();
+        let world = Cluster::try_from_chunks(chunk_x, chunk_z, [chunk]).unwrap();
+        let first = STRONGHOLD_FRAMES[0];
+        assert!(super::stronghold_frame_cell([
+            cx + first.0,
+            i32::from(floor),
+            cz + first.1
+        ]));
+        assert!(!super::stronghold_frame_cell([cx, i32::from(floor) + 1, cz]));
+        assert_eq!(super::stronghold_eyes_filled(&world), 12);
     }
 
     #[test]
