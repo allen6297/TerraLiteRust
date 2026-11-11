@@ -456,6 +456,7 @@ mod tests {
             "assets/terralite/textures/soul_sand.png",
             "assets/terralite/textures/magma.png",
             "assets/terralite/textures/netherrack.png",
+            "assets/terralite/textures/ancient_debris.png",
             "assets/terralite/textures/end_stone.png",
             "assets/terralite/textures/end_portal_frame.png",
             "assets/terralite/textures/dragon_egg.png",

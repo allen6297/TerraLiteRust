@@ -52,6 +52,12 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "polished_deepslate" => [0.42, 0.42, 0.48],
         "coal_ore" => [0.22, 0.22, 0.24],
         "iron_ore" => [0.72, 0.58, 0.48],
+        "ancient_debris" => [0.42, 0.22, 0.18],
+        "netherite_scrap" => [0.48, 0.28, 0.24],
+        "netherite_ingot" => [0.32, 0.28, 0.30],
+        "netherite_pickaxe" => [0.28, 0.24, 0.26],
+        "netherite_helmet" => [0.30, 0.26, 0.28],
+        "gold_ingot" => [0.92, 0.78, 0.28],
         "emerald_ore" => [0.28, 0.55, 0.36],
         "grass" => match metadata {
             1 => [0.14, 0.46, 0.22],

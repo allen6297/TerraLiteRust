@@ -3087,7 +3087,7 @@ impl Pack {
     /// How much faster `held` breaks `block`. `1` is a bare hand.
     ///
     /// A pickaxe speeds stone, smooth stone, quartz, sea lantern, prismarine, dark prismarine, prismarine bricks, stone bricks, cracked stone bricks, mossy stone bricks, chiseled stone bricks, sandstone, red sandstone, cobble, ores, deepslate, deepslate bricks, deepslate tiles, cracked deepslate tiles, cobbled deepslate, polished deepslate, blackstone, polished blackstone, blackstone bricks, cracked blackstone bricks, chiseled blackstone, gilded blackstone, basalt, polished basalt, smooth basalt, nether bricks, cracked nether bricks, red nether bricks, chiseled nether bricks, netherrack, end stone, end stone bricks, purpur, purpur pillar, and the furnace.
-    /// Wood is 2, stone is 4, iron is 6, diamond is 8. Dirt, grass, and wood stay at 1.
+    /// Wood is 2, stone is 4, iron is 6, diamond is 8, netherite is 10. Dirt, grass, and wood stay at 1.
     pub fn mine_factor(&self, held: &str, block: &str) -> f32 {
         let Some(tool) = self.tools.iter().find(|tool| tool.id == held) else {
             return 1.0;
@@ -3100,6 +3100,7 @@ impl Pack {
             2 => 4.0,
             3 => 6.0,
             4 => 8.0,
+            5 => 10.0,
             _ => 1.0,
         }
     }
@@ -3364,6 +3365,7 @@ fn pick_block(id: &str) -> bool {
             | "coal_ore"
             | "iron_ore"
             | "emerald_ore"
+            | "ancient_debris"
             | "deepslate"
             | "deepslate_bricks"
             | "cobbled_deepslate"
@@ -4111,6 +4113,7 @@ fn parse_tool(id: &str, obj: &serde_json::Map<String, Value>) -> Result<ToolDef,
         Some("stone") => 2,
         Some("iron") => 3,
         Some("diamond") => 4,
+        Some("netherite") => 5,
         Some(other) => return Err(format!("{id}.json tier {other} is unknown")),
         None => return Err(format!("{id}.json needs a tier")),
     };
@@ -7504,6 +7507,11 @@ mod tests {
         assert_eq!(pack.mine_factor("diamond_pickaxe", "stone"), 8.0);
         assert_eq!(pack.mine_factor("diamond_pickaxe", "dirt"), 1.0);
         assert_eq!(pack.tool_icon("diamond_pickaxe"), Some("quartz"));
+        assert_eq!(pack.tool_uses("netherite_pickaxe"), 64);
+        assert_eq!(pack.mine_factor("netherite_pickaxe", "ancient_debris"), 10.0);
+        assert_eq!(pack.tool_icon("netherite_pickaxe"), Some("ancient_debris"));
+        assert_eq!(pack.hardness_of(Block::new("ancient_debris", 0)), Some(5.0));
+        assert_eq!(pack.armor_of("netherite_helmet"), Some((0, 2)));
         assert_eq!(pack.tool_uses("apple"), 0);
         assert_eq!(pack.tool_icon("wooden_pickaxe"), Some("oak_log"));
         assert!(pack.tool_ids().contains(&"iron_pickaxe".to_string()));

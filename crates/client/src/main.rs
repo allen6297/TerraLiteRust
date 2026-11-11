@@ -329,6 +329,8 @@ struct Args {
     shot_shulker_box: Option<std::path::PathBuf>,
     /// End chorus grove with fruit blink, then quit.
     shot_chorus_fruit: Option<std::path::PathBuf>,
+    /// Nether ancient debris / netherite line, then quit.
+    shot_ancient_debris: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
     shot_wreck_heart: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
@@ -631,6 +633,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_shulker: args.shot_shulker,
         shot_shulker_box: args.shot_shulker_box,
         shot_chorus_fruit: args.shot_chorus_fruit,
+        shot_ancient_debris: args.shot_ancient_debris,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
@@ -809,6 +812,7 @@ struct App {
     shot_shulker: Option<std::path::PathBuf>,
     shot_shulker_box: Option<std::path::PathBuf>,
     shot_chorus_fruit: Option<std::path::PathBuf>,
+    shot_ancient_debris: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
@@ -1218,6 +1222,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_chorus_fruit.take() {
                     state.arm_chorus_fruit_shot(path);
                 }
+                if let Some(path) = self.shot_ancient_debris.take() {
+                    state.arm_ancient_debris_shot(path);
+                }
                 if let Some(path) = self.shot_wreck_heart.take() {
                     state.arm_shipwreck_heart_shot(path);
                 }
@@ -1616,6 +1623,7 @@ where
         shot_shulker: None,
         shot_shulker_box: None,
         shot_chorus_fruit: None,
+        shot_ancient_debris: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
         shot_axolotl: None,
@@ -2317,6 +2325,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-chorus-fruit".to_string())?;
                 parsed.shot_chorus_fruit = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-ancient-debris" | "--shot-netherite" | "--shot-debris" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-ancient-debris".to_string())?;
+                parsed.shot_ancient_debris = Some(std::path::PathBuf::from(value));
             }
             "--shot-wreck-heart" | "--shot-shipwreck-heart" | "--shot-heart" => {
                 let value = iter
@@ -3099,6 +3113,17 @@ mod tests {
         assert_eq!(
             args.shot_chorus_fruit.as_deref(),
             Some(std::path::Path::new("chorus-fruit.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-ancient-debris".into(),
+            "ancient-debris.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_ancient_debris.as_deref(),
+            Some(std::path::Path::new("ancient-debris.png"))
         );
     }
 }

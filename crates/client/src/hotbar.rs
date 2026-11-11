@@ -83,6 +83,7 @@ fn blast_result(id: &str) -> Option<&'static str> {
         "stone" => Some("smooth_stone"),
         "stone_bricks" => Some("cracked_stone_bricks"),
         "netherrack" => Some("nether_bricks"),
+        "ancient_debris" => Some("netherite_scrap"),
         _ => None,
     }
 }
@@ -1009,8 +1010,9 @@ impl Hotbar {
 
     /// The held item Enter would upgrade, when its payment is in the bar.
     ///
-    /// A stone or iron pick needs iron ore. A mace needs a heavy core. A diamond
-    /// pick, a heavy mace, or a missing payment returns `None`.
+    /// A stone or iron pick needs iron ore. A diamond pick needs a netherite
+    /// ingot. A mace needs a heavy core. A netherite pick, a heavy mace, or a
+    /// missing payment returns `None`.
     pub fn smith_target(&self) -> Option<&'static str> {
         let item = self.item(self.selected)?;
         let paid = match item.id {
@@ -1018,6 +1020,9 @@ impl Hotbar {
                 .slots
                 .iter()
                 .any(|slot| slot.is_some_and(|item| item.id == "iron_ore" && item.count > 0)),
+            "diamond_pickaxe" => self.slots.iter().any(|slot| {
+                slot.is_some_and(|item| item.id == "netherite_ingot" && item.count > 0)
+            }),
             "mace" => self
                 .slots
                 .iter()
@@ -1027,11 +1032,12 @@ impl Hotbar {
         if paid { Some(item.id) } else { None }
     }
 
-    /// Upgrade the selected pick. One iron ore pays for it.
+    /// Upgrade the selected pick. Iron ore pays stone→iron→diamond; a netherite
+    /// ingot pays diamond→netherite.
     ///
-    /// `"iron"` turns a stone pick into iron. `"diamond"` turns iron into the
-    /// stronger stub. `"best"` leaves a diamond pick alone. `"need iron ore"`
-    /// is a stone or iron pick with no ore. `"need a pick"` is anything else.
+    /// `"iron"` / `"diamond"` / `"netherite"` name the upgrade. `"best"` leaves
+    /// a netherite pick alone. `"need iron ore"` / `"need ingot"` name the
+    /// missing payment. `"need a pick"` is anything else.
     pub fn smith_pick(&mut self) -> &'static str {
         let Some(item) = self.item(self.selected) else {
             return "need a pick";
@@ -1042,20 +1048,26 @@ impl Hotbar {
         if item.id == "mace" {
             return self.smith_mace();
         }
-        let (next, word) = match item.id {
-            "stone_pickaxe" => ("iron_pickaxe", "iron"),
-            "iron_pickaxe" => ("diamond_pickaxe", "diamond"),
-            "diamond_pickaxe" => return "best",
+        let (next, word, pay, need) = match item.id {
+            "stone_pickaxe" => ("iron_pickaxe", "iron", "iron_ore", "need iron ore"),
+            "iron_pickaxe" => ("diamond_pickaxe", "diamond", "iron_ore", "need iron ore"),
+            "diamond_pickaxe" => (
+                "netherite_pickaxe",
+                "netherite",
+                "netherite_ingot",
+                "need ingot",
+            ),
+            "netherite_pickaxe" => return "best",
             _ => return "need a pick",
         };
-        let Some(ore) = self
+        let Some(cost) = self
             .slots
             .iter()
-            .position(|slot| slot.is_some_and(|item| item.id == "iron_ore" && item.count > 0))
+            .position(|slot| slot.is_some_and(|item| item.id == pay && item.count > 0))
         else {
-            return "need iron ore";
+            return need;
         };
-        self.consume_at(ore);
+        self.consume_at(cost);
         let next = Block::new(next, 0).id;
         if let Some(slot) = self.slots.get_mut(self.selected) {
             *slot = Some(fresh(next, 1));
@@ -2819,11 +2831,33 @@ mod tests {
         assert_eq!(bar.dig_factor("stone"), 8.0);
         assert_eq!(bar.dig_factor("dirt"), 1.0);
         assert_eq!(bar.smith_target(), None);
-        assert_eq!(bar.smith_pick(), "best");
-        assert_eq!(bar.count(0), 62);
+        assert_eq!(bar.smith_pick(), "need ingot");
         bar.select_digit(3);
+        assert!(bar.give_stack("netherite_ingot"));
+        bar.select_digit(2);
+        assert_eq!(bar.smith_target(), Some("diamond_pickaxe"));
+        assert_eq!(bar.smith_pick(), "netherite");
+        assert_eq!(bar.slot(1), Some("netherite_pickaxe"));
+        assert_eq!(bar.count(1), 64);
+        assert_eq!(bar.dig_factor("ancient_debris"), 10.0);
+        assert_eq!(bar.smith_target(), None);
+        assert_eq!(bar.smith_pick(), "best");
+        bar.select_digit(4);
         assert!(bar.give_stack("wooden_pickaxe"));
         assert_eq!(bar.smith_pick(), "need a pick");
+    }
+
+    #[test]
+    fn a_blast_furnace_turns_ancient_debris_into_netherite_scrap() {
+        let mut bar = Hotbar::new();
+        bar.install_saved(0, &[]);
+        assert_eq!(bar.blast_now(), "need blast");
+        assert!(bar.collect("ancient_debris"));
+        assert!(bar.select_digit(1));
+        assert_eq!(bar.slot(0), Some("ancient_debris"));
+        assert_eq!(bar.blast_now(), "netherite_scrap");
+        assert_eq!(bar.slot(0), Some("netherite_scrap"));
+        assert_eq!(bar.blast_now(), "need blast");
     }
 
     #[test]

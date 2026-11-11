@@ -649,6 +649,7 @@ mod tests {
                 "glowstone".to_string(),
                 "goat_horn".to_string(),
                 "gold_block".to_string(),
+                "gold_ingot".to_string(),
                 "grass".to_string(),
                 "gravel".to_string(),
                 "grindstone".to_string(),
@@ -691,6 +692,9 @@ mod tests {
                 "nether_star".to_string(),
 
                 "nether_wart_block".to_string(),
+                "netherite_helmet".to_string(),
+                "netherite_ingot".to_string(),
+                "netherite_scrap".to_string(),
                 "netherrack".to_string(),
                 "note_block".to_string(),
                 "oak_log".to_string(),
@@ -1147,6 +1151,20 @@ mod tests {
             Some("ender_pearl")
         );
         assert_eq!(
+            book.match_grid(&["gold_block".into()]).as_deref(),
+            Some("gold_ingot")
+        );
+        assert_eq!(
+            book.match_grid(&["netherite_scrap".into(), "gold_ingot".into()])
+                .as_deref(),
+            Some("netherite_ingot")
+        );
+        assert_eq!(
+            book.match_grid(&["netherite_ingot".into(), "leather_cap".into()])
+                .as_deref(),
+            Some("netherite_helmet")
+        );
+        assert_eq!(
             book.match_grid(&["ender_pearl".into(), "glowstone".into()])
                 .as_deref(),
             Some("eye_of_ender")
@@ -1338,6 +1356,7 @@ mod tests {
         let book = load_emi().unwrap();
         assert_eq!(book.smelt("sand").as_deref(), Some("glass"));
         assert_eq!(book.blast("sand").as_deref(), Some("glass"));
+        assert_eq!(book.blast("ancient_debris").as_deref(), Some("netherite_scrap"));
         assert!(book.smoke("sand").is_none());
         let pack = rebuild_world::Pack::builtin();
         pack.set_smelt_recipe(

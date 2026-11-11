@@ -459,6 +459,14 @@ pub const NETHER_FORTRESS_BLAZE: (i32, i32) = (NETHER_PAD.0 - 5, NETHER_PAD.1 - 
 /// Floor under the fortress spur (matches the nether pocket floor).
 pub const NETHER_FORTRESS_FLOOR: u16 = 4;
 
+/// Rare ancient debris embedded in the nether pocket floor (east of the pad).
+///
+/// Blast it for `netherite_scrap`, craft an ingot, then smith diamond gear up.
+pub const NETHER_DEBRIS: (i32, i32) = (NETHER_PAD.0 + 2, NETHER_PAD.1 + 2);
+
+/// Second debris vein west of the pad for a rare read.
+pub const NETHER_DEBRIS_B: (i32, i32) = (NETHER_PAD.0 - 2, NETHER_PAD.1 - 1);
+
 const PORTAL_CHUNK: (i32, i32) = (-2, -2);
 const NETHER_CHUNK: (i32, i32) = (-2, -3);
 
@@ -832,6 +840,14 @@ fn stamp_nether_pocket(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
         let lz = (cz + dz - chunk_z * 16) as u8;
         blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor + 4));
         blocks.push((lx, floor + 4, lz, glow));
+    }
+    // Rare ancient debris in the floor — blast for netherite scrap.
+    let debris = Block::new("ancient_debris", 0);
+    for &(wx, wz) in &[NETHER_DEBRIS, NETHER_DEBRIS_B] {
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (wz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor - 1));
+        blocks.push((lx, floor - 1, lz, debris));
     }
     // Return portal — already lit so the trip home works.
     push_portal_frame(blocks, chunk_x, chunk_z, cx, cz, floor, true);
@@ -2507,6 +2523,23 @@ mod tests {
                 .id,
             "chest"
         );
+    }
+
+    #[test]
+    fn a_nether_pocket_embeds_ancient_debris() {
+        let pocket = generate_chunk(NETHER_CHUNK.0, NETHER_CHUNK.1);
+        let floor = 4u16;
+        for &(wx, wz) in &[NETHER_DEBRIS, NETHER_DEBRIS_B] {
+            let lx = (wx - NETHER_CHUNK.0 * 16) as u8;
+            let lz = (wz - NETHER_CHUNK.1 * 16) as u8;
+            assert_eq!(
+                pocket.block(lx, floor - 1, lz).id,
+                "ancient_debris",
+                "debris at ({wx},{wz})"
+            );
+        }
+        assert_ne!(NETHER_DEBRIS, NETHER_PAD);
+        assert_ne!(NETHER_DEBRIS_B, NETHER_DEBRIS);
     }
 
     #[test]

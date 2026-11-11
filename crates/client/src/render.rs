@@ -1717,6 +1717,8 @@ pub struct State {
     found_end_city: bool,
     /// Once: walked up to the End chorus grove east of the pad.
     found_chorus: bool,
+    /// Once: found ancient debris in the nether pocket floor.
+    found_debris: bool,
 
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
@@ -2913,6 +2915,7 @@ impl State {
             found_end: false,
             found_end_city: false,
             found_chorus: false,
+            found_debris: false,
             nether_star_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
@@ -7344,6 +7347,12 @@ impl State {
             self.found_chorus = true;
             self.gui.push_chat("chorus");
         }
+        if !self.found_debris
+            && near(rebuild_world::NETHER_DEBRIS.0, rebuild_world::NETHER_DEBRIS.1)
+        {
+            self.found_debris = true;
+            self.gui.push_chat("ancient debris");
+        }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
         {
@@ -9799,6 +9808,91 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Nether pocket ancient debris ready to blast, then quit with a PNG.
+    pub fn arm_ancient_debris_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (dx, dz) = rebuild_world::NETHER_DEBRIS;
+        let floor = 4i32;
+        // Lift the buried vein so the still reads the ore.
+        let changes = [
+            CellChange {
+                x: dx,
+                y: floor,
+                z: dz,
+                block: Block::new("ancient_debris", 0),
+            },
+            CellChange {
+                x: dx,
+                y: floor + 1,
+                z: dz,
+                block: Block::AIR,
+            },
+            CellChange {
+                x: dx + 1,
+                y: floor,
+                z: dz,
+                block: Block::new("blast_furnace", 0),
+            },
+        ];
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.found_debris = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("ancient debris");
+        self.gui.push_chat("netherite");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("ancient_debris");
+        let _ = self.hotbar.collect("netherite_scrap");
+        let _ = self.hotbar.collect("netherite_ingot");
+        let _ = self.hotbar.collect("diamond_pickaxe");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        let focus = glam::Vec3::new(dx as f32 + 0.5, floor as f32 + 0.55, dz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            dx as f32 + 0.5,
+            floor as f32 + 0.35 + body::EYE_HEIGHT,
+            dz as f32 - 2.8,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for ox in -1..=1 {
+            for oz in -1..=1 {
+                self.chunk_bake.touch(dx + ox * 8, dz + oz * 8);
             }
         }
         let _ = self.window.focus_window();
