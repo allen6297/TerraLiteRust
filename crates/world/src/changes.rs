@@ -193,6 +193,7 @@ pub fn read_chests(path: &Path) -> Result<Vec<StoredChest>, String> {
 /// Add an empty chest when that cell has none. An existing chest is left alone.
 ///
 /// An ender chest keeps one personal store, shared by every ender chest.
+/// A shulker box restores the oldest held fill from a broken box, if any.
 pub fn ensure_chest(path: &Path, x: i32, y: i32, z: i32, id: &str) -> Result<(), String> {
     if id == "ender_chest" {
         return ensure_ender_chest(path);
@@ -204,12 +205,17 @@ pub fn ensure_chest(path: &Path, x: i32, y: i32, z: i32, id: &str) -> Result<(),
     {
         return Ok(());
     }
+    let slots = if id == "shulker_box" {
+        take_held_shulker(&mut chests)
+    } else {
+        Vec::new()
+    };
     chests.push(StoredChest {
         x,
         y,
         z,
         id: id.to_string(),
-        slots: Vec::new(),
+        slots,
     });
     write_chests(path, &chests)
 }
@@ -247,14 +253,54 @@ pub fn store_ender_chest(path: &Path, slots: &[CarriedSlot]) -> Result<(), Strin
 }
 
 /// Drop the chest at that cell, if there is one.
+///
+/// A filled shulker box parks its slots as a `held_shulker` sentinel so the
+/// next place restores them (Minecraft keep-on-break).
 pub fn remove_chest(path: &Path, x: i32, y: i32, z: i32) -> Result<(), String> {
     let mut chests = read_chests(path)?;
-    let before = chests.len();
-    chests.retain(|chest| chest.x != x || chest.y != y || chest.z != z);
-    if chests.len() == before {
+    let Some(index) = chests
+        .iter()
+        .position(|chest| chest.x == x && chest.y == y && chest.z == z)
+    else {
         return Ok(());
+    };
+    let removed = chests.remove(index);
+    if removed.id == "shulker_box" && !removed.slots.is_empty() {
+        park_held_shulker(&mut chests, removed.slots);
     }
     write_chests(path, &chests)
+}
+
+/// Sentinel id for shulker fills waiting on the next place. Lives at `y = -2`.
+const HELD_SHULKER: &str = "held_shulker";
+
+fn park_held_shulker(chests: &mut Vec<StoredChest>, slots: Vec<CarriedSlot>) {
+    let index = chests
+        .iter()
+        .filter(|chest| chest.id == HELD_SHULKER)
+        .count() as i32;
+    chests.push(StoredChest {
+        x: index,
+        y: -2,
+        z: 0,
+        id: HELD_SHULKER.to_string(),
+        slots,
+    });
+}
+
+fn take_held_shulker(chests: &mut Vec<StoredChest>) -> Vec<CarriedSlot> {
+    let Some(index) = chests.iter().position(|chest| chest.id == HELD_SHULKER) else {
+        return Vec::new();
+    };
+    let slots = chests.remove(index).slots;
+    let mut held = 0i32;
+    for chest in chests.iter_mut() {
+        if chest.id == HELD_SHULKER {
+            chest.x = held;
+            held += 1;
+        }
+    }
+    slots
 }
 
 /// Replace the slots of the chest at that cell.
@@ -1303,7 +1349,7 @@ mod tests {
         let boxes = read_chests(&path).unwrap();
         assert_eq!(
             boxes.iter().find(|chest| chest.x == 2).unwrap().slots,
-            vec![apple]
+            vec![apple.clone()]
         );
         assert_eq!(
             boxes.iter().find(|chest| chest.x == 5).unwrap().slots,
@@ -1311,9 +1357,34 @@ mod tests {
         );
         remove_chest(&path, 2, 1, 2).unwrap();
         let left = read_chests(&path).unwrap();
-        assert!(left.iter().all(|chest| chest.x != 2));
+        assert!(left.iter().all(|chest| chest.x != 2 || chest.id == HELD_SHULKER));
         assert_eq!(
             left.iter().find(|chest| chest.x == 5).unwrap().slots,
+            vec![dirt.clone()]
+        );
+        let held = left
+            .iter()
+            .find(|chest| chest.id == HELD_SHULKER)
+            .expect("broken shulker keeps a held fill");
+        assert_eq!(held.slots, vec![apple.clone()]);
+        assert_eq!(held.y, -2);
+        ensure_chest(&path, 9, 1, 9, "shulker_box").unwrap();
+        let restored = read_chests(&path).unwrap();
+        assert!(restored.iter().all(|chest| chest.id != HELD_SHULKER));
+        assert_eq!(
+            restored
+                .iter()
+                .find(|chest| chest.x == 9 && chest.id == "shulker_box")
+                .unwrap()
+                .slots,
+            vec![apple]
+        );
+        assert_eq!(
+            restored
+                .iter()
+                .find(|chest| chest.x == 5)
+                .unwrap()
+                .slots,
             vec![dirt]
         );
         let wire = vec![

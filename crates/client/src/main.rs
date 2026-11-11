@@ -325,6 +325,8 @@ struct Args {
     shot_end_city: Option<std::path::PathBuf>,
     /// Open shulker on the End city tower, then quit.
     shot_shulker: Option<std::path::PathBuf>,
+    /// Crafted shulker box on a table pad, then quit.
+    shot_shulker_box: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
     shot_wreck_heart: Option<std::path::PathBuf>,
     /// Keybinds screen, then quit.
@@ -625,6 +627,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_ender_dragon: args.shot_ender_dragon,
         shot_end_city: args.shot_end_city,
         shot_shulker: args.shot_shulker,
+        shot_shulker_box: args.shot_shulker_box,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
         shot_axolotl: args.shot_axolotl,
@@ -801,6 +804,7 @@ struct App {
     shot_ender_dragon: Option<std::path::PathBuf>,
     shot_end_city: Option<std::path::PathBuf>,
     shot_shulker: Option<std::path::PathBuf>,
+    shot_shulker_box: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
     shot_axolotl: Option<std::path::PathBuf>,
@@ -1204,6 +1208,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_shulker.take() {
                     state.arm_shulker_shot(path);
                 }
+                if let Some(path) = self.shot_shulker_box.take() {
+                    state.arm_shulker_box_shot(path);
+                }
                 if let Some(path) = self.shot_wreck_heart.take() {
                     state.arm_shipwreck_heart_shot(path);
                 }
@@ -1600,6 +1607,7 @@ where
         shot_ender_dragon: None,
         shot_end_city: None,
         shot_shulker: None,
+        shot_shulker_box: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
         shot_axolotl: None,
@@ -2289,6 +2297,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-shulker".to_string())?;
                 parsed.shot_shulker = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-shulker-box" | "--shot-box" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-shulker-box".to_string())?;
+                parsed.shot_shulker_box = Some(std::path::PathBuf::from(value));
             }
             "--shot-wreck-heart" | "--shot-shipwreck-heart" | "--shot-heart" => {
                 let value = iter
@@ -3049,6 +3063,17 @@ mod tests {
         assert_eq!(
             args.shot_shulker.as_deref(),
             Some(std::path::Path::new("shulker.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-shulker-box".into(),
+            "shulker-box.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_shulker_box.as_deref(),
+            Some(std::path::Path::new("shulker-box.png"))
         );
     }
 }

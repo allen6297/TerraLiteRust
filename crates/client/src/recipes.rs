@@ -884,7 +884,7 @@ mod tests {
             Some("ender_chest")
         );
         assert_eq!(
-            book.match_grid(&["chest".into(), "ender_pearl".into()])
+            book.match_grid(&["chest".into(), "shulker_shell".into()])
                 .as_deref(),
             Some("shulker_box")
         );

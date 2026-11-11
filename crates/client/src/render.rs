@@ -1419,6 +1419,7 @@ pub struct State {
     told_furnace_heat: bool,
     /// Once: holding bricks or clay at a crafting table with both on the bar.
     told_shape_pot: bool,
+    told_shape_box: bool,
     /// Once: look at a pump — tip to toggle.
     told_pump: bool,
     /// Once: look at a tank — tip that it buffers fill.
@@ -2710,6 +2711,7 @@ impl State {
             told_blast_heat: false,
             told_furnace_heat: false,
             told_shape_pot: false,
+            told_shape_box: false,
             told_pump: false,
             told_tank: false,
             told_battery: false,
@@ -6883,7 +6885,7 @@ impl State {
         }
         let opened = match block.id {
             "crafting_table" => {
-                if self.try_shape_pot() {
+                if self.try_shape_pot() || self.try_shape_box() {
                     true
                 } else {
                     self.gui.open_craft()
@@ -7727,6 +7729,36 @@ impl State {
         self.gui.push_chat("use to pot");
     }
 
+    /// Once: hold a chest or shell with both on the bar at a crafting table.
+    fn tell_shape_box(&mut self) {
+        if self.told_shape_box || !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead)
+        {
+            return;
+        }
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return;
+        };
+        if id != "chest" && id != "shulker_shell" {
+            return;
+        }
+        if !self.hotbar.holds("chest", 1) || !self.hotbar.holds("shulker_shell", 1) {
+            return;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "crafting_table"
+        {
+            return;
+        }
+        self.told_shape_box = true;
+        self.gui.push_chat("use to box");
+    }
+
     /// Turn creative mode on (CLI `--creative` / flight shot).
     pub fn enable_creative(&mut self) {
         self.menu.set_creative(true);
@@ -8037,6 +8069,39 @@ impl State {
         let word = self.hotbar.shape_pot();
         self.gui.push_chat(word);
         if word == "potted" {
+            self.hotbar_dirty = true;
+            let at = [
+                hit.block[0] as f32 + 0.5,
+                hit.block[1] as f32 + 0.9,
+                hit.block[2] as f32 + 0.5,
+            ];
+            self.play_world(crate::audio::Sound::Place, at);
+        }
+        true
+    }
+
+    /// Hold a chest or shulker shell and use a crafting table to shape a box.
+    fn try_shape_box(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if id != "chest" && id != "shulker_shell" {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        if self
+            .world
+            .block_at(hit.block[0], hit.block[1], hit.block[2])
+            .id
+            != "crafting_table"
+        {
+            return false;
+        }
+        let word = self.hotbar.shape_box();
+        self.gui.push_chat(word);
+        if word == "boxed" {
             self.hotbar_dirty = true;
             let at = [
                 hit.block[0] as f32 + 0.5,
@@ -9718,6 +9783,99 @@ impl State {
         let _ = self.hotbar.give_stack("bow");
         let _ = self.hotbar.give_stack("arrow");
         self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Crafted shulker box on a crafting table pad, then quit with a PNG.
+    pub fn arm_shulker_box_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 12;
+        let cy = 2;
+        let cz = 16;
+        let mut changes = Vec::new();
+        for z in (cz - 1)..=(cz + 1) {
+            for x in (cx - 1)..=(cx + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: 1,
+                    z,
+                    block: Block::new("grass", 0),
+                });
+                for y in 2..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        changes.push(CellChange {
+            x: cx,
+            y: cy,
+            z: cz,
+            block: Block::new("crafting_table", 0),
+        });
+        changes.push(CellChange {
+            x: cx + 1,
+            y: cy,
+            z: cz,
+            block: Block::new("shulker_box", 0),
+        });
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("chest");
+        let _ = self.hotbar.collect("shulker_shell");
+        let word = self.hotbar.shape_box();
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("use to box");
+        self.gui.push_chat(word);
+        self.hotbar_dirty = true;
+        self.told_shape_box = true;
+        if let Some(slot) = self.hotbar.index_of("shulker_box") {
+            let _ = self.hotbar.select_digit((slot as u8).saturating_add(1));
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.5,
+            cy as f32 + 0.25 + body::EYE_HEIGHT,
+            cz as f32 - 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
         self.set_capture(false);
         for dx in -1..=1 {
             for dz in -1..=1 {
@@ -12235,6 +12393,7 @@ impl State {
             || self.try_blast_heat()
             || self.try_furnace_heat()
             || self.try_shape_pot()
+            || self.try_shape_box()
             || self.try_eat()
             || self.try_key()
             || self.try_wind()
@@ -27433,6 +27592,7 @@ impl State {
         self.tell_blast_heat();
         self.tell_furnace_heat();
         self.tell_shape_pot();
+        self.tell_shape_box();
         self.note_pose();
         let mut drops_dirty = self.drops.tick_motes(dt);
         // Still shots freeze orb / loot / arrow motion so the armed pose stays readable.
