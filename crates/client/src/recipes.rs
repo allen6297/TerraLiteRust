@@ -617,7 +617,15 @@ mod tests {
                 "deepslate".to_string(),
                 "deepslate_bricks".to_string(),
                 "deepslate_tiles".to_string(),
+                "diamond_axe".to_string(),
                 "diamond_block".to_string(),
+                "diamond_boots".to_string(),
+                "diamond_chestplate".to_string(),
+                "diamond_helmet".to_string(),
+                "diamond_hoe".to_string(),
+                "diamond_pickaxe".to_string(),
+                "diamond_shovel".to_string(),
+                "diamond_sword".to_string(),
                 "dirt".to_string(),
                 "door".to_string(),
                 "dragon_egg".to_string(),
@@ -692,9 +700,16 @@ mod tests {
                 "nether_star".to_string(),
 
                 "nether_wart_block".to_string(),
+                "netherite_axe".to_string(),
+                "netherite_boots".to_string(),
+                "netherite_chestplate".to_string(),
                 "netherite_helmet".to_string(),
+                "netherite_hoe".to_string(),
                 "netherite_ingot".to_string(),
+                "netherite_pickaxe".to_string(),
                 "netherite_scrap".to_string(),
+                "netherite_shovel".to_string(),
+                "netherite_sword".to_string(),
                 "netherrack".to_string(),
                 "note_block".to_string(),
                 "oak_log".to_string(),
@@ -1160,9 +1175,19 @@ mod tests {
             Some("netherite_ingot")
         );
         assert_eq!(
-            book.match_grid(&["netherite_ingot".into(), "leather_cap".into()])
+            book.match_grid(&["diamond_helmet".into(), "netherite_ingot".into()])
                 .as_deref(),
             Some("netherite_helmet")
+        );
+        assert_eq!(
+            book.match_grid(&["diamond_sword".into(), "netherite_ingot".into()])
+                .as_deref(),
+            Some("netherite_sword")
+        );
+        assert_eq!(
+            book.match_grid(&["diamond_pickaxe".into(), "netherite_ingot".into()])
+                .as_deref(),
+            Some("netherite_pickaxe")
         );
         assert_eq!(
             book.match_grid(&["ender_pearl".into(), "glowstone".into()])

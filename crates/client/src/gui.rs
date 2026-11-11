@@ -4233,6 +4233,7 @@ fn tool_tier_name(pack: &rebuild_world::Pack, id: &str) -> Option<&'static str> 
         4 => Some("Stone"),
         6 => Some("Iron"),
         8 => Some("Diamond"),
+        10 => Some("Netherite"),
         _ => None,
     }
 }
@@ -7352,7 +7353,20 @@ fn tab_of(id: &str) -> &'static str {
             | "netherite_scrap"
             | "netherite_ingot"
             | "netherite_pickaxe"
+            | "netherite_sword"
+            | "netherite_axe"
+            | "netherite_shovel"
+            | "netherite_hoe"
             | "netherite_helmet"
+            | "netherite_chestplate"
+            | "netherite_boots"
+            | "diamond_sword"
+            | "diamond_axe"
+            | "diamond_shovel"
+            | "diamond_hoe"
+            | "diamond_helmet"
+            | "diamond_chestplate"
+            | "diamond_boots"
             | "gold_ingot"
             | "mossy_cobblestone"
             | "mossy_stone_bricks"

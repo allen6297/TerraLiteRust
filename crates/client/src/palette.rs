@@ -55,8 +55,11 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "ancient_debris" => [0.42, 0.22, 0.18],
         "netherite_scrap" => [0.48, 0.28, 0.24],
         "netherite_ingot" => [0.32, 0.28, 0.30],
-        "netherite_pickaxe" => [0.28, 0.24, 0.26],
-        "netherite_helmet" => [0.30, 0.26, 0.28],
+        "netherite_pickaxe" | "netherite_sword" | "netherite_axe" | "netherite_shovel"
+        | "netherite_hoe" => [0.28, 0.24, 0.26],
+        "netherite_helmet" | "netherite_chestplate" | "netherite_boots" => [0.30, 0.26, 0.28],
+        "diamond_sword" | "diamond_axe" | "diamond_shovel" | "diamond_hoe"
+        | "diamond_helmet" | "diamond_chestplate" | "diamond_boots" => [0.55, 0.85, 0.90],
         "gold_ingot" => [0.92, 0.78, 0.28],
         "emerald_ore" => [0.28, 0.55, 0.36],
         "grass" => match metadata {

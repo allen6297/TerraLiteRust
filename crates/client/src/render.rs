@@ -9263,6 +9263,12 @@ impl State {
         self.hotbar_dirty = true;
         let piece = if Pack::builtin().is_elytra(id) {
             "elytra"
+        } else if id.starts_with("netherite_") || id.starts_with("diamond_") {
+            match slot {
+                0 => "helmet",
+                1 => "chestplate",
+                _ => "boots",
+            }
         } else {
             match slot {
                 0 => "cap",
@@ -9808,6 +9814,78 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Full netherite gear laid out at the shaft smith, then quit with a PNG.
+    pub fn arm_netherite_gear_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (sx, sz) = rebuild_world::SHAFT_SMITH;
+        let mut sy = 4;
+        for y in 0..80 {
+            if self.world.block_at(sx, y, sz).id == "smithing_table" {
+                sy = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(sx, sz);
+        let focus = glam::Vec3::new(sx as f32 + 0.5, sy as f32 + 0.85, sz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            sx as f32 + 2.4,
+            sy as f32 + 1.2 + body::EYE_HEIGHT,
+            sz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.found_mine = true;
+        self.found_debris = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("netherite");
+        self.gui.push_chat("full set");
+        self.hotbar.install_saved(0, &[]);
+        for id in [
+            "netherite_sword",
+            "netherite_pickaxe",
+            "netherite_axe",
+            "netherite_shovel",
+            "netherite_hoe",
+            "netherite_ingot",
+        ] {
+            let _ = self.hotbar.collect(id);
+        }
+        let _ = self.hotbar.select_digit(1);
+        let _ = self.armor.equip(0, Block::new("netherite_helmet", 0).id);
+        let _ = self.armor.equip(1, Block::new("netherite_chestplate", 0).id);
+        let _ = self.armor.equip(2, Block::new("netherite_boots", 0).id);
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(sx + dx * 8, sz + dz * 8);
             }
         }
         let _ = self.window.focus_window();

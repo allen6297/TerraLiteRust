@@ -4105,8 +4105,8 @@ fn parse_tool(id: &str, obj: &serde_json::Map<String, Value>) -> Result<ToolDef,
         .get("tool")
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{id}.json needs a tool"))?;
-    if kind != "pickaxe" {
-        return Err(format!("{id}.json tool {kind} is not a pickaxe"));
+    if !matches!(kind, "pickaxe" | "axe" | "shovel" | "sword") {
+        return Err(format!("{id}.json tool {kind} is unknown"));
     }
     let tier = match obj.get("tier").and_then(Value::as_str) {
         Some("wood") => 1,
@@ -7511,7 +7511,16 @@ mod tests {
         assert_eq!(pack.mine_factor("netherite_pickaxe", "ancient_debris"), 10.0);
         assert_eq!(pack.tool_icon("netherite_pickaxe"), Some("ancient_debris"));
         assert_eq!(pack.hardness_of(Block::new("ancient_debris", 0)), Some(5.0));
-        assert_eq!(pack.armor_of("netherite_helmet"), Some((0, 2)));
+        assert_eq!(pack.tool_uses("netherite_sword"), 64);
+        assert_eq!(pack.tool_uses("netherite_axe"), 64);
+        assert_eq!(pack.tool_uses("netherite_shovel"), 64);
+        assert_eq!(pack.tool_uses("netherite_hoe"), 64);
+        assert_eq!(pack.tool_uses("diamond_sword"), 48);
+        assert_eq!(pack.tool_uses("diamond_hoe"), 48);
+        assert_eq!(pack.armor_of("diamond_helmet"), Some((0, 2)));
+        assert_eq!(pack.armor_of("netherite_helmet"), Some((0, 3)));
+        assert_eq!(pack.armor_of("netherite_chestplate"), Some((1, 3)));
+        assert_eq!(pack.armor_of("netherite_boots"), Some((2, 3)));
         assert_eq!(pack.tool_uses("apple"), 0);
         assert_eq!(pack.tool_icon("wooden_pickaxe"), Some("oak_log"));
         assert!(pack.tool_ids().contains(&"iron_pickaxe".to_string()));
