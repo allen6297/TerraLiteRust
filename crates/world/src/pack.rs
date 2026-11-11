@@ -2892,6 +2892,13 @@ impl Pack {
             .any(|bucket| bucket.id == id && bucket.fills.as_deref() == Some("water"))
     }
 
+    /// True when `id` pours powder snow.
+    pub fn is_powder_snow_bucket(&self, id: &str) -> bool {
+        self.buckets
+            .iter()
+            .any(|bucket| bucket.id == id && bucket.fills.as_deref() == Some("powder_snow"))
+    }
+
     /// Compound fill kind for `id`: `water` or `ember`. Water buckets count as water.
     pub fn compound_fill_of(&self, id: &str) -> Option<&'static str> {
         if self.is_water_bucket(id) {
@@ -3679,6 +3686,7 @@ fn parse_item(id: &str, text: &str) -> Result<PackItem, String> {
         let fills = match obj.get("bucket").and_then(Value::as_str) {
             Some("empty") => None,
             Some("water") => Some("water".to_string()),
+            Some("powder_snow") => Some("powder_snow".to_string()),
             Some(other) => return Err(format!("{id}.json bucket {other} is unknown")),
             None => return Err(format!("{id}.json needs a bucket kind")),
         };

@@ -117,7 +117,8 @@ pub fn step_paced_soul(
     let body_now = player_box(camera.eye, crouch);
     let wet = overlaps_water(&body_now, world);
     let deep = deep_water(&body_now, world);
-    let webbed = inside_cobweb(&body_now, world);
+    let webbed = inside_cobweb(&body_now, world)
+        || crate::powder_snow::inside(camera.eye, world);
     let soul = feet_on_soul(camera.eye, world);
     let climbing = touches_climb(&body_now, world);
     // A jump frame leaves the ground instead of auto-stepping into the wall.
@@ -934,6 +935,11 @@ impl Armor {
         self.slots[2].is_some_and(is_soul_speed_boots)
     }
 
+    /// True when leather boots are worn — walk on powder snow instead of sinking.
+    pub fn has_leather_boots(self) -> bool {
+        self.slots[2].is_some_and(crate::powder_snow::is_leather_boots)
+    }
+
     /// Wear `id` in `slot`. The piece that was there comes back.
     pub fn equip(&mut self, slot: usize, id: &'static str) -> Option<&'static str> {
         let Some(cell) = self.slots.get_mut(slot) else {
@@ -1346,6 +1352,7 @@ fn for_solids(bounds: &Aabb, world: &Cluster, extra: &[Aabb], mut visit: impl Fn
                     || block.id == "scaffolding"
                     || block.id == "cave_vines"
                     || block.id == "cave_vines_berries"
+                    || block.id == "powder_snow"
                     || block.id == "wheat_crop"
                     || block.id == "chorus_plant"
                     || block.id == "chorus_flower"

@@ -1368,6 +1368,10 @@ pub struct State {
     glow_berries_wait: f32,
     /// One tip when cave vines grow or berries are picked this session.
     glow_berries_told: bool,
+    /// Seconds until the next powder-snow freeze tick.
+    powder_snow_left: f32,
+    /// One tip when powder snow first freezes or boots walk this session.
+    powder_snow_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2766,6 +2770,8 @@ impl State {
             scaffold_cascade: 0,
             glow_berries_wait: crate::glow_berries::GROW_PERIOD,
             glow_berries_told: false,
+            powder_snow_left: 0.0,
+            powder_snow_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -13446,7 +13452,7 @@ impl State {
         true
     }
 
-    /// Scoop water into an empty bucket, or pour a full one into air.
+    /// Scoop water or powder snow into an empty bucket, or pour a full one into air.
     fn try_bucket(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -13454,7 +13460,8 @@ impl State {
         let pack = Pack::builtin();
         let empty = pack.is_bucket(id);
         let full = pack.is_water_bucket(id);
-        if !empty && !full {
+        let powder = pack.is_powder_snow_bucket(id);
+        if !empty && !full && !powder {
             return false;
         }
         let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
@@ -13465,6 +13472,17 @@ impl State {
             let block = self
                 .world
                 .block_at(hit.block[0], hit.block[1], hit.block[2]);
+            if crate::powder_snow::is_powder_snow(block.id) {
+                if !self.bucket_fits(slot, "bucket", crate::powder_snow::POWDER_SNOW_BUCKET) {
+                    return true;
+                }
+                self.send_edit(
+                    encode_break(hit.block[0], hit.block[1], hit.block[2]),
+                    TAG_BREAK,
+                    Some(slot),
+                );
+                return true;
+            }
             if !self.bucket_fits(slot, "bucket", "water_bucket") {
                 return true;
             }
@@ -13502,6 +13520,31 @@ impl State {
                 TAG_BREAK,
                 Some(slot),
             );
+            return true;
+        }
+        if powder {
+            let [x, y, z] = hit.place;
+            if !self.world.block_at(x, y, z).is_air()
+                || !self.bucket_fits(slot, crate::powder_snow::POWDER_SNOW_BUCKET, "bucket")
+            {
+                return true;
+            }
+            let (min, max) = body::player_box_bounds(self.camera.eye);
+            self.send_edit(
+                encode_place(
+                    x,
+                    y,
+                    z,
+                    Block::new(crate::powder_snow::POWDER_SNOW, 0),
+                    PlayerBox { min, max },
+                ),
+                TAG_PLACE,
+                Some(slot),
+            );
+            if !self.powder_snow_told {
+                self.powder_snow_told = true;
+                self.gui.push_chat("powder");
+            }
             return true;
         }
         let [x, y, z] = hit.place;
@@ -14604,16 +14647,31 @@ impl State {
             if pending.is_some() {
                 self.statistics.note_break();
             }
-            let scooped = before.id == "water"
-                && pending
-                    .as_ref()
-                    .and_then(|edit| edit.slot)
-                    .is_some_and(|slot| {
-                        self.hotbar.slot(slot) == Some("bucket")
-                            && self.exchange_bucket(slot, "bucket", "water_bucket")
-                    });
+            let scooped = pending
+                .as_ref()
+                .and_then(|edit| edit.slot)
+                .is_some_and(|slot| {
+                    if self.hotbar.slot(slot) != Some("bucket") {
+                        return false;
+                    }
+                    if before.id == "water" {
+                        return self.exchange_bucket(slot, "bucket", "water_bucket");
+                    }
+                    if crate::powder_snow::is_powder_snow(before.id) {
+                        return self.exchange_bucket(
+                            slot,
+                            "bucket",
+                            crate::powder_snow::POWDER_SNOW_BUCKET,
+                        );
+                    }
+                    false
+                });
             if scooped {
                 self.gui.push_chat("filled");
+                if crate::powder_snow::is_powder_snow(before.id) && !self.powder_snow_told {
+                    self.powder_snow_told = true;
+                    self.gui.push_chat("powder");
+                }
             } else if let Some(slot) = pending.as_ref().and_then(|edit| edit.slot) {
                 if self.hotbar.wear(slot, before.id) {
                     self.hotbar_dirty = true;
@@ -14910,6 +14968,13 @@ impl State {
                     }
                 } else if cell.block.id == "water" && self.hotbar.slot(slot) == Some("water_bucket") {
                     if self.exchange_bucket(slot, "water_bucket", "bucket") {
+                        self.gui.push_chat("emptied");
+                    }
+                } else if crate::powder_snow::is_powder_snow(cell.block.id)
+                    && self.hotbar.slot(slot) == Some(crate::powder_snow::POWDER_SNOW_BUCKET)
+                {
+                    if self.exchange_bucket(slot, crate::powder_snow::POWDER_SNOW_BUCKET, "bucket")
+                    {
                         self.gui.push_chat("emptied");
                     }
                 } else if before.id == "cauldron"
@@ -23884,6 +23949,131 @@ impl State {
 
 
 
+
+    pub fn arm_powder_snow_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = ground + 1;
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 2)..=(cz + 3) {
+                changes.push(CellChange {
+                    x,
+                    y: floor,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                for dy in 1..=4 {
+                    changes.push(CellChange {
+                        x,
+                        y: floor + dy,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Powder snow bank + pit
+        for x in (cx - 1)..=(cx + 2) {
+            for z in (cz - 1)..=(cz + 1) {
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::new(crate::powder_snow::POWDER_SNOW, 0),
+                });
+                if z == cz {
+                    changes.push(CellChange {
+                        x,
+                        y: y + 1,
+                        z,
+                        block: Block::new(crate::powder_snow::POWDER_SNOW, 0),
+                    });
+                }
+            }
+        }
+        // Solid snow edge for contrast
+        for x in (cx + 3)..=(cx + 4) {
+            for z in (cz - 1)..=(cz + 1) {
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::new("snow", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 2)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.8, y as f32 + 1.0, cz as f32 + 0.3);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.5,
+            y as f32 + 1.4 + body::EYE_HEIGHT,
+            cz as f32 - 4.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.armor.equip(2, crate::powder_snow::LEATHER_BOOTS);
+        let _ = self.hotbar.give_stack(crate::powder_snow::POWDER_SNOW);
+        let _ = self.hotbar.give_stack(crate::powder_snow::POWDER_SNOW_BUCKET);
+        let _ = self.hotbar.collect("bucket");
+        let _ = self.hotbar.collect(crate::powder_snow::LEATHER_BOOTS);
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.powder_snow_told = true;
+        self.powder_snow_left = 0.0;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("powder");
+        self.gui.push_chat("boots");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_glow_berries_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -32756,6 +32946,36 @@ impl State {
         }
     }
 
+
+    fn note_powder_snow(&mut self, dt: f32) {
+        let boots = self.armor.has_leather_boots();
+        let sunk = crate::powder_snow::inside(self.camera.eye, &self.world);
+        if boots {
+            self.powder_snow_left = 0.0;
+            if sunk && !self.powder_snow_told {
+                self.powder_snow_told = true;
+                self.gui.push_chat("boots");
+            }
+            return;
+        }
+        let (left, freeze) =
+            body::cactus_poke(sunk, self.powder_snow_left, dt);
+        // reuse poke timer shape; freeze period is longer — scale via left reset
+        self.powder_snow_left = if freeze {
+            crate::powder_snow::FREEZE_PERIOD
+        } else {
+            left
+        };
+        if freeze {
+            self.gui.push_chat("freeze");
+            self.hurt(1);
+            if !self.powder_snow_told {
+                self.powder_snow_told = true;
+                self.gui.push_chat("powder");
+            }
+        }
+    }
+
     fn note_cactus(&mut self, dt: f32) {
         let touching = body::touches_cactus(self.camera.eye, &self.world);
         let (left, poke) = body::cactus_poke(touching, self.cactus_left, dt);
@@ -33914,6 +34134,9 @@ impl State {
             self.fox.bounds(),
             self.goat.bounds(),
         ];
+        if self.armor.has_leather_boots() {
+            crate::powder_snow::push_solids(self.camera.eye, &self.world, &mut obstacles);
+        }
         for zombie in self.night.iter() {
             if zombie.living() {
                 obstacles.push(zombie.bounds());
@@ -34153,6 +34376,7 @@ impl State {
             self.note_plate();
             self.note_cactus(dt);
             self.note_magma(dt);
+            self.note_powder_snow(dt);
         }
         let sprinting_now = self.sprint_asked && !self.sprint_blocked;
         let show_goal = if sprinting_now { 1.0 } else { 0.0 };

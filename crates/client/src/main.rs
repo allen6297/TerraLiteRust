@@ -33,6 +33,7 @@ mod dripstone;
 mod moss;
 mod bamboo;
 mod glow_berries;
+mod powder_snow;
 mod hotbar;
 mod item_icon;
 mod jobs;
@@ -459,6 +460,8 @@ struct Args {
     shot_bamboo: Option<std::path::PathBuf>,
     /// Cave vines with glow berries demo, then quit.
     shot_glow_berries: Option<std::path::PathBuf>,
+    /// Powder snow sink / leather boots demo, then quit.
+    shot_powder_snow: Option<std::path::PathBuf>,
     /// Mine-mouth lodestone + linked compass, then quit.
     shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
@@ -753,6 +756,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_moss: args.shot_moss,
         shot_bamboo: args.shot_bamboo,
         shot_glow_berries: args.shot_glow_berries,
+        shot_powder_snow: args.shot_powder_snow,
         shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
@@ -964,6 +968,7 @@ struct App {
     shot_moss: Option<std::path::PathBuf>,
     shot_bamboo: Option<std::path::PathBuf>,
     shot_glow_berries: Option<std::path::PathBuf>,
+    shot_powder_snow: Option<std::path::PathBuf>,
     shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
@@ -1509,6 +1514,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_glow_berries.take() {
                     state.arm_glow_berries_shot(path);
                 }
+                if let Some(path) = self.shot_powder_snow.take() {
+                    state.arm_powder_snow_shot(path);
+                }
                 if let Some(path) = self.shot_lodestone.take() {
                     state.arm_lodestone_shot(path);
                 }
@@ -1879,6 +1887,7 @@ where
         shot_moss: None,
         shot_bamboo: None,
         shot_glow_berries: None,
+        shot_powder_snow: None,
         shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
@@ -2901,6 +2910,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-glow-berries".to_string())?;
                 parsed.shot_glow_berries = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-powder-snow" | "--shot-powdersnow" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-powder-snow".to_string())?;
+                parsed.shot_powder_snow = Some(std::path::PathBuf::from(value));
             }
             "--shot-lodestone" | "--shot-compass-link" => {
                 let value = iter

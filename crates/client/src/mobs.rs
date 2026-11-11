@@ -3478,6 +3478,7 @@ fn is_soft(id: &str) -> bool {
             | "scaffolding"
             | "cave_vines"
             | "cave_vines_berries"
+            | "powder_snow"
             | "wheat_crop"
             | "chorus_plant"
             | "chorus_flower"

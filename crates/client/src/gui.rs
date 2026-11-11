@@ -98,7 +98,7 @@ const TAB_H: f32 = 20.0;
 const TABS: [&str; 7] = ["all", "build", "nature", "ore", "light", "flow", "more"];
 
 /// Preferred order inside the `flow` creative tab.
-const FLOW_ORDER: [&str; 13] = [
+const FLOW_ORDER: [&str; 14] = [
     "pipe",
     "wire",
     "pump",
@@ -110,6 +110,7 @@ const FLOW_ORDER: [&str; 13] = [
     "drain",
     "copper_grate",
     "water_bucket",
+    "powder_snow_bucket",
     "ember_charge",
     "drain_sponge",
 ];
@@ -7844,6 +7845,7 @@ fn tab_of(id: &str) -> &'static str {
             | "vine"
             | "lily_pad"
             | "snow"
+            | "powder_snow"
             | "sugar_cane"
             | "chorus_flower"
             | "chorus_fruit"

@@ -208,6 +208,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "moss_block" | "moss_carpet" | "azalea" => crate::moss::tint(id),
         "bamboo" | "scaffolding" => crate::bamboo::tint(id),
         "cave_vines" | "cave_vines_berries" | "glow_berries" => crate::glow_berries::tint(id),
+        "powder_snow" | "powder_snow_bucket" => crate::powder_snow::tint(id),
         "slimeball" => [0.42, 0.78, 0.36],
         "arrow" => [0.62, 0.58, 0.42],
         "raw" => [0.72, 0.40, 0.36],

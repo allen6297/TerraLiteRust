@@ -782,6 +782,8 @@ mod tests {
                 "smooth_basalt".to_string(),
                 "smooth_stone".to_string(),
                 "snow".to_string(),
+                "powder_snow".to_string(),
+                "powder_snow_bucket".to_string(),
                 "soul_sand".to_string(),
                 "soul_soil".to_string(),
                 "spout".to_string(),
