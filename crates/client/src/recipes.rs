@@ -616,6 +616,9 @@ mod tests {
                 "azalea".to_string(),
                 "bamboo".to_string(),
                 "scaffolding".to_string(),
+                "cave_vines".to_string(),
+                "cave_vines_berries".to_string(),
+                "glow_berries".to_string(),
 
                 "copper_chest".to_string(),
                 "copper_door".to_string(),

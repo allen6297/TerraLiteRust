@@ -1364,6 +1364,10 @@ pub struct State {
     bamboo_told: bool,
     /// Suppress scaffolding cascade while applying cascade breaks.
     scaffold_cascade: u8,
+    /// Seconds until the next nearby cave-vine growth roll.
+    glow_berries_wait: f32,
+    /// One tip when cave vines grow or berries are picked this session.
+    glow_berries_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2760,6 +2764,8 @@ impl State {
             bamboo_grow_wait: crate::bamboo::GROW_PERIOD,
             bamboo_told: false,
             scaffold_cascade: 0,
+            glow_berries_wait: crate::glow_berries::GROW_PERIOD,
+            glow_berries_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9656,6 +9662,76 @@ impl State {
     }
 
 
+
+    fn tick_glow_berries(&mut self, dt: f32) {
+        if self.told_disconnect {
+            return;
+        }
+        self.glow_berries_wait -= dt;
+        if self.glow_berries_wait > 0.0 {
+            return;
+        }
+        self.glow_berries_wait = crate::glow_berries::GROW_PERIOD;
+        let focus = [
+            self.camera.eye.x.floor() as i32,
+            self.camera.eye.y.floor() as i32,
+            self.camera.eye.z.floor() as i32,
+        ];
+        let Some((at, next)) = crate::glow_berries::plan_grow(
+            &self.world,
+            focus,
+            crate::glow_berries::GROW_RADIUS,
+        ) else {
+            return;
+        };
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: next,
+        }]);
+        if !self.glow_berries_told {
+            self.glow_berries_told = true;
+            self.gui.push_chat("glow");
+        }
+    }
+
+    /// Pick glow berries from a berried cave vine.
+    fn try_pick_glow_berries(&mut self) -> bool {
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        let Some(at) = crate::glow_berries::plan_harvest(&self.world, hit.block) else {
+            return false;
+        };
+        if let Some(id) = self.hotbar.slot(self.hotbar.selected()) {
+            if Pack::builtin().is_fertilizer(id) {
+                return false;
+            }
+        }
+        if !self.pending.is_empty() {
+            return true;
+        }
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: crate::glow_berries::empty_vine(),
+        }]);
+        if self.hotbar.collect(crate::glow_berries::GLOW_BERRIES) {
+            self.hotbar_dirty = true;
+        }
+        let mote = [at[0] as f32 + 0.5, at[1] as f32 + 0.35, at[2] as f32 + 0.5];
+        self.drops.puff(mote, [0.95, 0.82, 0.28]);
+        self.rebuild_drops();
+        self.gui.push_chat("berries");
+        if !self.glow_berries_told {
+            self.glow_berries_told = true;
+            self.gui.push_chat("glow");
+        }
+        true
+    }
+
     fn tick_bamboo_grow(&mut self, dt: f32) {
         if self.told_disconnect {
             return;
@@ -9931,6 +10007,35 @@ impl State {
             if !self.bamboo_told {
                 self.bamboo_told = true;
                 self.gui.push_chat("bamboo");
+            }
+            return true;
+        }
+        if crate::glow_berries::is_cave_vine(block.id) {
+            let Some((at, next)) = crate::glow_berries::plan_fertilize(&self.world, hit.block)
+            else {
+                self.gui.push_chat("tall");
+                return true;
+            };
+            let slot = self.hotbar.selected();
+            self.hotbar.consume_at(slot);
+            self.send_places_batch(&[CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block: next,
+            }]);
+            let mote = [at[0] as f32 + 0.5, at[1] as f32 + 0.35, at[2] as f32 + 0.5];
+            self.drops.puff(mote, [0.95, 0.82, 0.28]);
+            self.rebuild_drops();
+            self.hotbar_dirty = true;
+            self.gui.push_chat(if crate::glow_berries::has_berries(next.id) {
+                "berries"
+            } else {
+                "grow"
+            });
+            if !self.glow_berries_told {
+                self.glow_berries_told = true;
+                self.gui.push_chat("glow");
             }
             return true;
         }
@@ -14277,6 +14382,7 @@ impl State {
             || self.try_wax_copper()
             || self.try_scrape_copper()
             || self.try_scaffold_place()
+            || self.try_pick_glow_berries()
         {
             return;
         }
@@ -23777,6 +23883,121 @@ impl State {
     }
 
 
+
+    pub fn arm_glow_berries_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = (ground - 3).max(2);
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        // Cave stamp: open near face, stone shell, hanging vines with berries.
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                for dy in 0..=6 {
+                    let yy = floor + dy;
+                    let wall =
+                        x == cx - 3 || x == cx + 4 || z == cz + 3 || dy == 0 || dy == 6;
+                    changes.push(CellChange {
+                        x,
+                        y: yy,
+                        z,
+                        block: if wall {
+                            if (x + z + dy) % 5 == 0 {
+                                Block::new("moss_block", 0)
+                            } else {
+                                Block::new("stone", 0)
+                            }
+                        } else {
+                            Block::AIR
+                        },
+                    });
+                }
+            }
+        }
+        for &(dx, len, berry_at) in &[(0, 4, 1), (1, 5, 0), (2, 3, 2), (-1, 4, 3)] {
+            for i in 0..len {
+                let yy = floor + 5 - i;
+                let berried = i == berry_at || i == len - 1;
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: yy,
+                    z: cz,
+                    block: if berried {
+                        crate::glow_berries::berried_vine()
+                    } else {
+                        crate::glow_berries::empty_vine()
+                    },
+                });
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.8, y as f32 + 2.4, cz as f32 + 0.4);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.6,
+            y as f32 + 1.2 + body::EYE_HEIGHT,
+            cz as f32 - 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("cave_vines");
+        let _ = self.hotbar.give_stack("glow_berries");
+        let _ = self.hotbar.collect("bone_meal");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.glow_berries_told = true;
+        self.glow_berries_wait = crate::glow_berries::GROW_PERIOD;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("glow");
+        self.gui.push_chat("berries");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_bamboo_scaffolding_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -32805,6 +33026,7 @@ impl State {
         self.tick_amethyst_grow(dt);
         self.tick_dripstone(dt);
         self.tick_bamboo_grow(dt);
+        self.tick_glow_berries(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

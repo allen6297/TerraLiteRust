@@ -8006,6 +8006,8 @@ fn tab_of(id: &str) -> &'static str {
             | "azalea"
             | "bamboo"
             | "scaffolding"
+            | "cave_vines"
+            | "cave_vines_berries"
             | "copper_door"
             | "copper_trapdoor"
             | "decorated_pot"
