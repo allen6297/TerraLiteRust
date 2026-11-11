@@ -851,6 +851,9 @@ pub fn mace_hearts(falling: bool, smash: i32) -> i32 {
 /// Seconds a strength potion keeps the melee buff up.
 pub const STRENGTH_SECS: f32 = 12.0;
 
+/// Seconds a fire resistance potion ignores lava / magma / fireball burns.
+pub const FIRE_RES_SECS: f32 = 16.0;
+
 /// Extra hearts while strength is active.
 pub const STRENGTH_BONUS: i32 = 1;
 
@@ -1390,11 +1393,19 @@ pub fn feet_on_soul(eye: Vec3, world: &Cluster) -> bool {
 
 /// True when the block under the feet is magma. The burn uses `cactus_poke`.
 pub fn stands_on_magma(eye: Vec3, world: &Cluster) -> bool {
+    stands_on_fire(eye, world)
+}
+
+/// True when the feet sit on magma or in lava — fire damage sources.
+pub fn stands_on_fire(eye: Vec3, world: &Cluster) -> bool {
     let feet = eye.y - EYE_HEIGHT;
     let x = eye.x.floor() as i32;
     let y = (feet - 0.05).floor() as i32;
     let z = eye.z.floor() as i32;
-    (0..256).contains(&y) && world.block_at(x, y, z).id == "magma"
+    if !(0..256).contains(&y) {
+        return false;
+    }
+    matches!(world.block_at(x, y, z).id, "magma" | "lava")
 }
 
 fn feet_on_ice(eye: Vec3, world: &Cluster) -> bool {

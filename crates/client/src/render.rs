@@ -1243,6 +1243,8 @@ pub struct State {
     found_soul_speed: bool,
     /// Seconds left on a strength potion melee buff.
     strength_left: f32,
+    /// Seconds left on a fire resistance potion (lava / magma / fireball).
+    fire_res_left: f32,
     /// Seconds of beacon speed left.
     speed_left: f32,
     speed_show: f32,
@@ -1259,6 +1261,8 @@ pub struct State {
     conduit_count: u32,
     /// HUD plate while strength is up, `0`..`1`.
     strength_show: f32,
+    /// HUD plate while fire resistance is up, `0`..`1`.
+    fire_res_show: f32,
     /// HUD plate while an axolotl companion is leashed, `0`..`1`.
     leash_show: f32,
     /// True when the current axolotl follow consumed a lead item.
@@ -2639,6 +2643,7 @@ impl State {
             soul_trail_left: 0.0,
             found_soul_speed: false,
             strength_left: 0.0,
+            fire_res_left: 0.0,
             speed_left: 0.0,
             speed_show: 0.0,
             beacon_at: None,
@@ -2650,6 +2655,7 @@ impl State {
             conduit_buf: None,
             conduit_count: 0,
             strength_show: 0.0,
+            fire_res_show: 0.0,
             leash_show: 0.0,
             axolotl_held_lead: false,
             wolf_show: 0.0,
@@ -8496,6 +8502,7 @@ impl State {
         };
         let potion = id == "healing_potion";
         let strength = id == "strength_potion";
+        let fire_res = id == "fire_resistance_potion";
         let chorus = id == "chorus_fruit";
         let fed = self.hunger.eat(amount);
         let before = self.hearts;
@@ -8506,7 +8513,11 @@ impl State {
             self.strength_left = body::STRENGTH_SECS;
             self.strength_show = 1.0;
         }
-        if !fed && self.hearts == before && !strength && !chorus {
+        if fire_res {
+            self.fire_res_left = body::FIRE_RES_SECS;
+            self.fire_res_show = 1.0;
+        }
+        if !fed && self.hearts == before && !strength && !fire_res && !chorus {
             return true;
         }
         if potion {
@@ -8514,6 +8525,9 @@ impl State {
         }
         if strength {
             self.gui.push_chat("strength");
+        }
+        if fire_res {
+            self.gui.push_chat("fire res");
         }
         if chorus {
             if let Some(eye) = body::chorus_hop(self.camera.eye, &self.world) {
@@ -20982,6 +20996,93 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Fire resistance potion in hand over a magma pad, then quit with a PNG.
+    pub fn arm_fire_resistance_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (bx, bz) = rebuild_world::SHRINE_BREW;
+        let mut by = 4;
+        for y in 0..80 {
+            if self.world.block_at(bx, y, bz).id == "brewing_stand" {
+                by = y;
+                break;
+            }
+        }
+        // Magma pad underfoot so the buff reads as fire immunity.
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: bx - 2,
+                    y: by - 1,
+                    z: bz + 2,
+                    block: Block::new("magma", 0),
+                },
+                CellChange {
+                    x: bx - 1,
+                    y: by - 1,
+                    z: bz + 2,
+                    block: Block::new("magma", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(bx, bz);
+        self.chunk_bake.touch(bx - 2, bz + 2);
+        let focus = glam::Vec3::new(bx as f32 + 0.5, by as f32 + 0.95, bz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            bx as f32 - 1.6,
+            by as f32 + 0.55 + body::EYE_HEIGHT,
+            bz as f32 + 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.note_shot_at = None;
+        self.note_shot_book = false;
+        self.note_shot_brew = false;
+        self.fire_res_left = body::FIRE_RES_SECS;
+        self.fire_res_show = 1.0;
+        self.lava_heat = 0.55;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("fire res");
+        self.found_shrine = true;
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("fire_resistance_potion");
+        let _ = self.hotbar.collect("awkward_potion");
+        let _ = self.hotbar.collect("magma_cream");
+        let _ = self.hotbar.collect("ghast_tear");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Strength potion in hand with the melee buff plate up, then quit with a PNG.
     pub fn arm_strength_potion_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -28624,7 +28725,12 @@ impl State {
             self.magma_left = 0.0;
             return;
         }
-        let standing = body::stands_on_magma(self.camera.eye, &self.world);
+        // Fire resistance shrugs off lava and magma burns.
+        if self.fire_res_left > 0.0 {
+            self.magma_left = 0.0;
+            return;
+        }
+        let standing = body::stands_on_fire(self.camera.eye, &self.world);
         let (left, burn) = body::cactus_poke(standing, self.magma_left, dt);
         self.magma_left = left;
         if burn {
@@ -28774,6 +28880,8 @@ impl State {
         self.sprint_show = 0.0;
         self.strength_left = 0.0;
         self.strength_show = 0.0;
+        self.fire_res_left = 0.0;
+        self.fire_res_show = 0.0;
         self.speed_left = 0.0;
         self.speed_show = 0.0;
         self.conduit_left = 0.0;
@@ -28898,17 +29006,21 @@ impl State {
                 self.play_world(crate::audio::Sound::Gust, *at);
             }
             if fire_hearts > 0 {
-                let blocked = self.try_shield_block();
-                let amount = body::bite_hearts(blocked, fire_hearts, self.armor_soak());
-                self.apply_damage(amount);
-                self.hit_kick = self.hit_kick.max(0.7);
-                self.gui.push_chat(if blocked {
-                    "block"
-                } else if fire_hearts >= crate::fireballs::GHAST_HIT_HEARTS {
-                    "blast"
+                if self.fire_res_left > 0.0 {
+                    self.gui.push_chat("fire res");
                 } else {
-                    "burn"
-                });
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, fire_hearts, self.armor_soak());
+                    self.apply_damage(amount);
+                    self.hit_kick = self.hit_kick.max(0.7);
+                    self.gui.push_chat(if blocked {
+                        "block"
+                    } else if fire_hearts >= crate::fireballs::GHAST_HIT_HEARTS {
+                        "blast"
+                    } else {
+                        "burn"
+                    });
+                }
             }
             if fire_hit_ghast {
                 let origin = self.ghast.origin();
@@ -29548,6 +29660,16 @@ impl State {
             };
         } else {
             self.strength_show = (self.strength_show - dt * 4.0).max(0.0);
+        }
+        if self.fire_res_left > 0.0 {
+            self.fire_res_left = (self.fire_res_left - dt).max(0.0);
+            self.fire_res_show = if self.fire_res_left > 0.8 {
+                1.0
+            } else {
+                (self.fire_res_left / 0.8).clamp(0.0, 1.0)
+            };
+        } else {
+            self.fire_res_show = (self.fire_res_show - dt * 4.0).max(0.0);
         }
         if let Some(at) = self.beacon_at {
             if crate::beacon::pyramid_ready(&self.world, at) {
@@ -31594,6 +31716,9 @@ impl State {
         }
         if self.strength_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::strength_quads(gui_w, gui_h, self.strength_show));
+        }
+        if self.fire_res_show > 0.02 && !self.menu.is_open() && !self.dead {
+            quads.extend(gui::fire_res_quads(gui_w, gui_h, self.fire_res_show));
         }
         if self.speed_show > 0.02 && !self.menu.is_open() && !self.dead {
             quads.extend(gui::speed_quads(gui_w, gui_h, self.speed_show));

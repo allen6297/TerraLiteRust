@@ -693,6 +693,7 @@ mod tests {
                 "loom".to_string(),
                 "mace".to_string(),
                 "magma".to_string(),
+                "magma_cream".to_string(),
                 "map".to_string(),
                 "melon".to_string(),
                 "minecart".to_string(),

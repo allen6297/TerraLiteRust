@@ -2090,7 +2090,7 @@ impl Gui {
         }
         self.brew_at = Some(at);
         self.brew_note =
-            "enter: water+powder / awkward+powder strength / awkward+wart / water+wart+powder, or healing+gravel splash"
+            "enter: water+powder / awkward+powder strength / awkward+cream fire res / awkward+wart / water+wart+powder, or healing+gravel splash"
                 .to_string();
 
 
@@ -4177,7 +4177,13 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     } else if id == "gunpowder" {
         "ghast drop — blast powder".to_string()
     } else if id == "ghast_tear" {
-        "ghast drop — brew ingredient".to_string()
+        "ghast drop — brew fire resistance".to_string()
+    } else if id == "magma_cream" {
+        "craft from magma — brew fire resistance".to_string()
+    } else if id == "fire_resistance_potion" {
+        "drink — ignore lava and fire briefly".to_string()
+    } else if id == "strength_potion" {
+        "drink — harder melee hits".to_string()
     } else if id == "respawn_anchor" {
         "charge with glowstone — nether spawn".to_string()
     } else if id == "bed" {
@@ -6320,6 +6326,10 @@ pub fn strength_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "strength")
 }
 
+pub fn fire_res_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
+    status_plate(width, height, amount, "fire res")
+}
+
 pub fn speed_quads(width: f32, height: f32, amount: f32) -> Vec<Quad> {
     status_plate(width, height, amount, "speed")
 }
@@ -7426,6 +7436,8 @@ fn tab_of(id: &str) -> &'static str {
             | "healing_potion"
             | "awkward_potion"
             | "strength_potion"
+            | "fire_resistance_potion"
+            | "magma_cream"
             | "splash_healing_potion"
             | "splash_harming_potion"
 
