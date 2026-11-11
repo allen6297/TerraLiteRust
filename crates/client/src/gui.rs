@@ -4161,11 +4161,17 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     } else if pack.is_bow(id) {
         "hold to draw, release to fire".to_string()
     } else if pack.armor_of(id).is_some() {
-        if crate::body::is_gold_armor(id) {
+        if crate::body::is_gold_armor(id) && crate::body::is_soul_speed_boots(id) {
+            "soaks damage — pacifies piglins — soul speed".to_string()
+        } else if crate::body::is_gold_armor(id) {
             "soaks damage — pacifies piglins".to_string()
+        } else if crate::body::is_soul_speed_boots(id) {
+            "soaks damage — soul speed on soul sand".to_string()
         } else {
             "soaks heart damage".to_string()
         }
+    } else if id == "soul_sand" || id == "soul_soil" {
+        "slows without soul speed boots".to_string()
     } else if id == "respawn_anchor" {
         "charge with glowstone — nether spawn".to_string()
     } else if id == "bed" {
@@ -4204,6 +4210,9 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         stats.push(format!("Soak {soak}"));
         if crate::body::is_gold_armor(id) {
             stats.push("Pacifies piglins".to_string());
+        }
+        if crate::body::is_soul_speed_boots(id) {
+            stats.push("Soul Speed".to_string());
         }
     }
     if pack.is_firework(id) {
@@ -7390,6 +7399,7 @@ fn tab_of(id: &str) -> &'static str {
             | "flower_pot"
             | "sand"
             | "soul_sand"
+            | "soul_soil"
             | "magma"
             | "gravel"
             | "cactus"

@@ -28,9 +28,11 @@ const JUMP_SPEED: f32 = 8.6;
 const WATER_DRAG: f32 = 0.35;
 /// Horizontal speed inside a cobweb, as a fraction of a normal walk.
 pub const COBWEB_DRAG: f32 = 0.25;
-/// Horizontal speed while standing on soul sand, as a fraction of a normal walk.
+/// Horizontal speed while standing on soul sand / soil without Soul Speed.
 /// Half speed is a lighter drag than a cobweb's quarter.
 pub const SOUL_SAND_DRAG: f32 = 0.5;
+/// Horizontal speed on soul sand / soil while wearing Soul Speed boots.
+pub const SOUL_SPEED_BOOST: f32 = 1.35;
 /// Horizontal speed while crouching, as a fraction of a normal walk.
 pub const CROUCH_DRAG: f32 = 0.3;
 /// Fastest fall, in blocks per second, while the body is inside a cobweb.
@@ -89,6 +91,19 @@ pub fn step_paced(
     obstacles: &[([f32; 3], [f32; 3])],
     pace: f32,
 ) {
+    step_paced_soul(camera, dt, input, world, obstacles, pace, false);
+}
+
+/// `step_paced` with Soul Speed: soul sand / soil boosts instead of dragging.
+pub fn step_paced_soul(
+    camera: &mut Camera,
+    dt: f32,
+    input: &MoveInput,
+    world: &Cluster,
+    obstacles: &[([f32; 3], [f32; 3])],
+    pace: f32,
+    soul_speed: bool,
+) {
     let extras: Vec<Aabb> = obstacles
         .iter()
         .map(|bounds| Aabb {
@@ -103,7 +118,7 @@ pub fn step_paced(
     let wet = overlaps_water(&body_now, world);
     let deep = deep_water(&body_now, world);
     let webbed = inside_cobweb(&body_now, world);
-    let soul = feet_on_soul_sand(camera.eye, world);
+    let soul = feet_on_soul(camera.eye, world);
     let climbing = touches_climb(&body_now, world);
     // A jump frame leaves the ground instead of auto-stepping into the wall.
     let can_step = camera.on_ground && !input.jump && !wet && !climbing;
@@ -163,7 +178,11 @@ pub fn step_paced(
         let speed = if webbed {
             speed * COBWEB_DRAG
         } else if soul {
-            speed * SOUL_SAND_DRAG
+            if soul_speed {
+                speed * SOUL_SPEED_BOOST
+            } else {
+                speed * SOUL_SAND_DRAG
+            }
         } else if wet {
             speed * WATER_DRAG
         } else {
@@ -880,6 +899,19 @@ pub fn is_gold_armor(id: &str) -> bool {
     )
 }
 
+/// True when worn boots carry Soul Speed (gold / netherite stub, or enchanted id).
+pub fn is_soul_speed_boots(id: &str) -> bool {
+    matches!(
+        id,
+        "golden_boots"
+            | "gold_boots"
+            | "netherite_boots"
+            | "soul_speed_boots"
+            | "boots_soul_speed"
+    ) || id.ends_with("_boots_soul")
+        || id.contains("soul_speed")
+}
+
 impl Armor {
     pub fn new() -> Self {
         Self { slots: [None; 3] }
@@ -892,6 +924,11 @@ impl Armor {
     /// True when any worn piece is gold — nearby piglins stay neutral unless struck.
     pub fn wears_gold(self) -> bool {
         self.slots.iter().flatten().any(|id| is_gold_armor(id))
+    }
+
+    /// True when the boots slot grants Soul Speed on soul sand / soil.
+    pub fn has_soul_speed(self) -> bool {
+        self.slots[2].is_some_and(is_soul_speed_boots)
     }
 
     /// Wear `id` in `slot`. The piece that was there comes back.
@@ -1336,11 +1373,19 @@ fn for_solids(bounds: &Aabb, world: &Cluster, extra: &[Aabb], mut visit: impl Fn
 }
 
 fn feet_on_soul_sand(eye: Vec3, world: &Cluster) -> bool {
+    feet_on_soul(eye, world)
+}
+
+/// True when the block under the feet is soul sand or soul soil.
+pub fn feet_on_soul(eye: Vec3, world: &Cluster) -> bool {
     let feet = eye.y - EYE_HEIGHT;
     let x = eye.x.floor() as i32;
     let y = (feet - 0.05).floor() as i32;
     let z = eye.z.floor() as i32;
-    (0..256).contains(&y) && world.block_at(x, y, z).id == "soul_sand"
+    if !(0..256).contains(&y) {
+        return false;
+    }
+    matches!(world.block_at(x, y, z).id, "soul_sand" | "soul_soil")
 }
 
 /// True when the block under the feet is magma. The burn uses `cactus_poke`.
@@ -2913,6 +2958,48 @@ mod tests {
             slow < open * (super::SOUL_SAND_DRAG + 0.05),
             "soul sand should be about half a walk, open {open} slow {slow}"
         );
+    }
+
+    #[test]
+    fn soul_speed_boots_outrun_bare_feet_on_soul_sand() {
+        let mut blocks = Vec::new();
+        for z in 0..8u8 {
+            blocks.push((0, 0, z, Block::new("soul_sand", 0)));
+        }
+        let world =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap();
+        let travel = |soul_speed: bool| {
+            let eye = Vec3::new(0.5, 1.0 + EYE_HEIGHT, 6.5);
+            let mut camera = Camera::looking_at(eye, Vec3::new(0.5, 1.4, 0.0));
+            let mut walk = idle();
+            walk.forward = true;
+            for _ in 0..40 {
+                step_paced_soul(&mut camera, 1.0 / 60.0, &walk, &world, &[], 1.0, soul_speed);
+            }
+            eye.z - camera.eye.z
+        };
+        let slow = travel(false);
+        let fast = travel(true);
+        assert!(
+            fast > slow * 1.5,
+            "soul speed should outrun bare feet, slow {slow} fast {fast}"
+        );
+        assert!(
+            fast > slow * (super::SOUL_SPEED_BOOST / super::SOUL_SAND_DRAG) * 0.7,
+            "boost should read as a clear jump, slow {slow} fast {fast}"
+        );
+        let mut armor = Armor::new();
+        assert!(!armor.has_soul_speed());
+        let _ = armor.equip(2, "golden_boots");
+        assert!(armor.has_soul_speed());
+        let _ = armor.equip(2, "netherite_boots");
+        assert!(armor.has_soul_speed());
+        let _ = armor.equip(2, "leather_boots");
+        assert!(!armor.has_soul_speed());
+        assert!(feet_on_soul(
+            Vec3::new(0.5, 1.0 + EYE_HEIGHT, 0.5),
+            &world
+        ));
     }
 
     #[test]

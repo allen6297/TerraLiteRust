@@ -1237,6 +1237,10 @@ pub struct State {
     pollen_show: f32,
     /// Seconds until the next pollen trail drip.
     pollen_drip: f32,
+    /// Seconds until the next Soul Speed trail mote.
+    soul_trail_left: f32,
+    /// Once: ran Soul Speed on soul sand / soil.
+    found_soul_speed: bool,
     /// Seconds left on a strength potion melee buff.
     strength_left: f32,
     /// Seconds of beacon speed left.
@@ -2624,6 +2628,8 @@ impl State {
             horse_stroke: 0.0,
             pollen_show: 0.0,
             pollen_drip: 0.0,
+            soul_trail_left: 0.0,
+            found_soul_speed: false,
             strength_left: 0.0,
             speed_left: 0.0,
             speed_show: 0.0,
@@ -10127,6 +10133,86 @@ impl State {
                 self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
             }
         }
+        let _ = self.window.focus_window();
+    }
+
+    /// Soul Speed boots racing a soul-sand path, then quit with a PNG.
+    pub fn arm_soul_speed_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        let mut cells = Vec::new();
+        for dz in 0..6 {
+            cells.push(CellChange {
+                x: px + 1,
+                y: fy,
+                z: pz + dz,
+                block: Block::new(if dz % 2 == 0 { "soul_sand" } else { "soul_soil" }, 0),
+            });
+        }
+        apply_changes(&mut self.world, &cells);
+        for dz in 0..6 {
+            self.chunk_bake.touch(px + 1, pz + dz);
+        }
+
+        let _ = self.armor.equip(2, "netherite_boots");
+        self.found_soul_speed = true;
+        self.soul_trail_left = 0.0;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("soul speed");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("netherite_boots");
+        let _ = self.hotbar.collect("soul_sand");
+        let _ = self.hotbar.collect("soul_soil");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+        self.gui.open_player_craft();
+        self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
+        let tip = crate::gui::tip_for("netherite_boots", Some(1));
+        self.gui.pin_tip(tip);
+
+        // Look along the soul path so teal trail motes read underfoot.
+        let eye = glam::Vec3::new(
+            px as f32 + 1.5,
+            fy as f32 + 0.55 + body::EYE_HEIGHT,
+            pz as f32 + 1.4,
+        );
+        let focus = glam::Vec3::new(px as f32 + 1.5, fy as f32 + 1.05, pz as f32 + 4.2);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        for i in 0..5 {
+            let mote = [
+                px as f32 + 1.45 + (i as f32) * 0.05,
+                fy as f32 + 1.15 + (i as f32) * 0.04,
+                pz as f32 + 1.8 + (i as f32) * 0.4,
+            ];
+            self.drops.puff(mote, [0.35, 0.72, 0.85]);
+        }
+        self.rebuild_drops();
+        self.set_capture(false);
         let _ = self.window.focus_window();
     }
 
@@ -29407,23 +29493,42 @@ impl State {
             if !sprinting {
                 self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
             }
-            self.camera
-                .step_paced(
-                    dt,
-                    &motion,
-                    &self.world,
-                    &obstacles,
-                    if self.speed_left > 0.0 {
-                        self.hunger.pace() * crate::beacon::SPEED_PACE
-                    } else {
-                        self.hunger.pace()
-                    },
-                );
+            let soul_speed = self.armor.has_soul_speed();
+            let on_soul = body::feet_on_soul(self.camera.eye, &self.world);
+            self.camera.step_paced_soul(
+                dt,
+                &motion,
+                &self.world,
+                &obstacles,
+                if self.speed_left > 0.0 {
+                    self.hunger.pace() * crate::beacon::SPEED_PACE
+                } else {
+                    self.hunger.pace()
+                },
+                soul_speed,
+            );
             let stepping = motion.forward || motion.back || motion.left || motion.right;
             if stepping && self.camera.on_ground {
                 let pace = if motion.fast { 11.0 } else { 8.0 };
                 self.bob_phase += dt * pace;
                 self.bob_amount = (self.bob_amount + dt * 5.0).min(1.0);
+                if on_soul && soul_speed {
+                    self.soul_trail_left = (self.soul_trail_left - dt).max(0.0);
+                    if self.soul_trail_left <= 0.0 {
+                        self.soul_trail_left = 0.12;
+                        let feet = [
+                            self.camera.eye.x,
+                            self.camera.eye.y - body::EYE_HEIGHT + 0.08,
+                            self.camera.eye.z,
+                        ];
+                        self.drops.puff(feet, [0.35, 0.72, 0.85]);
+                        self.rebuild_drops();
+                        if !self.found_soul_speed {
+                            self.found_soul_speed = true;
+                            self.gui.push_chat("soul speed");
+                        }
+                    }
+                }
             }
             } // end grounded walk (not flying)
             self.note_plate();

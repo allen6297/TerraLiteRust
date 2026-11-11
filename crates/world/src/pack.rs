@@ -7424,6 +7424,7 @@ mod tests {
         assert_eq!(pack.hardness_of(Block::new("flower_pot", 0)), Some(0.5));
         assert_eq!(pack.hardness_of(Block::new("sand", 0)), Some(0.5));
         assert_eq!(pack.hardness_of(Block::new("soul_sand", 0)), Some(0.5));
+        assert_eq!(pack.hardness_of(Block::new("soul_soil", 0)), Some(0.5));
         assert_eq!(pack.hardness_of(Block::new("magma", 0)), Some(0.5));
         assert_eq!(pack.hardness_of(Block::new("cactus", 0)), Some(0.4));
         assert_eq!(pack.hardness_of(Block::new("cake", 0)), Some(0.5));

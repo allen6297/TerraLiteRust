@@ -184,7 +184,19 @@ impl Camera {
         obstacles: &[([f32; 3], [f32; 3])],
         pace: f32,
     ) {
-        body::step_paced(self, dt, input, world, obstacles, pace);
+        self.step_paced_soul(dt, input, world, obstacles, pace, false);
+    }
+
+    pub fn step_paced_soul(
+        &mut self,
+        dt: f32,
+        input: &MoveInput,
+        world: &Cluster,
+        obstacles: &[([f32; 3], [f32; 3])],
+        pace: f32,
+        soul_speed: bool,
+    ) {
+        body::step_paced_soul(self, dt, input, world, obstacles, pace, soul_speed);
     }
 
     /// Creative flight step: no gravity, Space / Shift for vertical.
