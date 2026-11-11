@@ -13914,6 +13914,14 @@ impl State {
             self.rebuild_drops();
             let remains = shape_of(cell.block).is_full_cube();
             let mut loot = rebuild_world::break_loot_of(before.id);
+            // Fortune: chance at a second copy of the first ore drop.
+            if crate::xp::Xp::is_ore(before.id)
+                && self.hotbar.is_lucky(self.hotbar.selected())
+                && !loot.is_empty()
+            {
+                let (id, n) = loot[0].clone();
+                loot.push((id, n));
+            }
             if self.hooks.listens_break_drop() {
                 let slots = hotbar_slots(&self.hotbar);
                 let view = client_view(&slots, &self.hotbar, self.camera.eye, self.clock);
@@ -21534,7 +21542,7 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Open the shrine enchant panel mid-swirl with Efficiency tip, then quit with a PNG.
+    /// Open the shrine enchanting egui with three bookshelf-powered offers, then quit with a PNG.
     pub fn arm_enchant_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -21557,6 +21565,33 @@ impl State {
                 ey = y;
                 break;
             }
+        }
+        // Ring of bookshelves so the panel shows three powered offers.
+        let mut cells = Vec::new();
+        for (dx, dz) in [
+            (-2, 0),
+            (2, 0),
+            (0, -2),
+            (0, 2),
+            (-2, -2),
+            (-2, 2),
+            (2, -2),
+            (2, 2),
+            (-1, -2),
+            (1, -2),
+            (-1, 2),
+            (1, 2),
+        ] {
+            cells.push(CellChange {
+                x: ex + dx,
+                y: ey,
+                z: ez + dz,
+                block: Block::new("bookshelf", 0),
+            });
+        }
+        apply_changes(&mut self.world, &cells);
+        for cell in &cells {
+            self.chunk_bake.touch(cell.x, cell.z);
         }
         self.chunk_bake.touch(ex, ez);
         let focus = glam::Vec3::new(ex as f32 + 0.5, ey as f32 + 0.95, ez as f32 + 0.5);
@@ -21584,16 +21619,22 @@ impl State {
         self.drops.book_swirl(swirl_at);
         self.rebuild_drops();
         self.play_world(crate::audio::Sound::Chime, swirl_at);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        for _ in 0..8 {
+            let _ = self.hotbar.collect("lapis_lazuli");
+        }
+        let _ = self.xp.gain(crate::xp::XP_PER_LEVEL * 6);
         let _ = self.gui.open_enchanting([ex, ey, ez]);
-        self.gui.note_enchant("efficiency");
-        self.gui.push_chat("efficiency");
+        let books = count_enchant_books(&self.world, [ex, ey, ez]);
+        self.gui.set_enchant_books(books);
+        self.gui.note_enchant("pick an offer");
+        self.gui.push_chat("enchant");
         self.found_chime = true;
         self.gui.push_chat("chime");
         self.found_shrine = true;
-        self.hotbar.install_saved(0, &[]);
-        let _ = self.hotbar.give_stack("iron_pickaxe");
-        let _ = self.hotbar.collect("bookshelf");
-        let _ = self.hotbar.enchant_pick();
+        let tip = crate::gui::tip_for_tool("iron_pickaxe", Some(32), false, false, false);
+        self.gui.pin_tip(tip);
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -27061,11 +27102,11 @@ impl State {
         true
     }
 
-    /// Enter on the enchanting table puts Efficiency on a plain pick.
+    /// Enter on the enchanting table puts Efficiency on a plain dig tool (1 XP + lapis).
     /// `events.enchant` can refuse it.
     ///
-    /// The hook sees the tool id only when a bookshelf would be spent. False
-    /// leaves the book and the plain pick alone.
+    /// The hook sees the tool id only when lapis would be spent. False
+    /// leaves the lapis and the plain tool alone.
     fn try_enchant(&mut self) {
         let target = self.hotbar.enchant_target().map(str::to_string);
         if let Some(id) = target {
@@ -27075,11 +27116,17 @@ impl State {
                 return;
             }
         }
+        if self.xp.level < 1 {
+            self.gui.note_enchant("need XP");
+            self.gui.push_chat("need XP");
+            return;
+        }
         let word = self.hotbar.enchant_pick();
         self.gui.note_enchant(word);
         self.gui.push_chat(word);
         self.hotbar_dirty = true;
         if word == "efficiency" {
+            let _ = self.xp.spend_levels(1);
             if let Some(at) = self.gui.enchant_at() {
                 let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
                 self.play_world(crate::audio::Sound::Chime, source);
@@ -27093,7 +27140,7 @@ impl State {
         }
     }
 
-    /// False from `events.enchant` keeps the bookshelf. A refused enchant
+    /// False from `events.enchant` keeps the lapis. A refused enchant
     /// sends the first `world.set_block` from the hook.
     fn try_script_enchant(&mut self, item: &str) -> bool {
         let _ = self.hooks.drain_writes();
@@ -32226,6 +32273,23 @@ impl State {
                     }
                 }
             }
+            if self.gui.enchant_open() {
+                if let Some(at) = self.gui.enchant_at() {
+                    self.gui.set_enchant_books(count_enchant_books(&self.world, at));
+                }
+            }
+            if self.gui.take_enchant_chime() {
+                if let Some(at) = self.gui.enchant_at() {
+                    let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                    self.play_world(crate::audio::Sound::Chime, source);
+                    self.drops.book_swirl(source);
+                    self.rebuild_drops();
+                    if !self.found_chime {
+                        self.found_chime = true;
+                        self.gui.push_chat("chime");
+                    }
+                }
+            }
             if action != gui::MenuAction::None {
                 self.hotbar_dirty = true;
                 self.bag_dirty = true;
@@ -34022,6 +34086,25 @@ fn lava_heat_amount(eye: glam::Vec3, forward: glam::Vec3, world: &Cluster) -> f3
 
 fn chunk_of(eye: glam::Vec3) -> [i32; 2] {
     [eye.x.div_euclid(16.0) as i32, eye.z.div_euclid(16.0) as i32]
+}
+
+/// Nearby bookshelves powering the enchanting table (cap 15, MC-ish).
+fn count_enchant_books(world: &rebuild_world::Cluster, at: [i32; 3]) -> u8 {
+    let mut n = 0u8;
+    for dx in -2..=2i32 {
+        for dz in -2..=2i32 {
+            if dx == 0 && dz == 0 {
+                continue;
+            }
+            for dy in 0..=1i32 {
+                let id = world.block_at(at[0] + dx, at[1] + dy, at[2] + dz).id;
+                if id == "bookshelf" || id == "chiseled_bookshelf" {
+                    n = n.saturating_add(1);
+                }
+            }
+        }
+    }
+    n.min(15)
 }
 
 fn command_rows(hooks: &Hooks) -> Vec<(String, String)> {

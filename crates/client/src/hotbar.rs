@@ -262,6 +262,10 @@ struct Item {
     uses: u16,
     /// Efficiency. A keen pick mines twice as fast.
     keen: bool,
+    /// Unbreaking — half of wear attempts are shrugged off.
+    sturdy: bool,
+    /// Fortune — ore breaks may yield an extra drop.
+    lucky: bool,
 }
 
 /// A new stack. A tool is one item at full durability. `count` is ignored for tools.
@@ -273,6 +277,8 @@ fn fresh(id: &'static str, count: u16) -> Item {
             count: 1,
             uses,
             keen: false,
+            sturdy: false,
+            lucky: false,
         }
     } else {
         Item {
@@ -280,6 +286,8 @@ fn fresh(id: &'static str, count: u16) -> Item {
             count: count.min(stack_cap(id)),
             uses: 0,
             keen: false,
+            sturdy: false,
+            lucky: false,
         }
     }
 }
@@ -293,6 +301,8 @@ fn restored(id: &'static str, saved: u16) -> Item {
             count: 1,
             uses: saved.min(uses).max(1),
             keen: false,
+            sturdy: false,
+            lucky: false,
         }
     } else {
         Item {
@@ -300,8 +310,94 @@ fn restored(id: &'static str, saved: u16) -> Item {
             count: saved.min(stack_cap(id)),
             uses: 0,
             keen: false,
+            sturdy: false,
+            lucky: false,
         }
     }
+}
+
+/// One row on the enchanting table choice UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnchantOffer {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub detail: &'static str,
+    pub xp: i32,
+    pub lapis: u16,
+}
+
+/// Bookshelf power → how many offers (1..=3).
+pub fn enchant_offer_count(books: u8) -> usize {
+    if books >= 8 {
+        3
+    } else if books >= 2 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Build 1–3 offers for the held tool from nearby bookshelf power.
+pub fn enchant_offers_for(tool: &str, books: u8, keen: bool, sturdy: bool, lucky: bool) -> Vec<EnchantOffer> {
+    let max = Pack::builtin().tool_uses(tool);
+    if max == 0 {
+        return Vec::new();
+    }
+    let pick = tool.ends_with("pickaxe");
+    let dig =
+        pick || tool.ends_with("axe") || tool.ends_with("shovel") || tool.ends_with("hoe");
+    let mut pool: Vec<EnchantOffer> = Vec::new();
+    if dig && !keen {
+        let (xp, lapis, title, detail) = if books >= 8 {
+            (3, 3, "Efficiency III", "Mines much faster")
+        } else if books >= 2 {
+            (2, 2, "Efficiency II", "Mines twice as fast")
+        } else {
+            (1, 1, "Efficiency I", "Mines twice as fast")
+        };
+        pool.push(EnchantOffer {
+            id: "efficiency",
+            title,
+            detail,
+            xp,
+            lapis,
+        });
+    }
+    if !sturdy {
+        let (xp, lapis, title) = if books >= 8 {
+            (2, 2, "Unbreaking III")
+        } else if books >= 2 {
+            (2, 1, "Unbreaking II")
+        } else {
+            (1, 1, "Unbreaking I")
+        };
+        pool.push(EnchantOffer {
+            id: "unbreaking",
+            title,
+            detail: "Halves wear chance",
+            xp,
+            lapis,
+        });
+    }
+    if pick && !lucky {
+        let (xp, lapis, title) = if books >= 8 {
+            (3, 3, "Fortune III")
+        } else if books >= 2 {
+            (2, 2, "Fortune II")
+        } else {
+            (1, 1, "Fortune I")
+        };
+        pool.push(EnchantOffer {
+            id: "fortune",
+            title,
+            detail: "Extra ore chance",
+            xp,
+            lapis,
+        });
+    }
+    let n = enchant_offer_count(books).min(pool.len());
+    pool.truncate(n);
+    pool
 }
 
 fn is_tool(id: &str) -> bool {
@@ -520,6 +616,24 @@ impl Hotbar {
         self.item(index).is_some_and(|item| item.keen)
     }
 
+    /// True when the slot holds Unbreaking.
+    pub fn is_sturdy(&self, index: usize) -> bool {
+        self.item(index).is_some_and(|item| item.sturdy)
+    }
+
+    /// True when the slot holds Fortune.
+    pub fn is_lucky(&self, index: usize) -> bool {
+        self.item(index).is_some_and(|item| item.lucky)
+    }
+
+    /// Current enchant offers for the selected tool given nearby bookshelf power.
+    pub fn enchant_offers(&self, books: u8) -> Vec<EnchantOffer> {
+        let Some(item) = self.item(self.selected) else {
+            return Vec::new();
+        };
+        enchant_offers_for(item.id, books, item.keen, item.sturdy, item.lucky)
+    }
+
     fn item(&self, index: usize) -> Option<Item> {
         self.slots.get(index).copied().flatten()
     }
@@ -610,6 +724,10 @@ impl Hotbar {
         if item.uses == 0 || Pack::builtin().mine_factor(item.id, block) <= 1.0 {
             return false;
         }
+        // Unbreaking shrugs off every other wear tick.
+        if item.sturdy && item.uses % 2 == 0 {
+            return true;
+        }
         let broke = item.uses <= 1;
         if broke {
             *slot = None;
@@ -635,6 +753,9 @@ impl Hotbar {
         };
         if item.uses == 0 {
             return false;
+        }
+        if item.sturdy && item.uses % 2 == 0 {
+            return true;
         }
         let broke = item.uses <= 1;
         if broke {
@@ -754,9 +875,9 @@ impl Hotbar {
         if max == 0 {
             return "need a tool";
         }
-        let (add, keen) = {
+        let (add, keen, sturdy, lucky) = {
             let other = self.slots[donor].as_ref().expect("donor");
-            (other.uses, other.keen)
+            (other.uses, other.keen, other.sturdy, other.lucky)
         };
         if let Some(item) = self
             .slots
@@ -765,6 +886,8 @@ impl Hotbar {
         {
             item.uses = (item.uses.saturating_add(add)).min(max);
             item.keen = item.keen || keen;
+            item.sturdy = item.sturdy || sturdy;
+            item.lucky = item.lucky || lucky;
         }
         self.slots[donor] = None;
         self.labels[donor] = None;
@@ -802,55 +925,100 @@ impl Hotbar {
         true
     }
 
-    /// The plain pickaxe Enter would enchant, when a bookshelf is in the bar.
+    /// The plain tool Enter / first offer would enchant, when lapis is in the bar.
     pub fn enchant_target(&self) -> Option<&'static str> {
         let item = self.item(self.selected)?;
         let max = Pack::builtin().tool_uses(item.id);
-        if max == 0 || !item.id.ends_with("pickaxe") || item.keen {
+        if max == 0 || item.keen {
             return None;
         }
-        let has_book = self
-            .slots
-            .iter()
-            .any(|slot| slot.is_some_and(|item| item.id == "bookshelf" && item.count > 0));
-        if !has_book {
+        let dig = item.id.ends_with("pickaxe")
+            || item.id.ends_with("axe")
+            || item.id.ends_with("shovel")
+            || item.id.ends_with("hoe");
+        if !dig {
+            return None;
+        }
+        if !self.holds("lapis_lazuli", 1) {
             return None;
         }
         Some(item.id)
     }
 
-    /// Put Efficiency on the selected pickaxe. One bookshelf pays for it.
+    /// Put Efficiency on the selected dig tool. One lapis pays for it (Enter path).
     ///
-    /// `"efficiency"` spends the book. `"already enchanted"` leaves a keen pick alone.
-    /// `"need a pick"` is anything that is not a pickaxe. `"need a bookshelf"` is a
-    /// plain pick with no bookshelf in the bar.
+    /// `"efficiency"` spends lapis. `"already enchanted"` leaves a keen tool alone.
+    /// `"need a tool"` is anything that is not a dig tool. `"need lapis"` is a
+    /// plain tool with no lapis in the bar.
     pub fn enchant_pick(&mut self) -> &'static str {
+        self.apply_enchant("efficiency", 1)
+    }
+
+    /// Apply an enchant offer. Spends `lapis` lapis; caller spends XP.
+    ///
+    /// Returns the offer id on success, or a need/already word.
+    pub fn apply_enchant(&mut self, id: &str, lapis: u16) -> &'static str {
         let Some(item) = self.item(self.selected) else {
-            return "need a pick";
+            return "need a tool";
         };
         let max = Pack::builtin().tool_uses(item.id);
-        if max == 0 || !item.id.ends_with("pickaxe") {
-            return "need a pick";
+        if max == 0 {
+            return "need a tool";
         }
-        if item.keen {
-            return "already enchanted";
+        match id {
+            "efficiency" => {
+                let dig = item.id.ends_with("pickaxe")
+                    || item.id.ends_with("axe")
+                    || item.id.ends_with("shovel")
+                    || item.id.ends_with("hoe");
+                if !dig {
+                    return "need a tool";
+                }
+                if item.keen {
+                    return "already enchanted";
+                }
+            }
+            "unbreaking" => {
+                if item.sturdy {
+                    return "already enchanted";
+                }
+            }
+            "fortune" => {
+                if !item.id.ends_with("pickaxe") {
+                    return "need a pick";
+                }
+                if item.lucky {
+                    return "already enchanted";
+                }
+            }
+            _ => return "need a tool",
         }
-        let Some(book) = self
-            .slots
-            .iter()
-            .position(|slot| slot.is_some_and(|item| item.id == "bookshelf" && item.count > 0))
-        else {
-            return "need a bookshelf";
-        };
-        self.consume_at(book);
+        if !self.holds("lapis_lazuli", lapis.max(1)) {
+            return "need lapis";
+        }
+        for _ in 0..lapis.max(1) {
+            if !self.consume_one("lapis_lazuli") {
+                return "need lapis";
+            }
+        }
         if let Some(item) = self
             .slots
             .get_mut(self.selected)
             .and_then(|slot| slot.as_mut())
         {
-            item.keen = true;
+            match id {
+                "efficiency" => item.keen = true,
+                "unbreaking" => item.sturdy = true,
+                "fortune" => item.lucky = true,
+                _ => {}
+            }
         }
-        "efficiency"
+        match id {
+            "efficiency" => "efficiency",
+            "unbreaking" => "unbreaking",
+            "fortune" => "fortune",
+            _ => "enchanted",
+        }
     }
 
     /// The ingredient Enter would brew, when the mix fits on the bar.
@@ -1170,9 +1338,9 @@ impl Hotbar {
         "brewed"
     }
 
-    /// Take Efficiency off the selected pick and give it four uses back.
+    /// Take enchants off the selected pick and give it four uses back.
     ///
-    /// `"ground"` clears a keen pick. `"sharpened"` is a plain worn pick.
+    /// `"ground"` clears an enchanted pick. `"sharpened"` is a plain worn pick.
     /// `"plain"` is a fresh unenchanted pick. `"need a pick"` is anything else.
     pub fn grind_pick(&mut self) -> &'static str {
         let Some(item) = self.item(self.selected) else {
@@ -1182,8 +1350,8 @@ impl Hotbar {
         if max == 0 || !item.id.ends_with("pickaxe") {
             return "need a pick";
         }
-        let keen = item.keen;
-        if !keen && item.uses >= max {
+        let enchanted = item.keen || item.sturdy || item.lucky;
+        if !enchanted && item.uses >= max {
             return "plain";
         }
         let uses = item.uses.saturating_add(4).min(max);
@@ -1193,9 +1361,11 @@ impl Hotbar {
             .and_then(|slot| slot.as_mut())
         {
             item.keen = false;
+            item.sturdy = false;
+            item.lucky = false;
             item.uses = uses;
         }
-        if keen { "ground" } else { "sharpened" }
+        if enchanted { "ground" } else { "sharpened" }
     }
 
     /// The held item Enter would upgrade, when its payment is in the bar.
@@ -2924,10 +3094,10 @@ mod tests {
         assert!(bar.give_stack("iron_pickaxe"));
         assert_eq!(bar.dig_factor("stone"), 6.0);
         assert_eq!(bar.dig_factor("dirt"), 1.0);
-        assert_eq!(bar.enchant_pick(), "need a bookshelf");
+        assert_eq!(bar.enchant_pick(), "need lapis");
         assert_eq!(bar.enchant_target(), None);
         bar.select_digit(1);
-        assert!(bar.give_stack("bookshelf"));
+        assert!(bar.give_stack("lapis_lazuli"));
         bar.select_digit(2);
         assert_eq!(bar.enchant_target(), Some("iron_pickaxe"));
         assert_eq!(bar.enchant_pick(), "efficiency");
@@ -2939,7 +3109,10 @@ mod tests {
         assert_eq!(bar.count(0), 63);
         bar.select_digit(3);
         assert!(bar.give_stack("shield"));
-        assert_eq!(bar.enchant_pick(), "need a pick");
+        assert_eq!(bar.enchant_pick(), "need a tool");
+        let offers = enchant_offers_for("iron_pickaxe", 8, false, false, false);
+        assert_eq!(offers.len(), 3);
+        assert_eq!(offers[0].id, "efficiency");
     }
 
     #[test]
@@ -3043,7 +3216,7 @@ mod tests {
         }
         assert_eq!(bar.count(1), 26);
         bar.select_digit(1);
-        assert!(bar.give_stack("bookshelf"));
+        assert!(bar.give_stack("lapis_lazuli"));
         bar.select_digit(2);
         assert_eq!(bar.enchant_pick(), "efficiency");
         assert_eq!(bar.dig_factor("stone"), 12.0);

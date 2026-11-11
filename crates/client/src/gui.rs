@@ -706,6 +706,10 @@ pub struct Gui {
     enchant_open: bool,
     /// The line under the enchant title. Enter replaces it with the enchant word.
     enchant_note: String,
+    /// Nearby bookshelf count powering the offer list.
+    enchant_books: u8,
+    /// Set when an offer should chime at the table.
+    enchant_chime: bool,
     /// The enchanting table the panel is spending at.
     enchant_at: Option<[i32; 3]>,
     brew_open: bool,
@@ -889,6 +893,8 @@ impl Gui {
                 anvil_at: None,
                 enchant_open: false,
                 enchant_note: String::new(),
+                enchant_books: 0,
+                enchant_chime: false,
                 enchant_at: None,
                 brew_open: false,
                 brew_note: String::new(),
@@ -1013,6 +1019,8 @@ impl Gui {
                     anvil_at: None,
                     enchant_open: false,
                     enchant_note: String::new(),
+                    enchant_books: 0,
+                    enchant_chime: false,
                     enchant_at: None,
                     brew_open: false,
                     brew_note: String::new(),
@@ -1147,6 +1155,8 @@ impl Gui {
             anvil_at: None,
             enchant_open: false,
             enchant_note: String::new(),
+            enchant_books: 0,
+            enchant_chime: false,
             enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
@@ -2097,13 +2107,15 @@ impl Gui {
         self.anvil_note = note.to_string();
     }
 
-    /// An enchant panel. Other screens keep it closed.
+    /// An enchant choice panel. Other screens keep it closed.
     pub fn open_enchanting(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
         self.enchant_at = Some(at);
-        self.enchant_note = "enter spends one bookshelf".to_string();
+        self.enchant_note = "pick an offer — lapis + XP".to_string();
+        self.enchant_books = 0;
+        self.enchant_chime = false;
         self.enchant_open = true;
         true
     }
@@ -2114,6 +2126,26 @@ impl Gui {
 
     pub fn enchant_at(&self) -> Option<[i32; 3]> {
         self.enchant_at
+    }
+
+    pub fn enchant_note(&self) -> &str {
+        &self.enchant_note
+    }
+
+    pub fn enchant_books(&self) -> u8 {
+        self.enchant_books
+    }
+
+    pub fn set_enchant_books(&mut self, books: u8) {
+        self.enchant_books = books;
+    }
+
+    pub fn request_enchant_chime(&mut self) {
+        self.enchant_chime = true;
+    }
+
+    pub fn take_enchant_chime(&mut self) -> bool {
+        std::mem::replace(&mut self.enchant_chime, false)
     }
 
     /// The word the last enchant left on the panel.
@@ -3777,7 +3809,8 @@ impl Gui {
             return Vec::new();
         }
         if self.enchant_open {
-            return enchant_quads(width, height, &self.enchant_note);
+            // egui draws the Whimscape enchanting panel.
+            return Vec::new();
         }
         if self.brew_open {
             return brew_quads(width, height, &self.brew_note);
@@ -4142,7 +4175,13 @@ pub fn hover_tip(gui: &Gui, hotbar: &Hotbar, bag: &hotbar::Bag, hit: u16) -> Opt
     if (600..610).contains(&hit) {
         let index = (hit - 600) as usize;
         return hotbar.slot(index).map(|id| {
-            item_tip(id, Some(hotbar.count(index)), hotbar.is_keen(index))
+            item_tip_enchants(
+                id,
+                Some(hotbar.count(index)),
+                hotbar.is_keen(index),
+                hotbar.is_sturdy(index),
+                hotbar.is_lucky(index),
+            )
         });
     }
     if gui.bag_open && (200..209).contains(&hit) {
@@ -4171,10 +4210,31 @@ pub fn tip_for(id: &str, count: Option<u16>) -> ItemTip {
 
 /// Same as [`tip_for`], with Efficiency when `keen` (hotbar enchanted pick).
 pub fn tip_for_keen(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
-    item_tip(id, count, keen)
+    item_tip_enchants(id, count, keen, false, false)
+}
+
+/// Tip with Efficiency / Unbreaking / Fortune flags from the hotbar.
+pub fn tip_for_tool(
+    id: &str,
+    count: Option<u16>,
+    keen: bool,
+    sturdy: bool,
+    lucky: bool,
+) -> ItemTip {
+    item_tip_enchants(id, count, keen, sturdy, lucky)
 }
 
 fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
+    item_tip_enchants(id, count, keen, false, false)
+}
+
+fn item_tip_enchants(
+    id: &str,
+    count: Option<u16>,
+    keen: bool,
+    sturdy: bool,
+    lucky: bool,
+) -> ItemTip {
     let name = title_case(&crate::recipes::display_name(id));
     let pack = rebuild_world::Pack::builtin();
     let source = id
@@ -4215,6 +4275,8 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         "steer a strider — or just WASD".to_string()
     } else if id == "gunpowder" {
         "ghast drop — blast powder".to_string()
+    } else if id == "lapis_lazuli" {
+        "fuels the enchanting table".to_string()
     } else if id == "ghast_tear" {
         "ghast drop — brew fire resistance".to_string()
     } else if id == "magma_cream" {
@@ -4298,6 +4360,15 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
             "Efficiency".to_string(),
             "Mines twice as fast".to_string(),
         ));
+    }
+    if sturdy {
+        enchants.push((
+            "Unbreaking".to_string(),
+            "Halves wear chance".to_string(),
+        ));
+    }
+    if lucky {
+        enchants.push(("Fortune".to_string(), "Extra ore chance".to_string()));
     }
     ItemTip {
         name,
@@ -7576,6 +7647,7 @@ fn tab_of(id: &str) -> &'static str {
             | "slimeball"
             | "bell"
             | "bookshelf"
+            | "lapis_lazuli"
             | "chiseled_bookshelf"
             | "shelf"
             | "brewing_stand"
@@ -9408,6 +9480,8 @@ mod tests {
             anvil_at: None,
             enchant_open: false,
             enchant_note: String::new(),
+            enchant_books: 0,
+            enchant_chime: false,
             enchant_at: None,
             brew_open: false,
             brew_note: String::new(),

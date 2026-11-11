@@ -225,6 +225,7 @@ impl EguiHost {
             || gui.player_inv_open()
             || gui.trade_open()
             || gui.anvil_open()
+            || gui.enchant_open()
             || map_open
     }
 
@@ -314,12 +315,18 @@ impl EguiHost {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.enchant_open() {
+                if draw_enchanting(ui, gui, hotbar, xp, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
             // Chat plate sits above the status stack during play / pause / death.
             // Hide under creative + player inventory (same rule as the old quads).
-            if !gui.bag_open() && !gui.player_inv_open() && !gui.anvil_open() {
+            if !gui.bag_open() && !gui.player_inv_open() && !gui.anvil_open() && !gui.enchant_open()
+            {
                 draw_chat_plate(ui, gui, icons);
             }
             if let Some(toast) = toast_view.as_ref() {
@@ -3052,6 +3059,179 @@ fn draw_anvil(
                     ui.add_space(10.0);
                     ui.label(
                         RichText::new(gui.anvil_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn draw_enchanting(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    xp: &mut crate::xp::Xp,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = hotbar.selected();
+    let held = hotbar.slot(selected).unwrap_or("").to_string();
+    let held_uses = hotbar.count(selected);
+    let books = gui.enchant_books();
+    let offers = hotbar.enchant_offers(books);
+    let lapis = {
+        let mut n = 0u16;
+        for i in 0..hotbar::SLOTS {
+            if hotbar.slot(i) == Some("lapis_lazuli") {
+                n = n.saturating_add(hotbar.count(i));
+            }
+        }
+        n
+    };
+    let has_item = !held.is_empty();
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(36.0);
+                show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "ENCHANTING");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Bookshelves {books} · lapis {lapis} · level {}",
+                            xp.level
+                        ))
+                        .size(13.0)
+                        .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            if has_item {
+                                let tip = gui::tip_for_tool(
+                                    &held,
+                                    Some(held_uses),
+                                    hotbar.is_keen(selected),
+                                    hotbar.is_sturdy(selected),
+                                    hotbar.is_lucky(selected),
+                                );
+                                let tex = icon_texture(ui.ctx(), icons, &held);
+                                let _ = slot_button(
+                                    ui,
+                                    icons,
+                                    tex,
+                                    false,
+                                    if held_uses > 1 {
+                                        Some(held_uses)
+                                    } else {
+                                        None
+                                    },
+                                );
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        RichText::new(&tip.name)
+                                            .size(15.0)
+                                            .color(INK)
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(&tip.line).size(12.0).color(MUTED),
+                                    );
+                                });
+                            } else {
+                                ui.label(
+                                    RichText::new("Select a tool in the hotbar.")
+                                        .size(14.0)
+                                        .color(MUTED),
+                                );
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    if offers.is_empty() {
+                        ui.label(
+                            RichText::new(if has_item {
+                                "No offers — already enchanted, or need a dig tool."
+                            } else {
+                                "Hold a tool to see offers."
+                            })
+                            .size(13.0)
+                            .color(MUTED),
+                        );
+                    } else {
+                        for offer in &offers {
+                            let can = xp.level >= offer.xp && lapis >= offer.lapis;
+                            let row_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                            chrome_well(ui, row_tex, ROW, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            RichText::new(offer.title)
+                                                .size(15.0)
+                                                .color(INK)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} · −{} XP · {} lapis",
+                                                offer.detail, offer.xp, offer.lapis
+                                            ))
+                                            .size(12.0)
+                                            .color(MUTED),
+                                        );
+                                    });
+                                    ui.add_space(8.0);
+                                    ui.add_enabled_ui(can, |ui| {
+                                        if chrome_button(
+                                            ui,
+                                            icons,
+                                            if can { "Enchant" } else { "Need XP/lapis" },
+                                            can,
+                                            Vec2::new(120.0, 30.0),
+                                            14.0,
+                                        )
+                                        .clicked()
+                                        {
+                                            if xp.level < offer.xp || lapis < offer.lapis {
+                                                gui.note_enchant("need XP/lapis");
+                                            } else {
+                                                let word =
+                                                    hotbar.apply_enchant(offer.id, offer.lapis);
+                                                gui.note_enchant(word);
+                                                if word == offer.id {
+                                                    let _ = xp.spend_levels(offer.xp);
+                                                    gui.request_enchant_chime();
+                                                    let tip = gui::tip_for_tool(
+                                                        &held,
+                                                        Some(hotbar.count(selected)),
+                                                        hotbar.is_keen(selected),
+                                                        hotbar.is_sturdy(selected),
+                                                        hotbar.is_lucky(selected),
+                                                    );
+                                                    gui.pin_tip(tip);
+                                                }
+                                                touched = true;
+                                            }
+                                        }
+                                    });
+                                });
+                            });
+                            ui.add_space(6.0);
+                        }
+                    }
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(gui.enchant_note())
                             .size(13.0)
                             .color(DETAIL),
                     );
