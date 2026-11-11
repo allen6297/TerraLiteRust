@@ -697,6 +697,10 @@ pub struct Gui {
     anvil_open: bool,
     /// The line under the anvil title. Enter replaces it with the repair word.
     anvil_note: String,
+    /// Draft rename text for the egui anvil field.
+    anvil_rename: String,
+    /// Set when a repair/combine/rename should clang at the anvil.
+    anvil_clang: bool,
     /// The anvil the panel is repairing at.
     anvil_at: Option<[i32; 3]>,
     enchant_open: bool,
@@ -880,6 +884,8 @@ impl Gui {
                 blast: false,
                 anvil_open: false,
                 anvil_note: String::new(),
+                anvil_rename: String::new(),
+                anvil_clang: false,
                 anvil_at: None,
                 enchant_open: false,
                 enchant_note: String::new(),
@@ -1002,6 +1008,8 @@ impl Gui {
                     blast: false,
                     anvil_open: false,
                     anvil_note: String::new(),
+                    anvil_rename: String::new(),
+                    anvil_clang: false,
                     anvil_at: None,
                     enchant_open: false,
                     enchant_note: String::new(),
@@ -1134,6 +1142,8 @@ impl Gui {
             blast: false,
             anvil_open: false,
             anvil_note: String::new(),
+            anvil_rename: String::new(),
+            anvil_clang: false,
             anvil_at: None,
             enchant_open: false,
             enchant_note: String::new(),
@@ -2035,13 +2045,15 @@ impl Gui {
         self.furnace.drain()
     }
 
-    /// A repair panel. Other screens keep it closed.
+    /// A repair / rename panel. Other screens keep it closed.
     pub fn open_anvil(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
         self.anvil_at = Some(at);
-        self.anvil_note = "enter spends one iron ore".to_string();
+        self.anvil_note = "rename or repair — costs XP".to_string();
+        self.anvil_rename.clear();
+        self.anvil_clang = false;
         self.anvil_open = true;
         true
     }
@@ -2052,6 +2064,32 @@ impl Gui {
 
     pub fn anvil_at(&self) -> Option<[i32; 3]> {
         self.anvil_at
+    }
+
+    pub fn anvil_note(&self) -> &str {
+        &self.anvil_note
+    }
+
+    pub fn anvil_rename(&self) -> &str {
+        &self.anvil_rename
+    }
+
+    pub fn anvil_rename_mut(&mut self) -> &mut String {
+        &mut self.anvil_rename
+    }
+
+    pub fn seed_anvil_rename(&mut self, name: &str) {
+        if self.anvil_rename.is_empty() {
+            self.anvil_rename = name.to_string();
+        }
+    }
+
+    pub fn request_anvil_clang(&mut self) {
+        self.anvil_clang = true;
+    }
+
+    pub fn take_anvil_clang(&mut self) -> bool {
+        std::mem::replace(&mut self.anvil_clang, false)
     }
 
     /// The word the last repair left on the panel.
@@ -3735,7 +3773,8 @@ impl Gui {
             );
         }
         if self.anvil_open {
-            return anvil_quads(width, height, &self.anvil_note);
+            // egui draws the Whimscape anvil panel.
+            return Vec::new();
         }
         if self.enchant_open {
             return enchant_quads(width, height, &self.enchant_note);
@@ -9364,6 +9403,8 @@ mod tests {
             blast: false,
             anvil_open: false,
             anvil_note: String::new(),
+            anvil_rename: String::new(),
+            anvil_clang: false,
             anvil_at: None,
             enchant_open: false,
             enchant_note: String::new(),

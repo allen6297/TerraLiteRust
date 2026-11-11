@@ -322,6 +322,8 @@ pub struct Hotbar {
     map_zoom: u8,
     /// `1` after the first campfire Enter. The next Enter finishes the cook.
     camp_heat: u8,
+    /// Anvil custom names keyed by hotbar slot (cleared when the slot empties).
+    labels: [Option<String>; SLOTS],
 }
 
 impl Hotbar {
@@ -345,6 +347,7 @@ impl Hotbar {
             crossbow_loaded: [false; SLOTS],
             map_zoom: 0,
             camp_heat: 0,
+            labels: [const { None }; SLOTS],
         }
     }
 
@@ -372,6 +375,7 @@ impl Hotbar {
         self.slots = [None; SLOTS];
         self.offhand = None;
         self.crossbow_loaded = [false; SLOTS];
+        self.labels = [const { None }; SLOTS];
         self.selected = (selected as usize).min(SLOTS - 1);
         for carried in slots {
             if carried.id.is_empty() || carried.count == 0 {
@@ -606,10 +610,15 @@ impl Hotbar {
         if item.uses == 0 || Pack::builtin().mine_factor(item.id, block) <= 1.0 {
             return false;
         }
-        if item.uses <= 1 {
+        let broke = item.uses <= 1;
+        if broke {
             *slot = None;
         } else {
             item.uses -= 1;
+        }
+        let _ = slot;
+        if broke {
+            self.labels[index] = None;
         }
         true
     }
@@ -627,55 +636,80 @@ impl Hotbar {
         if item.uses == 0 {
             return false;
         }
-        if item.uses <= 1 {
+        let broke = item.uses <= 1;
+        if broke {
             *slot = None;
         } else {
             item.uses -= 1;
         }
+        let _ = slot;
+        if broke {
+            self.labels[index] = None;
+        }
         true
     }
 
-    /// The worn pickaxe Enter would refill, when iron ore is in the bar.
+    /// Material id that repairs this tool tier (first match wins).
+    pub fn repair_material_for(id: &str) -> Option<&'static [&'static str]> {
+        if id.starts_with("netherite_") {
+            Some(&["netherite_ingot"])
+        } else if id.starts_with("diamond_") {
+            Some(&["diamond"])
+        } else if id.starts_with("golden_") || id.starts_with("gold_") {
+            Some(&["gold_ingot"])
+        } else if id.starts_with("iron_") {
+            Some(&["iron_ingot", "iron_ore"])
+        } else if id.starts_with("stone_") {
+            Some(&["cobblestone"])
+        } else if id.starts_with("wooden_") || id.starts_with("wood_") {
+            Some(&["oak_planks", "planks"])
+        } else {
+            None
+        }
+    }
+
+    /// The worn tool Enter / Repair would refill, when a matching material is in the bar.
     pub fn repair_target(&self) -> Option<&'static str> {
         let item = self.item(self.selected)?;
         let max = Pack::builtin().tool_uses(item.id);
-        if max == 0 || !item.id.ends_with("pickaxe") || item.uses >= max {
+        if max == 0 || item.uses >= max {
             return None;
         }
-        let has_ore = self
-            .slots
-            .iter()
-            .any(|slot| slot.is_some_and(|item| item.id == "iron_ore" && item.count > 0));
-        if !has_ore {
+        let mats = Self::repair_material_for(item.id)?;
+        let has = self.slots.iter().any(|slot| {
+            slot.is_some_and(|item| mats.contains(&item.id) && item.count > 0)
+        });
+        if !has {
             return None;
         }
         Some(item.id)
     }
 
-    /// Refill the selected pickaxe. One iron ore pays for it.
+    /// Refill the selected tool. One matching material pays for it.
     ///
-    /// `"repaired"` spends the ore. `"full"` leaves a fresh pick alone.
-    /// `"need a pick"` is anything that is not a worn or fresh pickaxe.
-    /// `"need iron ore"` is a worn pick with no ore in the bar.
+    /// `"repaired"` spends the material. `"full"` leaves a fresh tool alone.
+    /// `"need a tool"` is anything that is not a worn or fresh tool.
+    /// `"need material"` is a worn tool with no matching material in the bar.
     pub fn repair_pick(&mut self) -> &'static str {
         let Some(item) = self.item(self.selected) else {
-            return "need a pick";
+            return "need a tool";
         };
         let max = Pack::builtin().tool_uses(item.id);
-        if max == 0 || !item.id.ends_with("pickaxe") {
-            return "need a pick";
+        let Some(mats) = Self::repair_material_for(item.id) else {
+            return "need a tool";
+        };
+        if max == 0 {
+            return "need a tool";
         }
         if item.uses >= max {
             return "full";
         }
-        let Some(ore) = self
-            .slots
-            .iter()
-            .position(|slot| slot.is_some_and(|item| item.id == "iron_ore" && item.count > 0))
-        else {
-            return "need iron ore";
+        let Some(mat) = self.slots.iter().position(|slot| {
+            slot.is_some_and(|item| mats.contains(&item.id) && item.count > 0)
+        }) else {
+            return "need material";
         };
-        self.consume_at(ore);
+        self.consume_at(mat);
         if let Some(item) = self
             .slots
             .get_mut(self.selected)
@@ -684,6 +718,88 @@ impl Hotbar {
             item.uses = max;
         }
         "repaired"
+    }
+
+    /// Slot of another worn tool of the same id (combine donor), if any.
+    pub fn combine_donor(&self) -> Option<usize> {
+        let item = self.item(self.selected)?;
+        let max = Pack::builtin().tool_uses(item.id);
+        if max == 0 || item.uses >= max {
+            return None;
+        }
+        self.slots.iter().enumerate().find_map(|(index, slot)| {
+            if index == self.selected {
+                return None;
+            }
+            let other = slot.as_ref()?;
+            if other.id == item.id && other.uses > 0 && other.uses < max {
+                Some(index)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Merge a second worn copy into the selected tool. Consumes the donor.
+    ///
+    /// `"combined"` on success. Caps at max uses; keeps Efficiency if either had it.
+    pub fn combine_tool(&mut self) -> &'static str {
+        let Some(donor) = self.combine_donor() else {
+            return "need a pair";
+        };
+        let Some(selected) = self.item(self.selected) else {
+            return "need a tool";
+        };
+        let max = Pack::builtin().tool_uses(selected.id);
+        if max == 0 {
+            return "need a tool";
+        }
+        let (add, keen) = {
+            let other = self.slots[donor].as_ref().expect("donor");
+            (other.uses, other.keen)
+        };
+        if let Some(item) = self
+            .slots
+            .get_mut(self.selected)
+            .and_then(|slot| slot.as_mut())
+        {
+            item.uses = (item.uses.saturating_add(add)).min(max);
+            item.keen = item.keen || keen;
+        }
+        self.slots[donor] = None;
+        self.labels[donor] = None;
+        "combined"
+    }
+
+    /// Custom anvil name on a slot, when set.
+    pub fn label_of(&self, index: usize) -> Option<&str> {
+        self.labels.get(index)?.as_deref()
+    }
+
+    /// Display name for a slot — custom label or the pack display id.
+    pub fn display_of(&self, index: usize) -> String {
+        if let Some(label) = self.label_of(index) {
+            if !label.trim().is_empty() {
+                return label.to_string();
+            }
+        }
+        self.slot(index)
+            .map(|id| crate::recipes::display_name(id))
+            .unwrap_or_default()
+    }
+
+    /// Set or clear the anvil name on the selected slot.
+    pub fn rename_selected(&mut self, name: &str) -> bool {
+        if self.item(self.selected).is_none() {
+            return false;
+        }
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            self.labels[self.selected] = None;
+        } else {
+            self.labels[self.selected] = Some(trimmed.to_string());
+        }
+        true
     }
 
     /// The plain pickaxe Enter would enchant, when a bookshelf is in the bar.
@@ -2784,7 +2900,7 @@ mod tests {
         assert_eq!(bar.count(1), 32);
         assert!(bar.wear(1, "stone"));
         assert_eq!(bar.count(1), 31);
-        assert_eq!(bar.repair_pick(), "need iron ore");
+        assert_eq!(bar.repair_pick(), "need material");
         assert_eq!(bar.repair_target(), None);
         bar.select_digit(1);
         assert!(bar.give_stack("iron_ore"));
@@ -2798,7 +2914,7 @@ mod tests {
         assert_eq!(bar.count(0), 63);
         bar.select_digit(3);
         assert!(bar.give_stack("shield"));
-        assert_eq!(bar.repair_pick(), "need a pick");
+        assert_eq!(bar.repair_pick(), "need a tool");
     }
 
     #[test]

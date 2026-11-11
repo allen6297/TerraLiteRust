@@ -174,6 +174,18 @@ impl Xp {
         self.level - before
     }
 
+    /// Spend whole levels (anvil rename / repair). Leaves progress alone.
+    pub fn spend_levels(&mut self, n: i32) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if self.level < n {
+            return false;
+        }
+        self.level -= n;
+        true
+    }
+
     /// Soft lime cubes for the drop pass.
     pub fn vertices(&self) -> Vec<Vertex> {
         let mut out = Vec::with_capacity(self.orbs.len() * 36);

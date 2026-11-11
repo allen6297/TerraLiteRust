@@ -20839,9 +20839,10 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Open the shaft anvil panel mid-clang after a repair, then quit with a PNG.
+    /// Open the shaft anvil egui panel mid-clang after a rename/repair, then quit with a PNG.
     pub fn arm_anvil_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
+        // egui needs a few frames for Whimscape chrome + text field.
         self.cook_shot_frames = 0;
         self.playing = true;
         self.menu.close_menu();
@@ -20888,20 +20889,26 @@ impl State {
         self.drops.puff(clang_at, [0.72, 0.72, 0.78]);
         self.rebuild_drops();
         self.play_world(crate::audio::Sound::Ring, clang_at);
-        let _ = self.gui.open_anvil([ax, ay, az]);
-        self.gui.note_anvil("repaired");
-        self.gui.push_chat("repaired");
-        self.found_clang = true;
-        self.gui.push_chat("clang");
-        self.found_mine = true;
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("iron_pickaxe");
-        // Wear it, then refill so the tip reads as a freshly repaired pick.
         for _ in 0..8 {
             let _ = self.hotbar.wear_use(0);
         }
         let _ = self.hotbar.collect("iron_ore");
         let _ = self.hotbar.repair_pick();
+        let _ = self.hotbar.rename_selected("Shaft Pick");
+        let _ = self.xp.gain(crate::xp::XP_PER_LEVEL * 4);
+        let _ = self.gui.open_anvil([ax, ay, az]);
+        self.gui.seed_anvil_rename("Shaft Pick");
+        self.gui.note_anvil("repaired");
+        self.gui.push_chat("repaired");
+        self.found_clang = true;
+        self.gui.push_chat("clang");
+        self.found_mine = true;
+        let uses = self.hotbar.count(self.hotbar.selected());
+        let mut tip = crate::gui::tip_for("iron_pickaxe", Some(uses.max(1)));
+        tip.name = "Shaft Pick".to_string();
+        self.gui.pin_tip(tip);
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -32176,6 +32183,7 @@ impl State {
                 death,
                 map,
                 toast,
+                &mut self.xp,
                 &advancement_rows,
                 &statistics_rows,
                 &pack_rows,
@@ -32205,6 +32213,18 @@ impl State {
             );
             if crafted {
                 let _ = self.advancements.unlock("craft");
+            }
+            if self.gui.take_anvil_clang() {
+                if let Some(at) = self.gui.anvil_at() {
+                    let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                    self.play_world(crate::audio::Sound::Ring, source);
+                    self.drops.puff(source, [0.72, 0.72, 0.78]);
+                    self.rebuild_drops();
+                    if !self.found_clang {
+                        self.found_clang = true;
+                        self.gui.push_chat("clang");
+                    }
+                }
             }
             if action != gui::MenuAction::None {
                 self.hotbar_dirty = true;

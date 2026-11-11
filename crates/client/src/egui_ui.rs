@@ -224,6 +224,7 @@ impl EguiHost {
             || gui.bag_open()
             || gui.player_inv_open()
             || gui.trade_open()
+            || gui.anvil_open()
             || map_open
     }
 
@@ -246,6 +247,7 @@ impl EguiHost {
         death: Option<DeathView>,
         map: Option<MapView>,
         toast: Option<ToastView>,
+        xp: &mut crate::xp::Xp,
         advancement_rows: &[AdvancementRow],
         statistics_rows: &[StatRow],
         pack_rows: &[PackRow],
@@ -307,12 +309,17 @@ impl EguiHost {
                 if draw_trade(ui, gui, hotbar, bag, icons) {
                     touched = true;
                 }
+            } else if gui.anvil_open() {
+                if draw_anvil(ui, gui, hotbar, xp, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
             // Chat plate sits above the status stack during play / pause / death.
             // Hide under creative + player inventory (same rule as the old quads).
-            if !gui.bag_open() && !gui.player_inv_open() {
+            if !gui.bag_open() && !gui.player_inv_open() && !gui.anvil_open() {
                 draw_chat_plate(ui, gui, icons);
             }
             if let Some(toast) = toast_view.as_ref() {
@@ -2848,6 +2855,216 @@ fn category_arrow(ui: &mut Ui, label: &str) -> egui::Response {
 }
 
 /// Village trader stock panel — emerald buys for torch / apple / map.
+fn draw_anvil(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    xp: &mut crate::xp::Xp,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = hotbar.selected();
+    let held = hotbar.slot(selected).unwrap_or("").to_string();
+    let held_uses = hotbar.count(selected);
+    let seed = hotbar.display_of(selected);
+    if !seed.is_empty() {
+        gui.seed_anvil_rename(&seed);
+    }
+    let can_repair = hotbar.repair_target().is_some();
+    let can_combine = hotbar.combine_donor().is_some();
+    let has_item = !held.is_empty();
+    let rename_cost = 1;
+    let work_cost = 1;
+    let mat_hint = Hotbar::repair_material_for(&held)
+        .map(|mats| mats.join(" / "))
+        .unwrap_or_else(|| "—".to_string());
+    let shown_name = {
+        let custom = gui.anvil_rename();
+        if custom.trim().is_empty() {
+            seed
+        } else {
+            custom.to_string()
+        }
+    };
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                show_panel(ui, 440.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "ANVIL");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Rename costs XP. Repair / combine spend material + XP.")
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            if has_item {
+                                let tip = gui::tip_for(&held, Some(held_uses));
+                                let tex = icon_texture(ui.ctx(), icons, &held);
+                                let _ = slot_button(
+                                    ui,
+                                    icons,
+                                    tex,
+                                    false,
+                                    if held_uses > 1 {
+                                        Some(held_uses)
+                                    } else {
+                                        None
+                                    },
+                                );
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        RichText::new(&shown_name)
+                                            .size(15.0)
+                                            .color(INK)
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} · level {}",
+                                            tip.line, xp.level
+                                        ))
+                                        .size(12.0)
+                                        .color(MUTED),
+                                    );
+                                });
+                            } else {
+                                ui.label(
+                                    RichText::new("Select a tool or item in the hotbar.")
+                                        .size(14.0)
+                                        .color(MUTED),
+                                );
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Rename").size(13.0).color(DETAIL));
+                    ui.add_space(2.0);
+                    let rename = gui.anvil_rename_mut();
+                    let response = ui.add(
+                        egui::TextEdit::singleline(rename)
+                            .desired_width(400.0)
+                            .hint_text("custom name")
+                            .font(FontId::proportional(15.0)),
+                    );
+                    if response.changed() {
+                        touched = true;
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let rename_ok = has_item && xp.level >= rename_cost;
+                        ui.add_enabled_ui(rename_ok, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                &format!("Rename (−{rename_cost} XP)"),
+                                rename_ok,
+                                Vec2::new(180.0, 30.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let name = gui.anvil_rename().to_string();
+                                if xp.level < rename_cost {
+                                    gui.note_anvil("need XP");
+                                } else if hotbar.rename_selected(&name)
+                                    && xp.spend_levels(rename_cost)
+                                {
+                                    gui.note_anvil("renamed");
+                                    gui.request_anvil_clang();
+                                    let mut tip = gui::tip_for(&held, Some(held_uses));
+                                    if !name.trim().is_empty() {
+                                        tip.name = name.trim().to_string();
+                                    }
+                                    gui.pin_tip(tip);
+                                    touched = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(12.0);
+                    ui.label(
+                        RichText::new(format!("Material: {mat_hint}"))
+                            .size(12.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let repair_ok = can_repair && xp.level >= work_cost;
+                        ui.add_enabled_ui(repair_ok, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                &format!("Repair (−{work_cost} XP)"),
+                                repair_ok,
+                                Vec2::new(170.0, 30.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                if xp.level < work_cost {
+                                    gui.note_anvil("need XP");
+                                } else {
+                                    let word = hotbar.repair_pick();
+                                    gui.note_anvil(word);
+                                    if word == "repaired" {
+                                        let _ = xp.spend_levels(work_cost);
+                                        gui.request_anvil_clang();
+                                    }
+                                    touched = true;
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
+                        let combine_ok = can_combine && xp.level >= work_cost;
+                        ui.add_enabled_ui(combine_ok, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                &format!("Combine (−{work_cost} XP)"),
+                                combine_ok,
+                                Vec2::new(180.0, 30.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                if xp.level < work_cost {
+                                    gui.note_anvil("need XP");
+                                } else {
+                                    let word = hotbar.combine_tool();
+                                    gui.note_anvil(word);
+                                    if word == "combined" {
+                                        let _ = xp.spend_levels(work_cost);
+                                        gui.request_anvil_clang();
+                                    }
+                                    touched = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(gui.anvil_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
 fn draw_trade(
     ui: &mut Ui,
     gui: &mut Gui,
