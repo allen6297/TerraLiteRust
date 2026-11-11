@@ -6053,21 +6053,59 @@ pub fn xp_bar_quads(width: f32, height: f32, level: i32, fraction: f32) -> Vec<Q
     let well = [0.04, 0.08, 0.04];
     let fill = [0.42, 0.88, 0.32];
     let edge = [0.18, 0.28, 0.16];
-    let mut quads = vec![
-        pixel_quad(width, height, left - 1.0, bottom - 1.0, left + bar_w + 1.0, bottom + bar_h + 1.0, edge),
-        pixel_quad(width, height, left, bottom, left + bar_w, bottom + bar_h, well),
-    ];
-    let filled = (bar_w * fraction).max(if fraction > 0.0 { 2.0 } else { 0.0 });
-    if filled > 0.0 {
-        quads.push(pixel_quad(
+    let tex_bg = crate::texture::hud_face(crate::texture::HUD_XP_BG);
+    let tex_fg = crate::texture::hud_face(crate::texture::HUD_XP_FG);
+    let mut quads = if tex_bg > 0.0 {
+        vec![pixel_quad(
             width,
             height,
             left,
             bottom,
-            left + filled,
+            left + bar_w,
             bottom + bar_h,
-            fill,
-        ));
+            [1.0, 1.0, 1.0],
+        )
+        .with_tex(tex_bg, 1.0, 1.0)]
+    } else {
+        vec![
+            pixel_quad(
+                width,
+                height,
+                left - 1.0,
+                bottom - 1.0,
+                left + bar_w + 1.0,
+                bottom + bar_h + 1.0,
+                edge,
+            ),
+            pixel_quad(width, height, left, bottom, left + bar_w, bottom + bar_h, well),
+        ]
+    };
+    let filled = (bar_w * fraction).max(if fraction > 0.0 { 2.0 } else { 0.0 });
+    if filled > 0.0 {
+        if tex_fg > 0.0 {
+            quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    left,
+                    bottom,
+                    left + filled,
+                    bottom + bar_h,
+                    [1.0, 1.0, 1.0],
+                )
+                .with_tex(tex_fg, 1.0, 1.0),
+            );
+        } else {
+            quads.push(pixel_quad(
+                width,
+                height,
+                left,
+                bottom,
+                left + filled,
+                bottom + bar_h,
+                fill,
+            ));
+        }
     }
     let label = format!("{level}");
     let label_w = measure(&label, 1.0);
@@ -6697,22 +6735,41 @@ fn armor_quads(width: f32, height: f32, worn: [Option<&str>; 3]) -> Vec<Quad> {
         return Vec::new();
     }
     let empty = [0.16, 0.12, 0.10];
+    let tex_full = crate::texture::hud_face(crate::texture::HUD_ARMOR_FULL);
+    let tex_empty = crate::texture::hud_face(crate::texture::HUD_ARMOR_EMPTY);
     let bottom = status_armor_bottom();
     let span = 3.0 * HUD_STATUS_STEP;
     let left = HUD_STATUS_LEFT;
     let mut quads = status_plate_chrome(width, height, left, bottom, span);
     for (index, piece) in worn.iter().enumerate() {
         let x = left + HUD_STATUS_PAD_X + index as f32 * HUD_STATUS_STEP;
-        let color = piece.map(|id| palette::color(id, 0)).unwrap_or(empty);
-        quads.push(pixel_quad(
-            width,
-            height,
-            x,
-            bottom,
-            x + HUD_STATUS_PIP,
-            bottom + HUD_STATUS_PIP,
-            color,
-        ));
+        let filled = piece.is_some();
+        let tex = if filled { tex_full } else { tex_empty };
+        if tex > 0.0 {
+            quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    x,
+                    bottom,
+                    x + HUD_STATUS_PIP,
+                    bottom + HUD_STATUS_PIP,
+                    [1.0, 1.0, 1.0],
+                )
+                .with_tex(tex, 1.0, 1.0),
+            );
+        } else {
+            let color = piece.map(|id| palette::color(id, 0)).unwrap_or(empty);
+            quads.push(pixel_quad(
+                width,
+                height,
+                x,
+                bottom,
+                x + HUD_STATUS_PIP,
+                bottom + HUD_STATUS_PIP,
+                color,
+            ));
+        }
     }
     quads
 }
@@ -6810,6 +6867,8 @@ fn health_quads(width: f32, height: f32, hearts: i32) -> Vec<Quad> {
     }
     let full = [0.78, 0.18, 0.16];
     let empty = [0.20, 0.08, 0.08];
+    let tex_full = crate::texture::hud_face(crate::texture::HUD_HEART_FULL);
+    let tex_empty = crate::texture::hud_face(crate::texture::HUD_HEART_EMPTY);
     // Bottom-left stack: health sits above hunger, both clear of the hotbar.
     let bottom = status_health_bottom();
     let span = crate::body::HEARTS as f32 * HUD_STATUS_STEP;
@@ -6818,26 +6877,42 @@ fn health_quads(width: f32, height: f32, hearts: i32) -> Vec<Quad> {
     for index in 0..crate::body::HEARTS {
         let x = left + HUD_STATUS_PAD_X + index as f32 * HUD_STATUS_STEP;
         let filled = index < hearts;
-        let color = if filled { full } else { empty };
-        quads.push(pixel_quad(
-            width,
-            height,
-            x,
-            bottom,
-            x + HUD_STATUS_PIP,
-            bottom + HUD_STATUS_PIP,
-            color,
-        ));
-        if filled {
+        let tex = if filled { tex_full } else { tex_empty };
+        if tex > 0.0 {
+            quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    x,
+                    bottom,
+                    x + HUD_STATUS_PIP,
+                    bottom + HUD_STATUS_PIP,
+                    [1.0, 1.0, 1.0],
+                )
+                .with_tex(tex, 1.0, 1.0),
+            );
+        } else {
+            let color = if filled { full } else { empty };
             quads.push(pixel_quad(
                 width,
                 height,
-                x + 6.0,
-                bottom + 6.0,
-                x + 10.0,
-                bottom + 10.0,
-                PIP,
+                x,
+                bottom,
+                x + HUD_STATUS_PIP,
+                bottom + HUD_STATUS_PIP,
+                color,
             ));
+            if filled {
+                quads.push(pixel_quad(
+                    width,
+                    height,
+                    x + 6.0,
+                    bottom + 6.0,
+                    x + 10.0,
+                    bottom + 10.0,
+                    PIP,
+                ));
+            }
         }
     }
     quads
@@ -6849,6 +6924,8 @@ fn hunger_quads(width: f32, height: f32, food: i32) -> Vec<Quad> {
     }
     let full = [0.90, 0.66, 0.18];
     let empty = [0.26, 0.16, 0.08];
+    let tex_full = crate::texture::hud_face(crate::texture::HUD_FOOD_FULL);
+    let tex_empty = crate::texture::hud_face(crate::texture::HUD_FOOD_EMPTY);
     // Bottom-left with health (GUI plan L10); was previously bottom-right.
     let bottom = status_hunger_bottom();
     let span = crate::body::HUNGER as f32 * HUD_STATUS_STEP;
@@ -6856,27 +6933,43 @@ fn hunger_quads(width: f32, height: f32, food: i32) -> Vec<Quad> {
     let mut quads = status_plate_chrome(width, height, left, bottom, span);
     for index in 0..crate::body::HUNGER {
         let x = left + HUD_STATUS_PAD_X + index as f32 * HUD_STATUS_STEP;
-        let color = if index < food { full } else { empty };
-        quads.push(pixel_quad(
-            width,
-            height,
-            x,
-            bottom,
-            x + HUD_STATUS_PIP,
-            bottom + HUD_STATUS_PIP,
-            color,
-        ));
-        if index < food {
-            // Small highlight so filled pips read like inventory slot lips.
+        let filled = index < food;
+        let tex = if filled { tex_full } else { tex_empty };
+        if tex > 0.0 {
+            quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    x,
+                    bottom,
+                    x + HUD_STATUS_PIP,
+                    bottom + HUD_STATUS_PIP,
+                    [1.0, 1.0, 1.0],
+                )
+                .with_tex(tex, 1.0, 1.0),
+            );
+        } else {
+            let color = if filled { full } else { empty };
             quads.push(pixel_quad(
                 width,
                 height,
-                x + 2.0,
-                bottom + HUD_STATUS_PIP - 3.0,
-                x + HUD_STATUS_PIP - 2.0,
-                bottom + HUD_STATUS_PIP - 1.0,
-                DETAIL,
+                x,
+                bottom,
+                x + HUD_STATUS_PIP,
+                bottom + HUD_STATUS_PIP,
+                color,
             ));
+            if filled {
+                quads.push(pixel_quad(
+                    width,
+                    height,
+                    x + 2.0,
+                    bottom + HUD_STATUS_PIP - 3.0,
+                    x + HUD_STATUS_PIP - 2.0,
+                    bottom + HUD_STATUS_PIP - 1.0,
+                    DETAIL,
+                ));
+            }
         }
     }
     quads

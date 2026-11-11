@@ -2120,23 +2120,54 @@ pub fn bar_lifted(width: f32, height: f32, hotbar: &Hotbar, lift: f32) -> Vec<Qu
             BORDER_PX
         };
         let border_color = if selected { SELECTED } else { BORDER };
-        quads.push(
-            pixel_quad(
-                width,
-                height,
-                x - border,
-                bottom - border,
-                x + SLOT_PX + border,
-                bottom + SLOT_PX + border,
-                border_color,
-            )
-            .tag(600 + index as u16),
-        );
+        let well_tex = crate::texture::hud_face(crate::texture::HUD_HOTBAR_WELL);
+        let sel_tex = crate::texture::hud_face(crate::texture::HUD_HOTBAR_SELECTION);
+        let border_tex = if selected { sel_tex } else { well_tex };
+        if border_tex > 0.0 {
+            quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    x - border,
+                    bottom - border,
+                    x + SLOT_PX + border,
+                    bottom + SLOT_PX + border,
+                    [1.0, 1.0, 1.0],
+                )
+                .with_tex(border_tex, 1.0, 1.0)
+                .tag(600 + index as u16),
+            );
+        } else {
+            quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    x - border,
+                    bottom - border,
+                    x + SLOT_PX + border,
+                    bottom + SLOT_PX + border,
+                    border_color,
+                )
+                .tag(600 + index as u16),
+            );
+        }
         let icon_x = x + ICON_INSET_PX;
         let icon_y = bottom + ICON_INSET_PX;
         let icon_size = SLOT_PX - ICON_INSET_PX * 2.0;
         match hotbar.slot(index) {
             Some(id) => push_slot_icon(&mut quads, width, height, icon_x, icon_y, icon_size, id),
+            None if well_tex > 0.0 => quads.push(
+                pixel_quad(
+                    width,
+                    height,
+                    icon_x,
+                    icon_y,
+                    icon_x + icon_size,
+                    icon_y + icon_size,
+                    [1.0, 1.0, 1.0],
+                )
+                .with_tex(well_tex, 1.0, 1.0),
+            ),
             None => quads.push(pixel_quad(
                 width,
                 height,

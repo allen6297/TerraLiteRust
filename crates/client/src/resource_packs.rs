@@ -113,5 +113,6 @@ mod tests {
         assert!(rows.iter().any(|row| row.id == "terralite" && row.base && row.enabled));
         assert!(rows.iter().any(|row| row.id == "demo-magenta" && row.kind == "folder"));
         assert!(rows.iter().any(|row| row.id == "demo-cyan-dirt" && row.kind == "zip"));
+        assert!(rows.iter().any(|row| row.id == "whimscape" && row.kind == "folder"));
     }
 }

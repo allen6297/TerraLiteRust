@@ -63,6 +63,39 @@ pub fn slot_icon_face(id: &str) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// HUD GUI tiles (hearts, hunger, armor, XP, hotbar wells) under
+/// `assets/terralite/textures/gui/hud/`.
+pub const HUD_HEART_FULL: &str = "assets/terralite/textures/gui/hud/heart_full.png";
+pub const HUD_HEART_EMPTY: &str = "assets/terralite/textures/gui/hud/heart_empty.png";
+pub const HUD_FOOD_FULL: &str = "assets/terralite/textures/gui/hud/food_full.png";
+pub const HUD_FOOD_EMPTY: &str = "assets/terralite/textures/gui/hud/food_empty.png";
+pub const HUD_ARMOR_FULL: &str = "assets/terralite/textures/gui/hud/armor_full.png";
+pub const HUD_ARMOR_EMPTY: &str = "assets/terralite/textures/gui/hud/armor_empty.png";
+pub const HUD_HOTBAR_WELL: &str = "assets/terralite/textures/gui/hud/hotbar_well.png";
+pub const HUD_HOTBAR_SELECTION: &str = "assets/terralite/textures/gui/hud/hotbar_selection.png";
+pub const HUD_XP_BG: &str = "assets/terralite/textures/gui/hud/xp_bg.png";
+pub const HUD_XP_FG: &str = "assets/terralite/textures/gui/hud/xp_fg.png";
+
+const HUD_ATLAS_PATHS: &[&str] = &[
+    HUD_HEART_FULL,
+    HUD_HEART_EMPTY,
+    HUD_FOOD_FULL,
+    HUD_FOOD_EMPTY,
+    HUD_ARMOR_FULL,
+    HUD_ARMOR_EMPTY,
+    HUD_HOTBAR_WELL,
+    HUD_HOTBAR_SELECTION,
+    HUD_XP_BG,
+    HUD_XP_FG,
+];
+
+/// Atlas column for a HUD GUI PNG (`slot + 1`), or `0` when missing.
+pub fn hud_face(path: &str) -> f32 {
+    texture_slot(path)
+        .map(|slot| (slot + 1) as f32)
+        .unwrap_or(0.0)
+}
+
 /// Atlas column for a block or a placeable item, stored as `slot + 1`.
 ///
 /// `0` means the quad stays a flat color. The GUI and the hotbar use this
@@ -317,6 +350,10 @@ fn build_atlas() -> Atlas {
     }
     // Soft-rendered model icons for the world HUD hotbar (same path as egui).
     crate::item_icon::append_slot_icons(&mut tiles, &mut slots);
+    // Hearts / hunger / armor / XP / hotbar wells (Whimscape or base GUI pack).
+    for path in HUD_ATLAS_PATHS {
+        push_tile(path, &mut tiles, &mut slots);
+    }
     if tiles.is_empty() {
         return Atlas {
             image: Image {
@@ -386,6 +423,15 @@ pub fn decode_png(bytes: &[u8]) -> Option<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hud_gui_tiles_land_in_atlas() {
+        reload_atlas();
+        for path in HUD_ATLAS_PATHS {
+            let tex = hud_face(path);
+            assert!(tex > 0.0, "missing hud tile {path}");
+        }
+    }
 
     #[test]
     fn block_pngs_decode_into_one_atlas_and_a_bad_file_does_not() {
