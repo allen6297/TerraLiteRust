@@ -1374,6 +1374,8 @@ pub struct State {
     powder_snow_told: bool,
     /// One tip when mud is bottled / packed / bricked this session.
     mud_told: bool,
+    /// One tip when a sculk catalyst blooms from a mob death this session.
+    sculk_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2775,6 +2777,7 @@ impl State {
             powder_snow_left: 0.0,
             powder_snow_told: false,
             mud_told: false,
+            sculk_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -10384,15 +10387,21 @@ impl State {
         }
         let dropped = apply(self, amount);
         if dropped {
-            let _ = self.hooks.entity_death(
-                &mut self.world,
-                kind,
+            let death = [
                 origin[0].floor() as i32,
                 origin[1].floor() as i32,
                 origin[2].floor() as i32,
+            ];
+            let _ = self.hooks.entity_death(
+                &mut self.world,
+                kind,
+                death[0],
+                death[1],
+                death[2],
             );
             self.statistics.note_kill();
             let _ = self.advancements.unlock("kill");
+            self.note_sculk_catalyst(death);
         }
         dropped
     }
@@ -24000,6 +24009,159 @@ impl State {
 
 
 
+
+    pub fn arm_sculk_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.gui.close();
+        self.map_open = false;
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.12);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = (ground - 2).max(2);
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        // Deep dark stamp: deepslate shell, open near face.
+        for x in (cx - 4)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                for dy in 0..=5 {
+                    let yy = floor + dy;
+                    let wall =
+                        x == cx - 4 || x == cx + 4 || z == cz + 3 || dy == 0 || dy == 5;
+                    changes.push(CellChange {
+                        x,
+                        y: yy,
+                        z,
+                        block: if wall {
+                            if (x + z + dy) % 3 == 0 {
+                                Block::new("cobbled_deepslate", 0)
+                            } else {
+                                Block::new("deepslate", 0)
+                            }
+                        } else if dy == 1 {
+                            Block::new("stone", 0)
+                        } else {
+                            Block::AIR
+                        },
+                    });
+                }
+            }
+        }
+        // Catalyst + seed sculk, then bloom from a death above the floor.
+        changes.push(CellChange {
+            x: cx,
+            y,
+            z: cz,
+            block: Block::new(crate::sculk::SCULK_CATALYST, 0),
+        });
+        for &(dx, dz) in &[(1, 0), (-1, 0), (0, 1), (2, -1)] {
+            changes.push(CellChange {
+                x: cx + dx,
+                y,
+                z: cz + dz,
+                block: Block::new("stone", 0),
+            });
+        }
+        apply_changes(&mut self.world, &changes);
+        let bloom = crate::sculk::plan_death_spread(&self.world, [cx + 1, y + 1, cz]);
+        let mut bloom_changes: Vec<CellChange> = bloom
+            .into_iter()
+            .map(|(at, block)| CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block,
+            })
+            .collect();
+        // Guarantee readable covers if the hash skipped them.
+        bloom_changes.extend_from_slice(&[
+            CellChange {
+                x: cx + 1,
+                y: y + 1,
+                z: cz,
+                block: Block::new(crate::sculk::SCULK_VEIN, 0),
+            },
+            CellChange {
+                x: cx - 1,
+                y: y + 1,
+                z: cz,
+                block: Block::new(crate::sculk::SCULK_SENSOR, 0),
+            },
+        ]);
+        // Ensure sculk under those covers.
+        for &(dx, dz) in &[(1, 0), (-1, 0)] {
+            bloom_changes.push(CellChange {
+                x: cx + dx,
+                y,
+                z: cz + dz,
+                block: Block::new(crate::sculk::SCULK, 0),
+            });
+        }
+        apply_changes(&mut self.world, &bloom_changes);
+        for x in (cx - 4)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, y as f32 + 0.9, cz as f32 + 0.3);
+        let eye = glam::Vec3::new(
+            cx as f32 + 0.4,
+            y as f32 + 1.2 + body::EYE_HEIGHT,
+            cz as f32 - 3.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack(crate::sculk::SCULK_CATALYST);
+        let _ = self.hotbar.give_stack(crate::sculk::SCULK);
+        let _ = self.hotbar.give_stack(crate::sculk::SCULK_SENSOR);
+        let _ = self.hotbar.collect(crate::sculk::SCULK_VEIN);
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.sculk_told = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("sculk");
+        self.gui.push_chat("catalyst");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_mud_bricks_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -33141,6 +33303,37 @@ impl State {
         }
     }
 
+
+
+    /// Bloom sculk around a mob death when a catalyst is nearby.
+    fn note_sculk_catalyst(&mut self, death: [i32; 3]) {
+        let planned = crate::sculk::plan_death_spread(&self.world, death);
+        if planned.is_empty() {
+            return;
+        }
+        let changes: Vec<CellChange> = planned
+            .into_iter()
+            .map(|(at, block)| CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block,
+            })
+            .collect();
+        self.send_places_batch(&changes);
+        let mote = [
+            death[0] as f32 + 0.5,
+            death[1] as f32 + 0.4,
+            death[2] as f32 + 0.5,
+        ];
+        self.drops.puff(mote, [0.15, 0.65, 0.7]);
+        self.rebuild_drops();
+        self.gui.push_chat("sculk");
+        if !self.sculk_told {
+            self.sculk_told = true;
+            self.gui.push_chat("catalyst");
+        }
+    }
 
     fn note_powder_snow(&mut self, dt: f32) {
         let boots = self.armor.has_leather_boots();

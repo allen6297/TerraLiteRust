@@ -1353,6 +1353,7 @@ fn for_solids(bounds: &Aabb, world: &Cluster, extra: &[Aabb], mut visit: impl Fn
                     || block.id == "cave_vines"
                     || block.id == "cave_vines_berries"
                     || block.id == "powder_snow"
+                    || block.id == "sculk_vein"
                     || block.id == "wheat_crop"
                     || block.id == "chorus_plant"
                     || block.id == "chorus_flower"
