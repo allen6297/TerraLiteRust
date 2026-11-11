@@ -748,6 +748,7 @@ mod tests {
                 "redstone_dust".to_string(),
                 "redstone_repeater".to_string(),
                 "redstone_comparator".to_string(),
+                "observer".to_string(),
                 "respawn_anchor".to_string(),
                 "saddle".to_string(),
                 "sand".to_string(),

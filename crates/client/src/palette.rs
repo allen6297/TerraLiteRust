@@ -178,6 +178,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "redstone_dust" => crate::redstone::tint(metadata),
         "redstone_repeater" => crate::redstone::repeater_tint(metadata),
         "redstone_comparator" => crate::redstone::comparator_tint(metadata),
+        "observer" => crate::redstone::observer_tint(metadata),
         "campfire" => [0.72, 0.32, 0.08],
         "fletching_table" => [0.55, 0.38, 0.18],
         "smoker" => [0.32, 0.24, 0.18],

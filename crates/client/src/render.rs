@@ -1348,6 +1348,10 @@ pub struct State {
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
     comparator_out: std::collections::HashMap<[i32; 3], u8>,
+    /// Observer cells still pulsing out their back face: (cell, seconds left).
+    observer_pulse: Vec<([i32; 3], f32)>,
+    /// Suppress observer watches while applying observer/dust side-effects.
+    observer_suppress: u8,
     /// Device cells currently considered powered by redstone.
     redstone_powered: HashSet<[i32; 3]>,
     /// One tip when dust first carries power this session.
@@ -2724,6 +2728,8 @@ impl State {
             redstone_pulse: Vec::new(),
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
+            observer_pulse: Vec::new(),
+            observer_suppress: 0,
             redstone_powered: HashSet::new(),
             redstone_told: false,
             lamp_drain_wait: 0,
@@ -13970,6 +13976,13 @@ impl State {
                 false,
             );
         }
+        if crate::redstone::is_observer(block.id) {
+            let forward = self.camera.forward();
+            block = crate::redstone::make_observer(
+                crate::redstone::facing_from_look([forward.x, forward.y, forward.z]),
+                false,
+            );
+        }
         if block.id == "pump" {
             // Face along the look — pushes away from the player. Starts off (valve).
             block = Block::new("pump", pump_meta(pump_facing_from_look(self.camera.forward()), false));
@@ -22645,6 +22658,130 @@ impl State {
 
 
 
+
+    /// Dirt update face → observer (pulsing) → dust → lamp, then quit.
+    pub fn arm_observer_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 8) {
+            for z in (cz - 1)..=(cz + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        let observer = crate::redstone::make_observer(0, true);
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz,
+                block: Block::new("dirt", 0),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: observer,
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 15),
+            },
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 14),
+            },
+            CellChange {
+                x: cx - 1,
+                y,
+                z: cz,
+                block: Block::new("lamp", 1),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 1)..=(cx + 8) {
+            self.chunk_bake.touch(x, cz);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.5, y as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.5,
+            y as f32 + 1.35 + body::EYE_HEIGHT,
+            cz as f32 - 5.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("observer");
+        let _ = self.hotbar.collect("redstone_dust");
+        let _ = self.hotbar.collect("dirt");
+        let _ = self.hotbar.collect("lamp");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.redstone_told = true;
+        self.observer_pulse
+            .push(([cx + 2, y, cz], crate::redstone::OBSERVER_PULSE));
+        self.redstone_powered.insert([cx - 1, y, cz]);
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("observer");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Chest → comparator (compare) → dust → lamp, plus subtract twin, then quit.
     pub fn arm_comparator_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -30317,6 +30454,105 @@ impl State {
 
 
 
+
+    fn observer_source_cells(&self) -> Vec<[i32; 3]> {
+        self.observer_pulse.iter().map(|(cell, _)| *cell).collect()
+    }
+
+    fn observe_block_updates(&mut self, changes: &[CellChange]) {
+        if changes.is_empty() || self.told_disconnect {
+            return;
+        }
+        let mut fire = std::collections::HashSet::new();
+        for change in changes {
+            let at = [change.x, change.y, change.z];
+            for obs in crate::redstone::observers_watching(&self.world, at) {
+                fire.insert(obs);
+            }
+        }
+        if fire.is_empty() {
+            return;
+        }
+        self.arm_observer_pulses(fire.into_iter().collect());
+    }
+
+    fn arm_observer_pulses(&mut self, cells: Vec<[i32; 3]>) {
+        if cells.is_empty() || self.told_disconnect {
+            return;
+        }
+        self.observer_suppress = self.observer_suppress.saturating_add(1);
+        let mut lights = Vec::new();
+        for at in &cells {
+            self.observer_pulse.retain(|(cell, _)| cell != at);
+            self.observer_pulse
+                .push((*at, crate::redstone::OBSERVER_PULSE));
+            let block = self.world.block_at(at[0], at[1], at[2]);
+            if !crate::redstone::is_observer(block.id) {
+                continue;
+            }
+            if !crate::redstone::observer_lit(block) {
+                lights.push(CellChange {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                    block: crate::redstone::with_observer_lit(block, true),
+                });
+            }
+        }
+        if !lights.is_empty() {
+            self.send_places_batch(&lights);
+            self.gui.push_chat("observer");
+        }
+        for at in cells {
+            self.refresh_redstone(at);
+        }
+        self.observer_suppress = self.observer_suppress.saturating_sub(1);
+    }
+
+    fn tick_observer_pulse(&mut self, dt: f32) {
+        if self.observer_pulse.is_empty() {
+            return;
+        }
+        let mut keep = Vec::new();
+        let mut expired = Vec::new();
+        let pulses = std::mem::take(&mut self.observer_pulse);
+        for (cell, left) in pulses {
+            let next = left - dt;
+            if next <= 0.0 {
+                expired.push(cell);
+            } else {
+                keep.push((cell, next));
+            }
+        }
+        self.observer_pulse = keep;
+        if expired.is_empty() {
+            return;
+        }
+        self.observer_suppress = self.observer_suppress.saturating_add(1);
+        let mut changes = Vec::new();
+        for cell in &expired {
+            let block = self.world.block_at(cell[0], cell[1], cell[2]);
+            if !crate::redstone::is_observer(block.id) {
+                continue;
+            }
+            if crate::redstone::observer_lit(block) {
+                changes.push(CellChange {
+                    x: cell[0],
+                    y: cell[1],
+                    z: cell[2],
+                    block: crate::redstone::with_observer_lit(block, false),
+                });
+            }
+        }
+        if !changes.is_empty() {
+            self.send_places_batch(&changes);
+        }
+        for cell in expired {
+            self.refresh_redstone(cell);
+        }
+        self.observer_suppress = self.observer_suppress.saturating_sub(1);
+    }
+
     fn toggle_comparator(&mut self, at: [i32; 3], metadata: u8) {
         if self.told_disconnect {
             return;
@@ -30556,12 +30792,14 @@ impl State {
         );
         self.apply_comparator_lit(&outs);
         self.comparator_out = outs.clone();
+        let observers = self.observer_source_cells();
         let powers = crate::redstone::plan_dust_power_with(
             &self.world,
             focus,
             RADIUS,
             &buttons,
             &outs,
+            &observers,
         );
         let dust_edits = crate::redstone::dust_changes(&self.world, &powers);
         if !dust_edits.is_empty() {
@@ -30581,12 +30819,14 @@ impl State {
             }
         }
         // Re-read powers after local apply so device / repeater scan sees lit dust.
+        let observers = self.observer_source_cells();
         let powers = crate::redstone::plan_dust_power_with(
             &self.world,
             focus,
             RADIUS,
             &buttons,
             &self.comparator_out,
+            &observers,
         );
         self.schedule_repeaters(focus, RADIUS, &buttons, &powers);
         let now = crate::redstone::powered_devices_with(
@@ -30596,6 +30836,7 @@ impl State {
             &buttons,
             &powers,
             &self.comparator_out,
+            &observers,
         );
         let prior = std::mem::take(&mut self.redstone_powered);
         for cell in now.iter() {
@@ -30628,6 +30869,7 @@ impl State {
                     *cell,
                     &buttons,
                     &self.comparator_out,
+                    &self.observer_source_cells(),
                 )
             {
                 // Leave ember-lit lamps alone; only clear when redstone dropped.
@@ -30833,6 +31075,9 @@ impl State {
                 self.note_disconnect();
                 return;
             }
+        }
+        if self.observer_suppress == 0 {
+            self.observe_block_updates(changes);
         }
     }
 
@@ -31165,6 +31410,7 @@ impl State {
         self.tick_hoppers(dt);
         self.tick_piston_pulse(dt);
         self.tick_redstone_pulse(dt);
+        self.tick_observer_pulse(dt);
         self.tick_redstone_delay(dt);
         self.tell_landmarks();
         self.tell_cook_heat();

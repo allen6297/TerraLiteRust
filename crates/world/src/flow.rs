@@ -371,6 +371,9 @@ fn lamp_power(
         if block.id == "redstone_comparator" && block.fill != 0 {
             return (true, None);
         }
+        if block.id == "observer" && block.fill != 0 {
+            return (true, None);
+        }
     }
     let mut seen = HashSet::new();
     let mut queue = Vec::new();

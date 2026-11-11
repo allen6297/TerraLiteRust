@@ -519,6 +519,7 @@ mod tests {
             "assets/terralite/textures/redstone_dust.png",
             "assets/terralite/textures/redstone_repeater.png",
             "assets/terralite/textures/redstone_comparator.png",
+            "assets/terralite/textures/observer.png",
             "assets/terralite/textures/shulker_box.png",
             "assets/terralite/textures/end_rod.png",
             "assets/terralite/textures/end_stone_bricks.png",

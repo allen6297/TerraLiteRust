@@ -1,4 +1,4 @@
-//! Redstone dust, repeaters, and comparators.
+//! Redstone dust, repeaters, comparators, and observers.
 //!
 //! Placeable dust carries lever/button power up to [`MAX_POWER`] blocks.
 //! Metadata `0..=15` is signal strength (0 = unlit). Powered dust (and the
@@ -9,6 +9,9 @@
 //!
 //! Comparators compare or subtract (click toggles mode), can read a chest's
 //! fill behind them, and inject the resulting strength into the front dust.
+//!
+//! Observers watch the front cell for block updates and emit a short power
+//! pulse out the back.
 
 use rebuild_world::{Block, CarriedSlot, Cluster, FILL_EMBER, FILL_NONE};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -18,6 +21,9 @@ pub const MAX_POWER: u8 = 15;
 
 /// Seconds a button keeps feeding the wire before signal drops.
 pub const BUTTON_PULSE: f32 = 0.45;
+
+/// Seconds an observer keeps feeding its back face after a watched update.
+pub const OBSERVER_PULSE: f32 = 0.2;
 
 /// One redstone tick in seconds (Minecraft ≈ 0.1s).
 pub const TICK: f32 = 0.1;
@@ -47,6 +53,10 @@ pub fn is_repeater(id: &str) -> bool {
 
 pub fn is_comparator(id: &str) -> bool {
     id == "redstone_comparator"
+}
+
+pub fn is_observer(id: &str) -> bool {
+    id == "observer"
 }
 
 pub fn power_of(metadata: u8) -> u8 {
@@ -84,6 +94,11 @@ pub fn comparator_tint(metadata: u8) -> [f32; 3] {
     } else {
         [0.48, 0.40, 0.36]
     }
+}
+
+/// Observer body tint (face is the texture; lit uses fill glow).
+pub fn observer_tint(_metadata: u8) -> [f32; 3] {
+    [0.62, 0.62, 0.58]
 }
 
 /// Lever is a steady source when flipped on (bit 0).
@@ -270,6 +285,42 @@ pub fn comparator_lit(block: Block) -> bool {
     is_comparator(block.id) && block.fill != FILL_NONE
 }
 
+// --- Observer: facing bits 0..=1, lit via fill; watches front, pulses back ---
+
+pub fn make_observer(facing: u8, lit: bool) -> Block {
+    let block = Block::new("observer", with_facing(facing));
+    if lit {
+        block.with_fill(FILL_EMBER)
+    } else {
+        block.with_fill(FILL_NONE)
+    }
+}
+
+pub fn with_observer_lit(block: Block, lit: bool) -> Block {
+    Block::new("observer", block.metadata).with_fill(if lit {
+        FILL_EMBER
+    } else {
+        FILL_NONE
+    })
+}
+
+pub fn observer_lit(block: Block) -> bool {
+    is_observer(block.id) && block.fill != FILL_NONE
+}
+
+/// Observers whose front face is watching `at`.
+pub fn observers_watching(world: &Cluster, at: [i32; 3]) -> Vec<[i32; 3]> {
+    let mut out = Vec::new();
+    for dir in FACE_DIRS {
+        let obs = [at[0] - dir[0], at[1] - dir[1], at[2] - dir[2]];
+        let block = world.block_at(obs[0], obs[1], obs[2]);
+        if is_observer(block.id) && front_cell(obs, block.metadata) == at {
+            out.push(obs);
+        }
+    }
+    out
+}
+
 /// Minecraft-style container comparator signal from inventory slots.
 pub fn container_signal(slots: &[CarriedSlot], stack_cap: impl Fn(&str) -> u16) -> u8 {
     let mut fullness = 0.0f32;
@@ -413,16 +464,17 @@ pub fn plan_dust_power(
     radius: i32,
     button_sources: &[[i32; 3]],
 ) -> HashMap<[i32; 3], u8> {
-    plan_dust_power_with(world, focus, radius, button_sources, &HashMap::new())
+    plan_dust_power_with(world, focus, radius, button_sources, &HashMap::new(), &[])
 }
 
-/// Like [`plan_dust_power`], also injecting comparator front strengths.
+/// Like [`plan_dust_power`], also injecting comparator fronts and observer backs.
 pub fn plan_dust_power_with(
     world: &Cluster,
     focus: [i32; 3],
     radius: i32,
     button_sources: &[[i32; 3]],
     comparator_out: &HashMap<[i32; 3], u8>,
+    observer_pulse: &[[i32; 3]],
 ) -> HashMap<[i32; 3], u8> {
     let mut dust = HashSet::new();
     let mut sources = Vec::new();
@@ -473,6 +525,16 @@ pub fn plan_dust_power_with(
         let front = front_cell(at, block.metadata);
         if dust.contains(&front) {
             queue.push_back((front, strength));
+        }
+    }
+    for &at in observer_pulse {
+        let block = world.block_at(at[0], at[1], at[2]);
+        if !is_observer(block.id) {
+            continue;
+        }
+        let back = back_cell(at, block.metadata);
+        if dust.contains(&back) {
+            queue.push_back((back, MAX_POWER));
         }
     }
 
@@ -526,7 +588,7 @@ pub fn powered_devices(
     button_sources: &[[i32; 3]],
     powers: &HashMap<[i32; 3], u8>,
 ) -> HashSet<[i32; 3]> {
-    powered_devices_with(world, focus, radius, button_sources, powers, &HashMap::new())
+    powered_devices_with(world, focus, radius, button_sources, powers, &HashMap::new(), &[])
 }
 
 pub fn powered_devices_with(
@@ -536,6 +598,7 @@ pub fn powered_devices_with(
     button_sources: &[[i32; 3]],
     powers: &HashMap<[i32; 3], u8>,
     comparator_out: &HashMap<[i32; 3], u8>,
+    observer_pulse: &[[i32; 3]],
 ) -> HashSet<[i32; 3]> {
     let mut out = HashSet::new();
     for dx in -radius..=radius {
@@ -546,7 +609,14 @@ pub fn powered_devices_with(
                 if !is_device(block.id) {
                     continue;
                 }
-                if device_has_power(world, at, button_sources, powers, comparator_out) {
+                if device_has_power(
+                    world,
+                    at,
+                    button_sources,
+                    powers,
+                    comparator_out,
+                    observer_pulse,
+                ) {
                     out.insert(at);
                 }
             }
@@ -561,6 +631,7 @@ fn device_has_power(
     button_sources: &[[i32; 3]],
     powers: &HashMap<[i32; 3], u8>,
     comparator_out: &HashMap<[i32; 3], u8>,
+    observer_pulse: &[[i32; 3]],
 ) -> bool {
     for step in STEPS {
         let n = [at[0] + step[0], at[1] + step[1], at[2] + step[2]];
@@ -585,6 +656,12 @@ fn device_has_power(
                 return true;
             }
         }
+        if observer_pulse.iter().any(|c| *c == n)
+            && is_observer(block.id)
+            && back_cell(n, block.metadata) == at
+        {
+            return true;
+        }
     }
     false
 }
@@ -595,7 +672,7 @@ pub fn lamp_redstone_powered(
     at: [i32; 3],
     button_sources: &[[i32; 3]],
 ) -> bool {
-    lamp_redstone_powered_with(world, at, button_sources, &HashMap::new())
+    lamp_redstone_powered_with(world, at, button_sources, &HashMap::new(), &[])
 }
 
 pub fn lamp_redstone_powered_with(
@@ -603,6 +680,7 @@ pub fn lamp_redstone_powered_with(
     at: [i32; 3],
     button_sources: &[[i32; 3]],
     comparator_out: &HashMap<[i32; 3], u8>,
+    observer_pulse: &[[i32; 3]],
 ) -> bool {
     for step in STEPS {
         let n = [at[0] + step[0], at[1] + step[1], at[2] + step[2]];
@@ -624,6 +702,15 @@ pub fn lamp_redstone_powered_with(
         }
         // Lit comparator fill also counts when facing the lamp.
         if comparator_lit(block) && front_cell(n, block.metadata) == at {
+            return true;
+        }
+        if observer_pulse.iter().any(|c| *c == n)
+            && is_observer(block.id)
+            && back_cell(n, block.metadata) == at
+        {
+            return true;
+        }
+        if observer_lit(block) && back_cell(n, block.metadata) == at {
             return true;
         }
     }
@@ -802,7 +889,7 @@ mod tests {
         ]);
         let mut outs = HashMap::new();
         outs.insert([2, 1, 1], 9u8);
-        let powers = plan_dust_power_with(&cluster, [3, 1, 1], 6, &[], &outs);
+        let powers = plan_dust_power_with(&cluster, [3, 1, 1], 6, &[], &outs, &[]);
         assert_eq!(powers.get(&[3, 1, 1]), Some(&9));
         assert_eq!(powers.get(&[4, 1, 1]), Some(&8));
     }
@@ -843,7 +930,52 @@ mod tests {
         backs.insert([2, 1, 1], 11u8);
         let outs = plan_comparator_outputs(&cluster, [2, 1, 1], 4, &[], &powers, &backs);
         assert_eq!(outs.get(&[2, 1, 1]), Some(&11));
-        let dust = plan_dust_power_with(&cluster, [2, 1, 1], 4, &[], &outs);
+        let dust = plan_dust_power_with(&cluster, [2, 1, 1], 4, &[], &outs, &[]);
         assert_eq!(dust.get(&[3, 1, 1]), Some(&11));
+    }
+
+    #[test]
+    fn observer_pulses_back_not_front() {
+        let obs = make_observer(0, true);
+        let cluster = world(vec![
+            (1, 1, 1, Block::new("redstone_dust", 0)),
+            (2, 1, 1, obs),
+            (3, 1, 1, Block::new("redstone_dust", 0)),
+        ]);
+        let powers = plan_dust_power_with(&cluster, [2, 1, 1], 4, &[], &HashMap::new(), &[[2, 1, 1]]);
+        assert_eq!(powers.get(&[1, 1, 1]), Some(&15));
+        assert_eq!(powers.get(&[3, 1, 1]), Some(&0));
+    }
+
+    #[test]
+    fn observers_watching_finds_front_neighbor() {
+        let obs = make_observer(0, false);
+        let cluster = world(vec![
+            (2, 1, 1, obs),
+            (3, 1, 1, Block::new("dirt", 0)),
+        ]);
+        let found = observers_watching(&cluster, [3, 1, 1]);
+        assert_eq!(found, vec![[2, 1, 1]]);
+        assert!(observers_watching(&cluster, [1, 1, 1]).is_empty());
+    }
+
+    #[test]
+    fn observer_pulse_powers_back_device() {
+        let obs = make_observer(0, true);
+        let cluster = world(vec![
+            (1, 1, 1, Block::new("lamp", 0)),
+            (2, 1, 1, obs),
+            (3, 1, 1, Block::new("dirt", 0)),
+        ]);
+        let devices = powered_devices_with(
+            &cluster,
+            [2, 1, 1],
+            4,
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &[[2, 1, 1]],
+        );
+        assert!(devices.contains(&[1, 1, 1]));
     }
 }
