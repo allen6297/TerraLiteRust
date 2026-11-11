@@ -1687,6 +1687,10 @@ pub struct State {
     piglin_count: u32,
     /// Once: found the nether pocket piglin.
     found_piglin: bool,
+    /// Once: tip that gold armor pacifies the piglin.
+    piglin_gold_tip: bool,
+    /// Once: tip to wear gold when the piglin aggroes.
+    piglin_aggro_tip: bool,
     guardian: crate::mobs::Guardian,
     guardian_buf: Option<wgpu::Buffer>,
     guardian_count: u32,
@@ -2900,6 +2904,8 @@ impl State {
             piglin_buf: None,
             piglin_count: 0,
             found_piglin: false,
+            piglin_gold_tip: false,
+            piglin_aggro_tip: false,
             guardian: crate::mobs::Guardian::new(),
             guardian_buf: None,
             guardian_count: 0,
@@ -10098,6 +10104,48 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Inventory tip for gold armor + calm piglin context, then quit with a PNG.
+    pub fn arm_gold_armor_piglin_shot(&mut self, path: std::path::PathBuf) {
+        // egui settle path so the pacify tip plate is readable.
+        self.creative_shot_path = Some(path);
+        self.creative_shot_frames = 0;
+        self.playing = false;
+        self.menu.close_menu();
+
+        let (px, pz) = rebuild_world::NETHER_PIGLIN;
+        let floor = f32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        self.piglin
+            .place_at([px as f32 + 0.5, floor, pz as f32 + 0.5]);
+        let _ = self.armor.equip(0, "golden_helmet");
+        let _ = self.armor.equip(1, "golden_chestplate");
+        let _ = self.armor.equip(2, "golden_boots");
+        let _ = self.piglin.tick_near(
+            8,
+            [px as f32 - 1.5, pz as f32 + 0.5],
+            true,
+            &self.world,
+            true,
+        );
+        self.rebuild_piglin();
+        self.found_piglin = true;
+        self.piglin_gold_tip = true;
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("golden_helmet");
+        let _ = self.hotbar.collect("gold_ingot");
+        let _ = self.hotbar.collect("golden_boots");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        self.gui.open_player_craft();
+        self.gui.set_inv_tab(crate::gui::PlayerInvTab::Player);
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("gold keeps them calm");
+        let tip = crate::gui::tip_for("golden_helmet", Some(1));
+        self.gui.pin_tip(tip);
+        let _ = self.window.focus_window();
+    }
+
     /// Nether pocket piglin mid-barter for gold, then quit with a PNG.
     pub fn arm_piglin_barter_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -10118,7 +10166,13 @@ impl State {
         let floor = f32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
         self.piglin
             .place_at([px as f32 + 0.5, floor, pz as f32 + 0.5]);
-        let _ = self.piglin.tick_near(6, [px as f32 - 1.5, pz as f32 + 0.5], true, &self.world);
+        let _ = self.piglin.tick_near(
+            6,
+            [px as f32 - 1.5, pz as f32 + 0.5],
+            true,
+            &self.world,
+            true,
+        );
         self.rebuild_piglin();
         self.found_portal = true;
         self.found_portal_lit = true;
@@ -11339,6 +11393,13 @@ impl State {
         }
         if self.piglin.angry() {
             self.gui.push_chat("angry");
+            return true;
+        }
+        if !self.armor.wears_gold() {
+            self.gui.push_chat("wear gold armor");
+            if !self.piglin_aggro_tip {
+                self.piglin_aggro_tip = true;
+            }
             return true;
         }
         let Some(held) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -29558,11 +29619,35 @@ impl State {
                     self.piglin.origin()[2],
                 ];
                 let clear = look::clear_between(from, eye3, &self.world);
-                if self.piglin.tick_near(steps, feet, clear, &self.world) {
+                let wearing_gold = self.armor.wears_gold();
+                let was_hunting = self.piglin.hunting();
+                if self
+                    .piglin
+                    .tick_near(steps, feet, clear, &self.world, wearing_gold)
+                {
                     let blocked = self.try_shield_block();
                     let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                     self.apply_damage(amount);
                     self.gui.push_chat(if blocked { "block" } else { "slash" });
+                }
+                // Tip when gold (or its absence) first matters near the piglin.
+                let dx = feet[0] - from[0];
+                let dz = feet[1] - from[2];
+                let near = dx * dx + dz * dz < 12.0 * 12.0;
+                if near && self.piglin.alive() {
+                    if wearing_gold && !self.piglin.angry() && !self.piglin_gold_tip {
+                        self.piglin_gold_tip = true;
+                        self.gui.push_chat("gold keeps them calm");
+                        let tip = crate::gui::tip_for("golden_helmet", Some(1));
+                        self.gui.pin_tip(tip);
+                    } else if !wearing_gold
+                        && self.piglin.hunting()
+                        && !was_hunting
+                        && !self.piglin_aggro_tip
+                    {
+                        self.piglin_aggro_tip = true;
+                        self.gui.push_chat("wear gold armor");
+                    }
                 }
                 if self.piglin.rest(dt) {
                     self.rebuild_piglin();

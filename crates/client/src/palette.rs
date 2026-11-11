@@ -60,6 +60,8 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "netherite_helmet" | "netherite_chestplate" | "netherite_boots" => [0.30, 0.26, 0.28],
         "diamond_sword" | "diamond_axe" | "diamond_shovel" | "diamond_hoe"
         | "diamond_helmet" | "diamond_chestplate" | "diamond_boots" => [0.55, 0.85, 0.90],
+        "golden_helmet" | "golden_chestplate" | "golden_boots"
+        | "gold_helmet" | "gold_chestplate" | "gold_boots" => [0.92, 0.78, 0.22],
         "gold_ingot" => [0.92, 0.78, 0.28],
         "emerald_ore" => [0.28, 0.55, 0.36],
         "grass" => match metadata {

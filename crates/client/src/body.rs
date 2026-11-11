@@ -867,6 +867,19 @@ pub struct Armor {
     slots: [Option<&'static str>; 3],
 }
 
+/// True when `id` is a gold armor piece (pacifies piglins).
+pub fn is_gold_armor(id: &str) -> bool {
+    matches!(
+        id,
+        "golden_helmet"
+            | "golden_chestplate"
+            | "golden_boots"
+            | "gold_helmet"
+            | "gold_chestplate"
+            | "gold_boots"
+    )
+}
+
 impl Armor {
     pub fn new() -> Self {
         Self { slots: [None; 3] }
@@ -874,6 +887,11 @@ impl Armor {
 
     pub fn worn(self) -> [Option<&'static str>; 3] {
         self.slots
+    }
+
+    /// True when any worn piece is gold — nearby piglins stay neutral unless struck.
+    pub fn wears_gold(self) -> bool {
+        self.slots.iter().flatten().any(|id| is_gold_armor(id))
     }
 
     /// Wear `id` in `slot`. The piece that was there comes back.
@@ -1628,7 +1646,12 @@ mod tests {
         assert!(worn.equip(0, "leather_cap").is_none());
         assert_eq!(worn.equip(0, "leather_cap"), Some("leather_cap"));
         assert_eq!(worn.worn()[0], Some("leather_cap"));
+        assert!(!worn.wears_gold());
         assert_eq!(worn.clear(0), Some("leather_cap"));
+        assert!(worn.equip(1, "golden_chestplate").is_none());
+        assert!(worn.wears_gold());
+        assert!(is_gold_armor("golden_helmet"));
+        assert!(!is_gold_armor("leather_cap"));
         assert!(worn.worn()[0].is_none());
     }
 

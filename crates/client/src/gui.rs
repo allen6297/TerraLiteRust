@@ -4161,7 +4161,11 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
     } else if pack.is_bow(id) {
         "hold to draw, release to fire".to_string()
     } else if pack.armor_of(id).is_some() {
-        "soaks heart damage".to_string()
+        if crate::body::is_gold_armor(id) {
+            "soaks damage — pacifies piglins".to_string()
+        } else {
+            "soaks heart damage".to_string()
+        }
     } else if max_uses > 0 {
         match tool_tier_name(&pack, id) {
             Some(tier) => format!("{tier} tool — wears with use"),
@@ -4194,6 +4198,9 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         };
         stats.push(format!("{piece} armor"));
         stats.push(format!("Soak {soak}"));
+        if crate::body::is_gold_armor(id) {
+            stats.push("Pacifies piglins".to_string());
+        }
     }
     if pack.is_firework(id) {
         stats.push("Elytra boost".to_string());

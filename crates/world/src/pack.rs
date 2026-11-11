@@ -7805,6 +7805,9 @@ mod tests {
         assert_eq!(pack.armor_of("leather_cap"), Some((0, 1)));
         assert_eq!(pack.armor_of("leather_tunic"), Some((1, 1)));
         assert_eq!(pack.armor_of("leather_boots"), Some((2, 1)));
+        assert_eq!(pack.armor_of("golden_helmet"), Some((0, 1)));
+        assert_eq!(pack.armor_of("golden_chestplate"), Some((1, 1)));
+        assert_eq!(pack.armor_of("golden_boots"), Some((2, 1)));
         assert_eq!(pack.armor_of("apple"), None);
         assert!(pack.is_shield("shield"));
         assert!(!pack.is_shield("leather_cap"));

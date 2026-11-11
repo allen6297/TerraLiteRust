@@ -5542,7 +5542,7 @@ impl Blaze {
     }
 }
 
-/// Nether pocket piglin — gold-ingot barter, angry when struck.
+/// Nether pocket piglin — gold-ingot barter; hostile without gold armor, angry when struck.
 pub const PIGLIN_PAD: (i32, i32) = rebuild_world::NETHER_PIGLIN;
 
 const PIGLIN_HEARTS: i32 = 8;
@@ -5550,6 +5550,8 @@ const PIGLIN_REACH: f32 = 1.4;
 const PIGLIN_STEP: f32 = 0.1;
 const PIGLIN_SWING_EVERY: u32 = 24;
 const PIGLIN_HUNT: f32 = 12.0;
+/// Sight range where missing gold armor turns a calm piglin hostile.
+const PIGLIN_AGGRO: f32 = 10.0;
 
 /// Loot a gold ingot buys from a calm piglin.
 pub const PIGLIN_BARTER: &[&str] = &[
@@ -5565,7 +5567,7 @@ pub const PIGLIN_BARTER: &[&str] = &[
     "iron_ore",
 ];
 
-/// Gold-hungry piglin that barters when calm and melee-chases when angry.
+/// Gold-hungry piglin: neutral in gold armor, hostile without it, enraged when struck.
 pub struct Piglin {
     origin: [f32; 3],
     home: [f32; 3],
@@ -5575,7 +5577,10 @@ pub struct Piglin {
     hearts: i32,
     down: f32,
     loose: u32,
+    /// Provoked by a player hit — chases even when the player wears gold.
     angry: bool,
+    /// Last tick: chasing because provoked or the player lacked gold armor.
+    hunting: bool,
     roll: u32,
 }
 
@@ -5594,6 +5599,7 @@ impl Piglin {
             down: 0.0,
             loose: 0,
             angry: false,
+            hunting: false,
             roll: 0,
         }
     }
@@ -5606,8 +5612,14 @@ impl Piglin {
         self.hearts > 0
     }
 
+    /// Provoked by a hit (blocks barter until rest).
     pub fn angry(&self) -> bool {
         self.angry
+    }
+
+    /// Chasing this frame (provoked or player has no gold armor).
+    pub fn hunting(&self) -> bool {
+        self.hunting
     }
 
     /// Place for shots and tests.
@@ -5619,6 +5631,7 @@ impl Piglin {
         self.swing = 0;
         self.loose = 0;
         self.angry = false;
+        self.hunting = false;
     }
 
     /// Spend one gold for the next barter roll. `None` when angry or dead.
@@ -5659,6 +5672,7 @@ impl Piglin {
             return false;
         }
         self.angry = true;
+        self.hunting = true;
         self.hearts -= amount;
         if self.hearts > 0 {
             return false;
@@ -5683,6 +5697,7 @@ impl Piglin {
         self.down = 0.0;
         self.loose = 0;
         self.angry = false;
+        self.hunting = false;
         true
     }
 
@@ -5693,19 +5708,22 @@ impl Piglin {
         bump_origin(&mut self.origin, &mut self.loose, from)
     }
 
-    /// Idle bob when calm; chase and swing when angry. True on a melee hit.
+    /// Idle when pacified by gold; chase when provoked or the player lacks gold.
+    /// True on a melee hit.
     pub fn tick_near(
         &mut self,
         count: u32,
         player: [f32; 2],
         clear: bool,
         world: &Cluster,
+        wearing_gold: bool,
     ) -> bool {
         if self.loose > 0 {
             self.loose = self.loose.saturating_sub(count);
             return false;
         }
         if self.hearts <= 0 {
+            self.hunting = false;
             return false;
         }
         let mut hit = false;
@@ -5715,7 +5733,10 @@ impl Piglin {
             let dx = player[0] - self.origin[0];
             let dz = player[1] - self.origin[2];
             let dist = (dx * dx + dz * dz).sqrt();
-            if !self.angry {
+            // Sight aggro: no gold within range → hostile. Gold keeps them calm
+            // unless already provoked by a hit.
+            self.hunting = self.angry || (!wearing_gold && dist <= PIGLIN_AGGRO);
+            if !self.hunting {
                 if dist < 8.0 {
                     face_forward(&mut self.yaw, dx, dz);
                 }
@@ -5767,7 +5788,7 @@ impl Piglin {
         ) {
             Some(c) => (c[0], [c[1][0] * 0.55, c[1][1] * 0.5, c[1][2] * 0.45], c[2], c[3]),
             None => (
-                if self.angry {
+                if self.hunting {
                     [0.62, 0.32, 0.28]
                 } else {
                     [0.72, 0.48, 0.38]
@@ -5777,7 +5798,7 @@ impl Piglin {
                 [0.55, 0.28, 0.24],
             ),
         };
-        if self.angry {
+        if self.hunting {
             hide = [
                 (hide[0] * 0.85 + 0.2).min(1.0),
                 hide[1] * 0.75,
@@ -5812,7 +5833,7 @@ impl Piglin {
             cloth,
         );
         // Arms.
-        let reach = if self.angry { 0.22 } else { 0.06 };
+        let reach = if self.hunting { 0.22 } else { 0.06 };
         push_box(
             &mut out,
             [x - 0.36, y + 1.0 + bob, z + reach],
@@ -6930,7 +6951,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_piglin_barters_gold_then_angers_when_struck() {
         let mut piglin = Piglin::new();
         assert_eq!(
@@ -6940,7 +6960,17 @@ mod tests {
             ),
             PIGLIN_PAD
         );
+        let ground = air_plot();
+        let near = [piglin.origin()[0] + 2.0, piglin.origin()[2]];
+        // No gold nearby → sight aggro / hunting (not yet attack-provoked).
         assert!(!piglin.angry());
+        let _ = piglin.tick_near(4, near, true, &ground, false);
+        assert!(piglin.hunting());
+        assert!(!piglin.angry());
+        // Gold armor pacifies unless provoked.
+        piglin.place_at(piglin.origin());
+        let _ = piglin.tick_near(4, near, true, &ground, true);
+        assert!(!piglin.hunting());
         assert!(!piglin.vertices().is_empty());
         let first = piglin.barter().expect("calm barter");
         assert!(PIGLIN_BARTER.contains(&first));
@@ -6948,6 +6978,10 @@ mod tests {
         assert_ne!(first, second);
         assert!(!piglin.hurt(1));
         assert!(piglin.angry());
+        assert!(piglin.hunting());
+        // Provoked piglin still hunts through gold armor.
+        let _ = piglin.tick_near(2, near, true, &ground, true);
+        assert!(piglin.hunting());
         assert!(piglin.barter().is_none());
         assert!(piglin.hurt(PIGLIN_HEARTS));
         assert!(!piglin.alive());
