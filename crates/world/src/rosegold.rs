@@ -421,8 +421,27 @@ pub(crate) struct ScriptTable {
     lines: std::cell::RefCell<Vec<String>>,
     /// GUIAPI screen names `gui.open` asked for during the hook.
     pending_screens: std::cell::RefCell<Vec<String>>,
+    /// Fill place/remove hooks deferred until the outer `Host::call` returns.
+    /// Firing them inside `answer` would re-enter the host and deadlock.
+    pending_fills: std::cell::RefCell<Vec<PendingFill>>,
     /// Hotbar the server last heard. Empty until a hotbar packet arrives.
     inventory: std::cell::RefCell<SyncedBar>,
+}
+
+/// One fill transition waiting to run `fill_place` / `fill_remove`.
+enum PendingFill {
+    Place {
+        kind: String,
+        x: i32,
+        y: i32,
+        z: i32,
+    },
+    Remove {
+        kind: String,
+        x: i32,
+        y: i32,
+        z: i32,
+    },
 }
 
 #[derive(Clone)]
@@ -487,6 +506,7 @@ impl ScriptTable {
             live_spawns: std::cell::RefCell::new(Vec::new()),
             lines: std::cell::RefCell::new(Vec::new()),
             pending_screens: std::cell::RefCell::new(Vec::new()),
+            pending_fills: std::cell::RefCell::new(Vec::new()),
             inventory: std::cell::RefCell::new(SyncedBar {
                 selected: 0,
                 slots: Vec::new(),
@@ -743,10 +763,14 @@ impl ScriptTable {
         }
     }
 
-    /// Fire fill_place / fill_remove when the cell's fill byte changed.
+    /// Queue fill_place / fill_remove when the cell's fill byte changed.
+    ///
+    /// Callers must [`Self::flush_fills`] after the outer host call (or place
+    /// path) finishes. Running those hooks inside `answer` re-enters
+    /// [`Host::call`] and deadlocks the script thread.
     pub(crate) fn note_fill_change(
         &self,
-        world: &mut Cluster,
+        _world: &mut Cluster,
         x: i32,
         y: i32,
         z: i32,
@@ -758,10 +782,41 @@ impl ScriptTable {
         }
         if after != crate::chunk::FILL_NONE {
             if let Some(kind) = crate::chunk::fill_name(after) {
-                self.fill_place(world, kind, x, y, z);
+                self.pending_fills.borrow_mut().push(PendingFill::Place {
+                    kind: kind.to_string(),
+                    x,
+                    y,
+                    z,
+                });
             }
         } else if let Some(kind) = crate::chunk::fill_name(before) {
-            self.fill_remove(world, kind, x, y, z);
+            self.pending_fills.borrow_mut().push(PendingFill::Remove {
+                kind: kind.to_string(),
+                x,
+                y,
+                z,
+            });
+        }
+    }
+
+    /// Run fill hooks queued by [`Self::note_fill_change`]. Nested `set_fill`
+    /// from those hooks queues more events; this drains until idle.
+    pub(crate) fn flush_fills(&self, world: &mut Cluster) {
+        loop {
+            let batch: Vec<PendingFill> = self.pending_fills.borrow_mut().drain(..).collect();
+            if batch.is_empty() {
+                return;
+            }
+            for event in batch {
+                match event {
+                    PendingFill::Place { kind, x, y, z } => {
+                        self.fill_place(world, &kind, x, y, z);
+                    }
+                    PendingFill::Remove { kind, x, y, z } => {
+                        self.fill_remove(world, &kind, x, y, z);
+                    }
+                }
+            }
         }
     }
 
@@ -2022,6 +2077,8 @@ fn invoke(
     let result = hook.host.call(hook.slot, args, &mut |query| {
         answer(table, world, view, &writes, query)
     });
+    // Fill hooks must run after Host::call returns; answer must not re-enter it.
+    table.flush_fills(world);
     let said: Vec<String> = table.lines.borrow_mut().drain(..).collect();
     let mut call = result?;
     emit_script_output(&call.printed);
@@ -2450,6 +2507,7 @@ mod tests {
     const WEAVE: &str = include_str!("../testdata/hook_mods/weave.rg");
     const STRUCTURE: &str = include_str!("../testdata/hook_mods/structure-discovered.rg");
     const TICK: &str = include_str!("../testdata/hook_mods/tick.rg");
+    const TICK_FILL: &str = include_str!("../testdata/hook_mods/tick-fill.rg");
     const DAWN: &str = include_str!("../testdata/hook_mods/dawn.rg");
     const DUSK: &str = include_str!("../testdata/hook_mods/dusk.rg");
     const JUMP: &str = include_str!("../testdata/hook_mods/jump.rg");
@@ -2686,6 +2744,23 @@ mod tests {
         assert_eq!(hooks.drain_writes().len(), 1);
         hooks.drive_entities(&mut world, 20);
         assert!(hooks.drain_writes().is_empty());
+        assert_eq!(world.block_at(1, 2, 1).id, "dirt");
+    }
+
+    #[test]
+    fn tick_set_fill_runs_fill_place_without_deadlock() {
+        let mut hooks = Hooks::new();
+        let loaded = load_source(TICK_FILL, &mut hooks).unwrap();
+        assert!(loaded.iter().any(|hook| {
+            hook.id() == "fill-pulse" && matches!(hook, ScriptHook::Tick { .. })
+        }));
+        assert!(loaded.iter().any(|hook| {
+            hook.id() == "mark-fill" && matches!(hook, ScriptHook::FillPlace { .. })
+        }));
+        let mut world = sample();
+        hooks.drive_entities(&mut world, 20);
+        assert_eq!(world.block_at(2, 1, 2).id, "copper_grate");
+        assert_eq!(world.block_at(2, 1, 2).fill, crate::chunk::FILL_EMBER);
         assert_eq!(world.block_at(1, 2, 1).id, "dirt");
     }
 

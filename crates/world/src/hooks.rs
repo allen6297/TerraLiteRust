@@ -796,6 +796,7 @@ pub fn apply_authoritative(world: &mut Cluster, edit: Edit, hooks: &Hooks) -> bo
                 hooks
                     .scripts
                     .note_fill_change(world, x, y, z, before.fill, after.fill);
+                hooks.scripts.flush_fills(world);
             }
             changed
         }
