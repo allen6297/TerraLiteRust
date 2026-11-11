@@ -26,6 +26,7 @@ pub fn tint(id: &str) -> [f32; 3] {
     match id {
         SCULK_SHRIEKER => [0.1, 0.36, 0.38],
         ECHO_SHARD => [0.25, 0.85, 0.9],
+        "recovery_compass" => [0.2, 0.7, 0.78],
         _ => [0.1, 0.36, 0.38],
     }
 }

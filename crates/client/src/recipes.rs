@@ -584,6 +584,7 @@ mod tests {
                 "sculk_catalyst".to_string(),
                 "sculk_shrieker".to_string(),
                 "echo_shard".to_string(),
+                "recovery_compass".to_string(),
                 "water_bottle".to_string(),
                 "brush".to_string(),
                 "bucket".to_string(),

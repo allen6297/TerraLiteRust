@@ -15,6 +15,7 @@
 //! `data/terralite/loot/mineshaft_chest.json` is the abandoned mineshaft spur.
 //! `data/terralite/loot/fortress_chest.json` is the nether fortress remnant.
 //! `data/terralite/loot/bastion_chest.json` is the nether bastion remnant.
+//! `data/terralite/loot/ancient_city_chest.json` is the deep-dark city hall.
 //! `data/terralite/loot/blocks/<id>.json` overrides break drops for that
 //! block (`drops` only). `loot.chest` / ModAPI `chestLoot` replaces a table's
 //! `drops` list. `drops` is the ordinary list. `omen` is the list after an
@@ -176,6 +177,15 @@ pub fn bastion_chest_file() -> PathBuf {
 /// The nether bastion remnant chest table from the data pack.
 pub fn load_bastion_chest() -> Result<Table, String> {
     load_chest("bastion_chest", &bastion_chest_file())
+}
+
+pub fn ancient_city_chest_file() -> PathBuf {
+    loot_file("ancient_city_chest")
+}
+
+/// The ancient city remnant chest table from the data pack.
+pub fn load_ancient_city_chest() -> Result<Table, String> {
+    load_chest("ancient_city_chest", &ancient_city_chest_file())
 }
 
 fn load_chest(table: &str, path: &std::path::Path) -> Result<Table, String> {

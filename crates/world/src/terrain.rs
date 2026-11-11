@@ -169,6 +169,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
+    stamp_ancient_city(&mut blocks, chunk_x, chunk_z);
     Chunk::from_blocks(chunk_x, chunk_z, blocks).expect("terrain coordinates stay in the chunk")
 }
 
@@ -660,6 +661,113 @@ pub const CLAY_BANK: (i32, i32) = (2, 41);
 
 const CLAY_CHUNK: (i32, i32) = (0, 2);
 
+/// Deep-dark ancient city remnant south of the marsh.
+///
+/// The chunk is `(0, 3)`. Walk south past the clay bank. A deepslate mouth
+/// opens into a sculk hall — destination place for echo shards / recovery.
+/// Reachable on **small** (first rings south); not mega-only.
+pub const ANCIENT_CITY: (i32, i32) = (8, 52);
+
+/// North-facing mouth silhouette of the ancient city hall.
+pub const ANCIENT_CITY_MOUTH: (i32, i32) = (8, 49);
+
+/// Loot chest at the south back of the hall.
+pub const ANCIENT_CITY_CHEST: (i32, i32) = (8, 55);
+
+/// Standing floor of the ancient city hall.
+pub const ANCIENT_CITY_FLOOR: u16 = 4;
+
+const ANCIENT_CITY_CHUNK: (i32, i32) = (0, 3);
+
+/// Deepslate / sculk hall with a north mouth. Only the ancient-city chunk.
+fn stamp_ancient_city(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != ANCIENT_CITY_CHUNK {
+        return;
+    }
+    let (cx, cz) = ANCIENT_CITY;
+    let floor = ANCIENT_CITY_FLOOR;
+    let deep = Block::new("deepslate", 0);
+    let cobbled = Block::new("cobbled_deepslate", 0);
+    let sculk = Block::new("sculk", 0);
+    // Hall footprint: x ±3, z from mouth (north) to back (south).
+    let z_north = ANCIENT_CITY_MOUTH.1;
+    let z_south = ANCIENT_CITY_CHEST.1 + 1;
+    for wz in z_north..=z_south {
+        for wx in (cx - 3)..=(cx + 3) {
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            let edge = wx == cx - 3 || wx == cx + 3 || wz == z_south;
+            let mouth = wz == z_north && wx >= cx - 1 && wx <= cx + 1;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 4)
+            });
+            // Sculk carpet underfoot; deepslate rim walls.
+            blocks.push((
+                lx,
+                floor - 1,
+                lz,
+                if edge && !mouth { deep } else { sculk },
+            ));
+            if mouth {
+                // Open mouth: clear standing + headroom; deepslate lintel above.
+                blocks.push((lx, floor + 3, lz, cobbled));
+                continue;
+            }
+            if edge {
+                for dy in 0..4u16 {
+                    let wall = if (wx + wz + dy as i32).rem_euclid(3) == 0 {
+                        cobbled
+                    } else {
+                        deep
+                    };
+                    blocks.push((lx, floor + dy, lz, wall));
+                }
+            } else {
+                // Roof so the hall reads underground from the mouth.
+                blocks.push((lx, floor + 3, lz, deep));
+            }
+        }
+    }
+    // Surface rim above the mouth so the silhouette reads from the approach.
+    let surface = column_height(cx, z_north, biome_at(cx, z_north)).max(floor + 4);
+    for wx in (cx - 2)..=(cx + 2) {
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (z_north - chunk_z * 16) as u8;
+        for y in (floor + 4)..=surface {
+            if !blocks
+                .iter()
+                .any(|(x, yy, z, _)| *x == lx && *z == lz && *yy == y)
+            {
+                let rim = if (wx + y as i32).rem_euclid(2) == 0 {
+                    cobbled
+                } else {
+                    deep
+                };
+                blocks.push((lx, y, lz, rim));
+            }
+        }
+        // Cut a doorway column in the rim so you can drop in.
+        if wx >= cx - 1 && wx <= cx + 1 {
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor && *y < surface)
+            });
+        }
+    }
+    // Props: shrieker + sensor near mouth, catalyst mid-hall, chest at back.
+    let mut prop = |wx: i32, wz: i32, id: &str| {
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (wz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor));
+        blocks.push((lx, floor, lz, Block::new(id, 0)));
+    };
+    prop(cx - 1, z_north + 1, "sculk_shrieker");
+    prop(cx + 1, z_north + 1, "sculk_sensor");
+    prop(cx, cz, "sculk_catalyst");
+    prop(ANCIENT_CITY_CHEST.0, ANCIENT_CITY_CHEST.1, "chest");
+    // Dim corner light so the still isn't black.
+    prop(cx + 2, cz, "lantern");
+}
+
 /// A ruined stone-brick square with a chest. Only the shrine chunk gets one.
 fn stamp_shrine(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
     if (chunk_x, chunk_z) != SHRINE_CHUNK {
@@ -1041,6 +1149,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | END_CHUNK
             | VILLAGE_CHUNK
             | NETHER_CHUNK
+            | ANCIENT_CITY_CHUNK
             | (0, 0)
     );
     if !guaranteed {

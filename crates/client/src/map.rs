@@ -34,6 +34,8 @@ const MINE: [f32; 3] = [0.25, 0.55, 0.78];
 const STAIRS: [f32; 3] = [0.95, 0.82, 0.28];
 const SHRINE: [f32; 3] = [0.35, 0.72, 0.38];
 const CLAY: [f32; 3] = [0.20, 0.72, 0.78];
+/// Ancient city — violet, distinct from camp orange / mine blue.
+const CITY: [f32; 3] = [0.62, 0.28, 0.78];
 const PAPER: [f32; 3] = [0.16, 0.13, 0.09];
 const INK: [f32; 3] = [0.93, 0.90, 0.82];
 const BACK: [f32; 3] = [0.04, 0.05, 0.06];
@@ -46,6 +48,7 @@ pub const MINE_RGB: [f32; 3] = MINE;
 pub const STAIRS_RGB: [f32; 3] = STAIRS;
 pub const SHRINE_RGB: [f32; 3] = SHRINE;
 pub const CLAY_RGB: [f32; 3] = CLAY;
+pub const CITY_RGB: [f32; 3] = CITY;
 
 /// The highest solid block in the column, or air when the column is empty.
 fn ground(world: &Cluster, x: i32, z: i32, feet_y: f32) -> Block {
@@ -192,6 +195,7 @@ pub fn sheet_quads(
     stairs: Option<(usize, usize)>,
     shrine: Option<(usize, usize)>,
     clay: Option<(usize, usize)>,
+    city: Option<(usize, usize)>,
 ) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 || colors.len() != SHEET * SHEET {
         return Vec::new();
@@ -256,6 +260,9 @@ pub fn sheet_quads(
             mark_cell(&mut quads, cell, CLAY);
         }
     }
+    if let Some(cell) = city {
+        mark_cell(&mut quads, cell, CITY);
+    }
     let cx = grid_left + SHEET as f32 * SHEET_CELL * 0.5;
     let cy = grid_top - SHEET as f32 * SHEET_CELL * 0.5;
     quads.push(pixel(
@@ -308,6 +315,7 @@ pub fn sheet_quads(
         stairs_shown,
         shrine.is_some(),
         clay_shown,
+        city.is_some(),
     );
     crate::gui::draw_text(
         &mut quads,
@@ -323,8 +331,15 @@ pub fn sheet_quads(
 }
 
 /// Legend line for the open sheet / egui overlay.
-pub fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool, clay: bool) -> String {
-    let mut bits = Vec::with_capacity(7);
+pub fn map_note(
+    camp: bool,
+    mine: bool,
+    stairs: bool,
+    shrine: bool,
+    clay: bool,
+    city: bool,
+) -> String {
+    let mut bits = Vec::with_capacity(8);
     bits.push("you white");
     if camp {
         bits.push("camp orange");
@@ -340,6 +355,9 @@ pub fn map_note(camp: bool, mine: bool, stairs: bool, shrine: bool, clay: bool) 
     }
     if clay {
         bits.push("clay teal");
+    }
+    if city {
+        bits.push("city violet");
     }
     if !camp {
         bits.push("camp off page");
@@ -448,6 +466,7 @@ mod tests {
             None,
             Some(shrine),
             Some(clay),
+            None,
         );
         assert!(sheet.len() > SHEET * SHEET);
         assert_eq!(sheet[0].color, BACK);
@@ -460,11 +479,15 @@ mod tests {
         let mark = sheet.iter().find(|quad| quad.color == MARK).unwrap();
         let tick = sheet.iter().find(|quad| quad.color == FACING).unwrap();
         assert!(tick.max[0] > mark.max[0], "yaw 0 looks east");
-        assert!(sheet_quads(0.0, 600.0, &colors, 0.0, None, None, None, None, None).is_empty());
+        assert!(sheet_quads(
+            0.0, 600.0, &colors, 0.0, None, None, None, None, None, None
+        )
+        .is_empty());
         assert_eq!(sample_span_len(SHEET), SHEET * SHEET);
         assert_eq!(sample_span_len(OVERLAY), OVERLAY * OVERLAY);
-        assert!(map_note(true, false, false, true, false).contains("shrine green"));
-        assert!(map_note(false, false, false, false, true).contains("clay teal"));
+        assert!(map_note(true, false, false, true, false, false).contains("shrine green"));
+        assert!(map_note(false, false, false, false, true, false).contains("clay teal"));
+        assert!(map_note(false, false, false, false, false, true).contains("city violet"));
     }
 
     fn sample_span_len(span: usize) -> usize {

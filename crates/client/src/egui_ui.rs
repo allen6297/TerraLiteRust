@@ -131,6 +131,7 @@ pub struct MapView {
     pub stairs: Option<(usize, usize)>,
     pub shrine: Option<(usize, usize)>,
     pub clay: Option<(usize, usize)>,
+    pub city: Option<(usize, usize)>,
     pub note: String,
 }
 
@@ -2030,6 +2031,9 @@ fn draw_map_overlay(ui: &mut Ui, view: &MapView, icons: &mut HashMap<String, Tex
                                     if at != (view.span / 2, view.span / 2) {
                                         paint_dot(mark_at(at), rgb_u8(crate::map::CLAY_RGB), mark_r);
                                     }
+                                }
+                                if let Some(at) = view.city {
+                                    paint_dot(mark_at(at), rgb_u8(crate::map::CITY_RGB), mark_r);
                                 }
                                 let center = rect.center();
                                 paint_dot(center, rgb_u8(crate::map::MARK_RGB), cell_px * 0.32);

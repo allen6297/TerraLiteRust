@@ -511,6 +511,7 @@ mod tests {
             "assets/terralite/textures/sculk_catalyst.png",
             "assets/terralite/textures/sculk_shrieker.png",
             "assets/terralite/textures/echo_shard.png",
+            "assets/terralite/textures/recovery_compass.png",
             "assets/terralite/textures/decorated_pot.png",
             "assets/terralite/textures/copper_grate.png",
             "assets/terralite/textures/copper_door.png",

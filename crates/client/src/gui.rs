@@ -7989,6 +7989,7 @@ fn tab_of(id: &str) -> &'static str {
             | "sculk_catalyst"
             | "sculk_shrieker"
             | "echo_shard"
+            | "recovery_compass"
             | "button"
             | "cake"
             | "candle"

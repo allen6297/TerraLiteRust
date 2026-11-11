@@ -1461,6 +1461,10 @@ pub struct State {
     found_stronghold: bool,
     /// Once: walked up to the north village remnant.
     found_village: bool,
+    /// Once: walked into the ancient city remnant south of the marsh.
+    found_ancient_city: bool,
+    /// Last player death cell for a held recovery compass.
+    last_death: Option<[i32; 3]>,
     /// Once: walked into the underground dungeon under the mine.
     found_dungeon: bool,
     /// Once: walked into the abandoned mineshaft spur.
@@ -2841,6 +2845,8 @@ impl State {
             found_monument: false,
             found_stronghold: false,
             found_village: false,
+            found_ancient_city: false,
+            last_death: None,
             found_dungeon: false,
             found_mineshaft: false,
             found_fortress: false,
@@ -7106,6 +7112,12 @@ impl State {
             .is_some_and(|id| Pack::builtin().is_compass(id))
     }
 
+    fn holding_recovery_compass(&self) -> bool {
+        self.hotbar
+            .slot(self.hotbar.selected())
+            .is_some_and(|id| id == "recovery_compass")
+    }
+
     fn holding_clock(&self) -> bool {
         self.hotbar
             .slot(self.hotbar.selected())
@@ -7165,6 +7177,14 @@ impl State {
             rebuild_world::CLAY_BANK.0,
             rebuild_world::CLAY_BANK.1,
         );
+        let city = crate::map::cell_of(
+            eye[0],
+            eye[2],
+            zoom,
+            span,
+            rebuild_world::ANCIENT_CITY.0,
+            rebuild_world::ANCIENT_CITY.1,
+        );
         let half = (span / 2, span / 2);
         let stairs_shown = stairs.is_some_and(|cell| cell != half);
         let clay_shown = clay.is_some_and(|cell| cell != half);
@@ -7174,6 +7194,7 @@ impl State {
             stairs_shown,
             shrine.is_some(),
             clay_shown,
+            city.is_some(),
         );
         crate::egui_ui::MapView {
             colors,
@@ -7185,6 +7206,7 @@ impl State {
             stairs,
             shrine,
             clay,
+            city,
             note,
         }
     }
@@ -7875,6 +7897,18 @@ impl State {
             self.found_village = true;
             self.announce_structure("village", &["a village remnant"]);
         }
+        if !self.found_ancient_city
+            && near(
+                rebuild_world::ANCIENT_CITY_MOUTH.0,
+                rebuild_world::ANCIENT_CITY_MOUTH.1,
+            )
+        {
+            self.found_ancient_city = true;
+            self.announce_structure(
+                "ancient_city",
+                &["an ancient city", "echo shards — craft a recovery compass"],
+            );
+        }
         if !self.found_dungeon
             && near(rebuild_world::DUNGEON.0, rebuild_world::DUNGEON.1)
         {
@@ -8507,7 +8541,8 @@ impl State {
             .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_mineshaft(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_fortress(has_record, hit.block[0], hit.block[2], self.omen))
-            .or_else(|| fresh_bastion(has_record, hit.block[0], hit.block[2], self.omen));
+            .or_else(|| fresh_bastion(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_ancient_city(has_record, hit.block[0], hit.block[2], self.omen));
         if let Some(mut find) = fresh {
             let bar = hotbar_slots(&self.hotbar);
             let view = client_view(&bar, &self.hotbar, self.camera.eye, self.clock);
@@ -10578,6 +10613,11 @@ impl State {
                 self.statistics.note_death();
             }
             self.dead = true;
+            self.last_death = Some([
+                self.camera.eye.x.floor() as i32,
+                (self.camera.eye.y - body::EYE_HEIGHT).floor() as i32,
+                self.camera.eye.z.floor() as i32,
+            ]);
             self.clear_motion();
             self.menu.close_menu();
             self.gui.close();
@@ -24454,6 +24494,77 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    pub fn arm_ancient_city_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.gui.close();
+        self.map_open = false;
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (cx, cz) = rebuild_world::ANCIENT_CITY;
+        let chunk_x = cx.div_euclid(16);
+        let chunk_z = cz.div_euclid(16);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(chunk_x, chunk_z));
+        // Neighbor chunks so the approach reads as a place.
+        for &(dx, dz) in &[(-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)] {
+            let _ = self
+                .world
+                .replace_chunk(rebuild_world::generate_chunk(chunk_x + dx, chunk_z + dz));
+        }
+        self.clock.set_time_of_day(0.08);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (mx, mz) = rebuild_world::ANCIENT_CITY_MOUTH;
+        let floor = i32::from(rebuild_world::ANCIENT_CITY_FLOOR);
+        // Stand north of the mouth looking south into the sculk hall.
+        let focus = glam::Vec3::new(mx as f32 + 0.5, floor as f32 + 1.6, mz as f32 + 3.5);
+        let eye = glam::Vec3::new(
+            mx as f32 + 0.35,
+            floor as f32 + 2.1 + body::EYE_HEIGHT,
+            mz as f32 - 5.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("recovery_compass");
+        let _ = self.hotbar.collect(crate::warden::ECHO_SHARD);
+        let _ = self.hotbar.collect(crate::warden::ECHO_SHARD);
+        let _ = self.hotbar.collect("compass");
+        self.hotbar_dirty = true;
+        self.last_death = Some([mx, floor + 1, mz + 3]);
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.found_ancient_city = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("an ancient city");
+        self.gui.push_chat("echo shards — craft a recovery compass");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_mud_bricks_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -36902,7 +37013,20 @@ impl State {
         }
         if self.holding_compass() && !self.menu.is_open() {
             let (yaw, _) = self.camera.yaw_pitch();
-            let mark = if let Some(at) = self.lodestone {
+            let mark = if self.holding_recovery_compass() {
+                if let Some(at) = self.last_death {
+                    crate::camera::compass_mark_at(
+                        self.camera.eye.x,
+                        self.camera.eye.z,
+                        yaw,
+                        [at[0] as f32 + 0.5, at[2] as f32 + 0.5],
+                    )
+                } else {
+                    // No death yet — spin so the dial still reads as recovery.
+                    let t = self.clock.time_of_day() * 48.0;
+                    [t.sin() * 10.0, t.cos() * 10.0]
+                }
+            } else if let Some(at) = self.lodestone {
                 crate::camera::compass_mark_at(
                     self.camera.eye.x,
                     self.camera.eye.z,
@@ -37981,6 +38105,11 @@ fn bastion_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::NETHER_BASTION_CHEST
 }
 
+/// The ancient city remnant hall chest.
+fn ancient_city_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::ANCIENT_CITY_CHEST
+}
+
 /// Dawn/dusk chat tips only while the world is live (not menu / death).
 fn sky_edge_tip_open(playing: bool, menu_open: bool, dead: bool) -> bool {
     playing && !menu_open && !dead
@@ -38752,6 +38881,28 @@ fn fresh_bastion(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String>
         return None;
     }
     bastion_loot(x, z, omen)
+}
+
+/// One drop from the ancient city chest, read from the data pack.
+fn ancient_city_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !ancient_city_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_ancient_city_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the ancient city remnant chest.
+fn fresh_ancient_city(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    ancient_city_loot(x, z, omen)
 }
 
 /// One drop from this chest, read from the data pack. The same cell always
