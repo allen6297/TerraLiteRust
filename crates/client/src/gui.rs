@@ -2740,6 +2740,23 @@ impl Gui {
         self.chat_open
     }
 
+    /// Lines for the egui chat plate (log + optional draft). Newest last.
+    pub fn chat_overlay_lines(&self) -> Vec<(String, bool)> {
+        let mut lines: Vec<(String, bool)> = self
+            .chat_log
+            .iter()
+            .map(|(line, _)| (line.clone(), false))
+            .collect();
+        if self.chat_open {
+            if self.chat_draft.is_empty() {
+                lines.push(("> say".to_string(), true));
+            } else {
+                lines.push((format!("> {}", self.chat_draft), true));
+            }
+        }
+        lines
+    }
+
     /// Close chat and return the letters that were typed.
     pub fn take_chat(&mut self) -> Option<String> {
         if !self.chat_open {
@@ -6014,22 +6031,20 @@ pub fn feel_quads(
 ) -> Vec<Quad> {
     let (width, height) = gui_space(width, height);
     if menu.is_open() {
-        // egui draws pause / settings / title; keep chat on the quad path.
-        return gui.chat_quads(width, height);
+        // egui draws pause / settings / title / chat plate.
+        return Vec::new();
     }
     if dead {
-        return death_quads(width, height);
+        // egui draws the death panel; keep only the red veil under it.
+        return death_veil_quads(width, height);
     }
     let mut quads = hotbar::bar_lifted(width, height, hotbar, punch.max(0.0) * 10.0);
     // Creative + player inventory are egui; stations and RoseGold GUIAPI stay here.
     if !gui.bag_open() && !gui.player_inv_open() {
         quads.extend(gui.paint(width, height, bag));
     }
-    // Chat shares the bottom-left with health/hunger. Hide it under egui menus so
-    // a leftover line does not read as a HUD placeholder above the status stack.
-    if !gui.bag_open() && !gui.player_inv_open() {
-        quads.extend(gui.chat_quads(width, height));
-    }
+    // Chat plate moved to egui (`draw_chat_plate`) so it samples Whimscape chrome.
+    // Keep it off the quad HUD under inventories (same as before).
     quads.extend(health_quads(width, height, hearts));
     quads.extend(hunger_quads(width, height, food));
     quads.extend(armor_quads(width, height, armor));
@@ -6122,12 +6137,12 @@ pub fn xp_bar_quads(width: f32, height: f32, level: i32, fraction: f32) -> Vec<Q
     quads
 }
 
-/// A dark veil, the words "You died", and a Respawn button. The button's hit is `700`.
-pub fn death_quads(width: f32, height: f32) -> Vec<Quad> {
+/// Red death veil only — panel / buttons live on egui (`draw_death`).
+pub fn death_veil_quads(width: f32, height: f32) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
-    let mut quads = vec![pixel_quad(
+    vec![pixel_quad(
         width,
         height,
         0.0,
@@ -6135,7 +6150,15 @@ pub fn death_quads(width: f32, height: f32) -> Vec<Quad> {
         width,
         height,
         [0.08, 0.01, 0.01],
-    )];
+    )]
+}
+
+/// Legacy death plate (tests). Prefer [`death_veil_quads`] + egui in play.
+pub fn death_quads(width: f32, height: f32) -> Vec<Quad> {
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let mut quads = death_veil_quads(width, height);
     let panel_w = 300.0;
     let panel_h = 150.0;
     let left = (width - panel_w) * 0.5;

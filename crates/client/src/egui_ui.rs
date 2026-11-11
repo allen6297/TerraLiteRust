@@ -310,8 +310,13 @@ impl EguiHost {
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
+            // Chat plate sits above the status stack during play / pause / death.
+            // Hide under creative + player inventory (same rule as the old quads).
+            if !gui.bag_open() && !gui.player_inv_open() {
+                draw_chat_plate(ui, gui, icons);
+            }
             if let Some(toast) = toast_view.as_ref() {
-                draw_advancement_toast(ui, toast);
+                draw_advancement_toast(ui, toast, icons);
             }
         });
         self.pending = pending;
@@ -1515,14 +1520,16 @@ fn draw_statistics_screen(
                         ui.horizontal(|ui| {
                             title_label(ui, "STATISTICS");
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let back = egui::Button::new(
-                                    RichText::new("Back").size(14.0).color(INK),
+                                if chrome_button(
+                                    ui,
+                                    icons,
+                                    "Back",
+                                    false,
+                                    Vec2::new(88.0, 30.0),
+                                    14.0,
                                 )
-                                .fill(BUTTON)
-                                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                                .corner_radius(CornerRadius::same(4))
-                                .min_size(Vec2::new(88.0, 30.0));
-                                if ui.add(back).clicked() {
+                                .clicked()
+                                {
                                     if let Some(index) =
                                         menu.menu_rows().iter().position(|label| label == "back")
                                     {
@@ -1539,30 +1546,26 @@ fn draw_statistics_screen(
                         );
                         ui.add_space(10.0);
                         for (index, row) in rows.iter().enumerate() {
-                            Frame::new()
-                                .fill(ROW)
-                                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                                .corner_radius(CornerRadius::same(5))
-                                .inner_margin(Margin::symmetric(12, 8))
-                                .show(ui, |ui| {
-                                    ui.set_min_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(row.label).size(14.0).color(MUTED),
-                                        );
-                                        ui.with_layout(
-                                            Layout::right_to_left(Align::Center),
-                                            |ui| {
-                                                ui.label(
-                                                    RichText::new(&row.value)
-                                                        .size(16.0)
-                                                        .color(INK)
-                                                        .strong(),
-                                                );
-                                            },
-                                        );
-                                    });
+                            let row_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                            chrome_well(ui, row_tex, ROW, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(row.label).size(14.0).color(MUTED),
+                                    );
+                                    ui.with_layout(
+                                        Layout::right_to_left(Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(&row.value)
+                                                    .size(16.0)
+                                                    .color(INK)
+                                                    .strong(),
+                                            );
+                                        },
+                                    );
                                 });
+                            });
                             if index + 1 != rows.len() {
                                 ui.add_space(5.0);
                             }
@@ -1596,13 +1599,16 @@ fn draw_advancements_screen(
                     ui.horizontal(|ui| {
                         title_label(ui, "ADVANCEMENTS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let back =
-                                egui::Button::new(RichText::new("Back").size(14.0).color(INK))
-                                    .fill(BUTTON)
-                                    .stroke(Stroke::new(1.0, SLOT_EDGE))
-                                    .corner_radius(CornerRadius::same(4))
-                                    .min_size(Vec2::new(88.0, 30.0));
-                            if ui.add(back).clicked() {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                "Back",
+                                false,
+                                Vec2::new(88.0, 30.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
                                 if let Some(index) =
                                     menu.menu_rows().iter().position(|label| label == "back")
                                 {
@@ -1624,65 +1630,49 @@ fn draw_advancements_screen(
                         .show(ui, |ui| {
                             ui.set_width(panel_w - 36.0);
                             for row in rows {
-                                Frame::new()
-                                    .fill(if row.unlocked { ROW } else { SLOT_WELL })
-                                    .stroke(Stroke::new(
-                                        1.0,
-                                        if row.unlocked { SELECT } else { SLOT_EDGE },
-                                    ))
-                                    .corner_radius(CornerRadius::same(5))
-                                    .inner_margin(Margin::symmetric(12, 10))
-                                    .show(ui, |ui| {
-                                        ui.horizontal(|ui| {
-                                            let badge = if row.unlocked {
-                                                RichText::new("DONE")
-                                                    .size(11.0)
-                                                    .color(Color32::from_rgb(20, 18, 12))
+                                let fill = if row.unlocked { ROW } else { SLOT_WELL };
+                                let row_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+                                chrome_well(ui, row_tex, fill, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let badge = if row.unlocked { "DONE" } else { "LOCKED" };
+                                        let _ = chrome_button(
+                                            ui,
+                                            icons,
+                                            badge,
+                                            row.unlocked,
+                                            Vec2::new(64.0, 22.0),
+                                            11.0,
+                                        );
+                                        ui.add_space(8.0);
+                                        ui.vertical(|ui| {
+                                            let title = if row.unlocked {
+                                                RichText::new(row.title)
+                                                    .size(15.0)
+                                                    .color(INK)
                                                     .strong()
                                             } else {
-                                                RichText::new("LOCKED")
-                                                    .size(11.0)
+                                                RichText::new("???")
+                                                    .size(15.0)
                                                     .color(MUTED)
                                                     .strong()
                                             };
-                                            let fill = if row.unlocked { SELECT } else { BUTTON };
-                                            Frame::new()
-                                                .fill(fill)
-                                                .corner_radius(CornerRadius::same(3))
-                                                .inner_margin(Margin::symmetric(6, 3))
-                                                .show(ui, |ui| {
-                                                    ui.label(badge);
-                                                });
-                                            ui.add_space(8.0);
-                                            ui.vertical(|ui| {
-                                                let title = if row.unlocked {
-                                                    RichText::new(row.title)
-                                                        .size(15.0)
-                                                        .color(INK)
-                                                        .strong()
+                                            ui.label(title);
+                                            ui.label(
+                                                RichText::new(if row.unlocked {
+                                                    row.subtitle
                                                 } else {
-                                                    RichText::new("???")
-                                                        .size(15.0)
-                                                        .color(MUTED)
-                                                        .strong()
-                                                };
-                                                ui.label(title);
-                                                ui.label(
-                                                    RichText::new(if row.unlocked {
-                                                        row.subtitle
-                                                    } else {
-                                                        "Keep exploring"
-                                                    })
-                                                    .size(12.0)
-                                                    .color(if row.unlocked {
-                                                        DETAIL
-                                                    } else {
-                                                        MUTED
-                                                    }),
-                                                );
-                                            });
+                                                    "Keep exploring"
+                                                })
+                                                .size(12.0)
+                                                .color(if row.unlocked {
+                                                    DETAIL
+                                                } else {
+                                                    MUTED
+                                                }),
+                                            );
                                         });
                                     });
+                                });
                                 ui.add_space(6.0);
                             }
                         });
@@ -1692,7 +1682,11 @@ fn draw_advancements_screen(
     action
 }
 
-fn draw_advancement_toast(ui: &mut Ui, toast: &ToastView) {
+fn draw_advancement_toast(
+    ui: &mut Ui,
+    toast: &ToastView,
+    icons: &mut HashMap<String, TextureHandle>,
+) {
     let alpha = toast.alpha.clamp(0.0, 1.0);
     if alpha <= 0.01 {
         return;
@@ -1705,18 +1699,49 @@ fn draw_advancement_toast(ui: &mut Ui, toast: &ToastView) {
             ((c.a() as f32) * alpha).round() as u8,
         )
     };
+    let tip_bg = chrome_texture(ui.ctx(), icons, CHROME_TIP_BG);
+    let tip_frame = chrome_texture(ui.ctx(), icons, CHROME_TIP_FRAME);
+    let panel = tip_bg.or_else(|| chrome_texture(ui.ctx(), icons, CHROME_PANEL));
     egui::Area::new(egui::Id::new("advancement_toast"))
         .anchor(Align2::RIGHT_TOP, [toast.slide - 18.0, 18.0])
         .interactable(false)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
-            Frame::new()
-                .fill(mul(WELL))
-                .stroke(Stroke::new(1.5, mul(SELECT)))
+            let fill = if panel.is_some() {
+                mul(Color32::from_rgba_unmultiplied(12, 11, 16, 240))
+            } else {
+                mul(WELL)
+            };
+            let stroke = if tip_frame.is_some() {
+                Stroke::new(1.5, mul(Color32::from_rgb(72, 58, 40)))
+            } else {
+                Stroke::new(1.5, mul(SELECT))
+            };
+            let out = Frame::new()
+                .fill(fill)
+                .stroke(stroke)
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::symmetric(14, 10))
                 .show(ui, |ui| {
                     ui.set_min_width(250.0);
+                    if let Some(tex) = panel {
+                        let r = ui.max_rect();
+                        let band = egui::Rect::from_min_size(
+                            r.min,
+                            Vec2::new(r.width().min(280.0), r.height().min(96.0)),
+                        );
+                        ui.painter().image(
+                            tex,
+                            band,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            Color32::from_rgba_unmultiplied(
+                                255,
+                                255,
+                                255,
+                                (70.0 * alpha).round() as u8,
+                            ),
+                        );
+                    }
                     ui.label(
                         RichText::new(&toast.title)
                             .size(16.0)
@@ -1730,6 +1755,14 @@ fn draw_advancement_toast(ui: &mut Ui, toast: &ToastView) {
                             .color(mul(MUTED)),
                     );
                 });
+            if let Some(tex) = tip_frame {
+                ui.painter().image(
+                    tex,
+                    out.response.rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::from_rgba_unmultiplied(255, 255, 255, (255.0 * alpha).round() as u8),
+                );
+            }
         });
 }
 
@@ -1741,18 +1774,15 @@ fn draw_death(ui: &mut Ui, view: DeathView, icons: &mut HashMap<String, TextureH
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.18);
                 show_panel(ui, 380.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    Frame::new()
-                        .fill(TITLE_PLATE)
-                        .corner_radius(CornerRadius::same(4))
-                        .inner_margin(Margin::symmetric(10, 6))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("You Died")
-                                    .font(FontId::proportional(28.0))
-                                    .color(DEATH_INK)
-                                    .strong(),
-                            );
-                        });
+                    let title_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+                    chrome_well(ui, title_tex, TITLE_PLATE, |ui| {
+                        ui.label(
+                            RichText::new("You Died")
+                                .font(FontId::proportional(28.0))
+                                .color(DEATH_INK)
+                                .strong(),
+                        );
+                    });
                     ui.add_space(10.0);
                     ui.label(
                         RichText::new(format!("at {}, {}, {}", view.x, view.y, view.z))
@@ -2831,32 +2861,23 @@ fn draw_trade(
         .show_inside(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
-                Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LIP))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(Margin::same(16))
-                    .show(ui, |ui| {
-                        ui.set_min_width(420.0);
-                        ui.label(
-                            RichText::new("Village trader")
-                                .size(20.0)
-                                .color(INK)
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("Emeralds for stock goods. Esc closes.")
-                                .size(13.0)
-                                .color(MUTED),
-                        );
-                        ui.add_space(12.0);
-                        let mut stock = gui.trade_stock();
-                        for (index, offer) in crate::mobs::TRADER_OFFERS.iter().enumerate() {
-                            let left = stock[index];
-                            let can = left > 0
-                                && hotbar.holds(offer.cost, offer.cost_n)
-                                && (hotbar.room_for(offer.give) || bag.room_for(offer.give));
+                show_panel(ui, 420.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "VILLAGE TRADER");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Emeralds for stock goods. Esc closes.")
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(12.0);
+                    let mut stock = gui.trade_stock();
+                    for (index, offer) in crate::mobs::TRADER_OFFERS.iter().enumerate() {
+                        let left = stock[index];
+                        let can = left > 0
+                            && hotbar.holds(offer.cost, offer.cost_n)
+                            && (hotbar.room_for(offer.give) || bag.room_for(offer.give));
+                        let row_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                        chrome_well(ui, row_tex, ROW, |ui| {
                             ui.horizontal(|ui| {
                                 let label = format!(
                                     "{}× {}  →  {}× {}   ({} left)",
@@ -2868,45 +2889,100 @@ fn draw_trade(
                                 );
                                 ui.label(RichText::new(label).size(14.0).color(INK));
                                 ui.add_space(8.0);
-                                let btn = egui::Button::new(
-                                    RichText::new(if left == 0 { "Sold out" } else { "Trade" })
-                                        .size(14.0)
-                                        .color(INK),
-                                )
-                                .fill(if can { SELECT_SOFT } else { BUTTON })
-                                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                                .corner_radius(CornerRadius::same(3))
-                                .min_size(Vec2::new(88.0, 28.0));
-                                if ui.add_enabled(can, btn).clicked() {
-                                    let mut paid = true;
-                                    for _ in 0..offer.cost_n {
-                                        if !hotbar.consume_one(offer.cost) {
-                                            paid = false;
-                                            break;
-                                        }
-                                    }
-                                    if paid {
-                                        for _ in 0..offer.give_n {
-                                            if !hotbar.collect(offer.give) {
-                                                bag.collect(offer.give);
+                                let caption = if left == 0 { "Sold out" } else { "Trade" };
+                                ui.add_enabled_ui(can && left > 0, |ui| {
+                                    if chrome_button(
+                                        ui,
+                                        icons,
+                                        caption,
+                                        can,
+                                        Vec2::new(88.0, 28.0),
+                                        14.0,
+                                    )
+                                    .clicked()
+                                    {
+                                        let mut paid = true;
+                                        for _ in 0..offer.cost_n {
+                                            if !hotbar.consume_one(offer.cost) {
+                                                paid = false;
+                                                break;
                                             }
                                         }
-                                        stock[index] = left.saturating_sub(1);
-                                        touched = true;
+                                        if paid {
+                                            for _ in 0..offer.give_n {
+                                                if !hotbar.collect(offer.give) {
+                                                    bag.collect(offer.give);
+                                                }
+                                            }
+                                            stock[index] = left.saturating_sub(1);
+                                            touched = true;
+                                        }
                                     }
-                                }
+                                });
                             });
-                            ui.add_space(6.0);
-                        }
-                        gui.set_trade_stock(stock);
-                        ui.add_space(8.0);
-                        if close_button(ui, icons, "Close (Esc)").clicked() {
-                            gui.close_trade();
-                        }
-                    });
+                        });
+                        ui.add_space(6.0);
+                    }
+                    gui.set_trade_stock(stock);
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        gui.close_trade();
+                    }
+                });
             });
         });
     touched
+}
+
+/// Bottom-left chat log plate — samples Whimscape panel chrome.
+fn draw_chat_plate(
+    ui: &mut Ui,
+    gui: &Gui,
+    icons: &mut HashMap<String, TextureHandle>,
+) {
+    let lines = gui.chat_overlay_lines();
+    if lines.is_empty() {
+        return;
+    }
+    let panel_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+    let panel_w = if gui.chat_open() { 420.0 } else { 340.0 };
+    // Match the old quad stack: above hunger/health/armor at the bottom-left.
+    egui::Area::new(egui::Id::new("chat_log_plate"))
+        .anchor(Align2::LEFT_BOTTOM, [16.0, -110.0])
+        .order(egui::Order::Middle)
+        .interactable(gui.chat_open())
+        .show(ui.ctx(), |ui| {
+            let fill = if panel_tex.is_some() {
+                Color32::from_rgba_unmultiplied(8, 9, 12, 220)
+            } else {
+                PANEL
+            };
+            Frame::new()
+                .fill(fill)
+                .stroke(Stroke::new(1.0, SLOT_EDGE))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    if let Some(tex) = panel_tex {
+                        let rect = ui.max_rect();
+                        ui.painter().image(
+                            tex,
+                            rect,
+                            egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            ),
+                            Color32::WHITE,
+                        );
+                    }
+                    ui.set_min_width(panel_w);
+                    ui.set_max_width(panel_w);
+                    for (line, draft) in &lines {
+                        let color = if *draft { SELECT } else { INK };
+                        ui.label(RichText::new(line).size(14.0).color(color));
+                    }
+                });
+        });
 }
 
 fn draw_player_inventory(

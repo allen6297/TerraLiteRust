@@ -21794,6 +21794,9 @@ impl State {
         self.found_clay = true;
         self.found_flight = true;
         self.gui.age_chat(60.0);
+        // Keep a couple chat lines so the Whimscape chat plate shows in overlay shots.
+        self.gui.push_chat("host: overlays on whimscape");
+        self.gui.push_chat("toast and chat plate");
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("crafting_table");
         self.hotbar_dirty = true;
