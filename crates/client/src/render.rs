@@ -1348,6 +1348,10 @@ pub struct State {
     copper_oxide_wait: f32,
     /// One tip when copper first ages / waxes / scrapes this session.
     copper_told: bool,
+    /// Seconds until the next nearby amethyst growth roll.
+    amethyst_grow_wait: f32,
+    /// One tip when amethyst first grows this session.
+    amethyst_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2736,6 +2740,8 @@ impl State {
             redstone_pulse: Vec::new(),
             copper_oxide_wait: crate::copper::OXIDE_PERIOD,
             copper_told: false,
+            amethyst_grow_wait: crate::amethyst::GROW_PERIOD,
+            amethyst_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9544,6 +9550,38 @@ impl State {
         if !self.copper_told {
             self.copper_told = true;
             self.gui.push_chat("oxidize");
+        }
+    }
+
+
+    fn tick_amethyst_grow(&mut self, dt: f32) {
+        if self.told_disconnect {
+            return;
+        }
+        self.amethyst_grow_wait -= dt;
+        if self.amethyst_grow_wait > 0.0 {
+            return;
+        }
+        self.amethyst_grow_wait = crate::amethyst::GROW_PERIOD;
+        let focus = [
+            self.camera.eye.x.floor() as i32,
+            self.camera.eye.y.floor() as i32,
+            self.camera.eye.z.floor() as i32,
+        ];
+        let Some((at, next)) =
+            crate::amethyst::plan_grow(&self.world, focus, crate::amethyst::GROW_RADIUS)
+        else {
+            return;
+        };
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: next,
+        }]);
+        if !self.amethyst_told {
+            self.amethyst_told = true;
+            self.gui.push_chat("amethyst");
         }
     }
 
@@ -23081,6 +23119,153 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+
+    pub fn arm_amethyst_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.28);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = (ground - 3).max(2);
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        // Cave stamp: hollow room with amethyst shell.
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                for dy in 0..=4 {
+                    let yy = floor + dy;
+                    // Leave the near face open so the camera can see the geode.
+                    let wall =
+                        x == cx - 3 || x == cx + 4 || z == cz + 3 || dy == 0 || dy == 4;
+                    changes.push(CellChange {
+                        x,
+                        y: yy,
+                        z,
+                        block: if wall {
+                            if (x + z + dy) % 3 == 0 {
+                                Block::new("amethyst_block", 0)
+                            } else {
+                                Block::new("stone", 0)
+                            }
+                        } else {
+                            Block::AIR
+                        },
+                    });
+                }
+            }
+        }
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("budding_amethyst", 0),
+            },
+            CellChange {
+                x: cx,
+                y: y + 1,
+                z: cz,
+                block: crate::amethyst::make_bud(0, 0),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: crate::amethyst::make_bud(1, 0),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: crate::amethyst::make_bud(2, 0),
+            },
+            CellChange {
+                x: cx - 1,
+                y,
+                z: cz + 1,
+                block: Block::new("budding_amethyst", 0),
+            },
+            CellChange {
+                x: cx - 1,
+                y: y + 1,
+                z: cz + 1,
+                block: crate::amethyst::make_bud(2, 0),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz - 1,
+                block: Block::new("tinted_glass", 0),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 3)..=(cx + 4) {
+            for z in (cz - 3)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.0, y as f32 + 0.7, cz as f32 + 0.4);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.0,
+            y as f32 + 1.35 + body::EYE_HEIGHT,
+            cz as f32 - 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("budding_amethyst");
+        let _ = self.hotbar.collect("amethyst_shard");
+        let _ = self.hotbar.collect("amethyst_shard");
+        let _ = self.hotbar.give_stack("amethyst_cluster");
+        let _ = self.hotbar.collect("tinted_glass");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.amethyst_told = true;
+        self.amethyst_grow_wait = crate::amethyst::GROW_PERIOD;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("amethyst");
+        self.gui.push_chat("grow");
+        self.gui.push_chat("shards");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Dirt update face → observer (pulsing) → dust → lamp, then quit.
     pub fn arm_observer_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -31977,6 +32162,7 @@ impl State {
         self.tick_torch_burnout(dt);
         self.tick_redstone_delay(dt);
         self.tick_copper_oxide(dt);
+        self.tick_amethyst_grow(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

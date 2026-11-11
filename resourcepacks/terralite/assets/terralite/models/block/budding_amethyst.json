@@ -1,0 +1,25 @@
+{
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/budding_amethyst.png",
+  "light": {
+    "color": [
+      0.72,
+      0.42,
+      0.95
+    ],
+    "level": 1
+  }
+}

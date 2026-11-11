@@ -1,0 +1,49 @@
+{
+  "elements": [
+    {
+      "from": [
+        4,
+        0,
+        4
+      ],
+      "to": [
+        12,
+        10,
+        12
+      ]
+    },
+    {
+      "from": [
+        5,
+        10,
+        5
+      ],
+      "to": [
+        11,
+        14,
+        11
+      ]
+    },
+    {
+      "from": [
+        7,
+        14,
+        7
+      ],
+      "to": [
+        9,
+        16,
+        9
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/amethyst_cluster.png",
+  "light": {
+    "color": [
+      0.82,
+      0.55,
+      1
+    ],
+    "level": 5
+  }
+}

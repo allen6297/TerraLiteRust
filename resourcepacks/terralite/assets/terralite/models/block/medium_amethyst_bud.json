@@ -1,0 +1,37 @@
+{
+  "elements": [
+    {
+      "from": [
+        5,
+        0,
+        5
+      ],
+      "to": [
+        11,
+        8,
+        11
+      ]
+    },
+    {
+      "from": [
+        6,
+        8,
+        6
+      ],
+      "to": [
+        10,
+        12,
+        10
+      ]
+    }
+  ],
+  "texture": "assets/terralite/textures/medium_amethyst_bud.png",
+  "light": {
+    "color": [
+      0.78,
+      0.5,
+      1
+    ],
+    "level": 2
+  }
+}
