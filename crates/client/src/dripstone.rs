@@ -145,6 +145,16 @@ fn scan_column(
         }
         return;
     }
+    // Watered dripstone over mud packs it before tips grow (MC-like).
+    if let Some(floor) = floor_y {
+        if crate::mud::is_mud(world.block_at(sx, floor, sz).id) {
+            grows.push(DripAct::Place(
+                [sx, floor, sz],
+                crate::mud::packed_mud_block(),
+            ));
+            return;
+        }
+    }
     // Grow at most one cell this drip.
     if let Some(tip) = hanging_tip {
         let below = tip - 1;
@@ -227,5 +237,19 @@ mod tests {
         assert_eq!(spike_bonus(0.2), 0);
         assert_eq!(spike_bonus(1.0), 2);
         assert_eq!(spike_bonus(5.0), 3);
+    }
+
+    #[test]
+    fn drip_packs_mud_floor() {
+        let cluster = world(vec![
+            (2, 5, 2, Block::new("water", 0)),
+            (2, 4, 2, Block::new("dripstone_block", 0)),
+            (2, 1, 2, crate::mud::mud_block()),
+        ]);
+        let act = plan_drip(&cluster, [2, 4, 2], 6).unwrap();
+        assert_eq!(
+            act,
+            DripAct::Place([2, 1, 2], crate::mud::packed_mud_block())
+        );
     }
 }

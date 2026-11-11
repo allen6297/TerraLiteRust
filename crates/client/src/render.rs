@@ -1372,6 +1372,8 @@ pub struct State {
     powder_snow_left: f32,
     /// One tip when powder snow first freezes or boots walk this session.
     powder_snow_told: bool,
+    /// One tip when mud is bottled / packed / bricked this session.
+    mud_told: bool,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2772,6 +2774,7 @@ impl State {
             glow_berries_told: false,
             powder_snow_left: 0.0,
             powder_snow_told: false,
+            mud_told: false,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9458,6 +9461,44 @@ impl State {
     }
 
 
+
+    /// Pour a water bottle on dirt / grass to make mud.
+    fn try_mud_bottle(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !crate::mud::is_water_bottle(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return true;
+        };
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let Some(at) = crate::mud::plan_bottle(&self.world, hit.block) else {
+            self.gui.push_chat("need dirt");
+            return true;
+        };
+        let slot = self.hotbar.selected();
+        self.hotbar.consume_at(slot);
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: crate::mud::mud_block(),
+        }]);
+        let mote = [at[0] as f32 + 0.5, at[1] as f32 + 1.05, at[2] as f32 + 0.5];
+        self.drops.puff(mote, [0.42, 0.32, 0.24]);
+        self.rebuild_drops();
+        self.hotbar_dirty = true;
+        self.gui.push_chat("mud");
+        if !self.mud_told {
+            self.mud_told = true;
+        }
+        true
+    }
+
     fn try_wax_copper(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -9637,13 +9678,20 @@ impl State {
         };
         match act {
             crate::dripstone::DripAct::Place(at, block) => {
+                let packed = crate::mud::is_packed_mud(block.id);
                 self.send_places_batch(&[CellChange {
                     x: at[0],
                     y: at[1],
                     z: at[2],
                     block,
                 }]);
-                if !self.dripstone_told {
+                if packed {
+                    self.gui.push_chat("packed");
+                    if !self.mud_told {
+                        self.mud_told = true;
+                        self.gui.push_chat("mud");
+                    }
+                } else if !self.dripstone_told {
                     self.dripstone_told = true;
                     self.gui.push_chat("drip");
                 }
@@ -14426,6 +14474,7 @@ impl State {
             || self.try_scrape_copper()
             || self.try_scaffold_place()
             || self.try_pick_glow_berries()
+            || self.try_mud_bottle()
         {
             return;
         }
@@ -23949,6 +23998,152 @@ impl State {
 
 
 
+
+
+    pub fn arm_mud_bricks_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.gui.close();
+        self.map_open = false;
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.4);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = ground + 1;
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 3)..=(cx + 5) {
+            for z in (cz - 2)..=(cz + 3) {
+                changes.push(CellChange {
+                    x,
+                    y: floor,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                for dy in 1..=5 {
+                    changes.push(CellChange {
+                        x,
+                        y: floor + dy,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Progression: dirt | mud | packed | bricks wall
+        for &(dx, id) in &[
+            (-1, "dirt"),
+            (0, crate::mud::MUD),
+            (1, crate::mud::PACKED_MUD),
+            (2, crate::mud::MUD_BRICKS),
+            (3, crate::mud::MUD_BRICKS),
+        ] {
+            changes.push(CellChange {
+                x: cx + dx,
+                y,
+                z: cz,
+                block: Block::new(id, 0),
+            });
+            if id == crate::mud::MUD_BRICKS {
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: y + 1,
+                    z: cz,
+                    block: Block::new(id, 0),
+                });
+            }
+        }
+        // Drip pack demo: water → dripstone over mud
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx + 4,
+                y: y + 3,
+                z: cz,
+                block: Block::new("water", 0),
+            },
+            CellChange {
+                x: cx + 4,
+                y: y + 2,
+                z: cz,
+                block: Block::new("dripstone_block", 0),
+            },
+            CellChange {
+                x: cx + 4,
+                y: y + 1,
+                z: cz,
+                block: crate::dripstone::make_pointed(true),
+            },
+            CellChange {
+                x: cx + 4,
+                y,
+                z: cz,
+                block: crate::mud::mud_block(),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 3)..=(cx + 5) {
+            for z in (cz - 2)..=(cz + 3) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.5, y as f32 + 1.0, cz as f32 + 0.4);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.2,
+            y as f32 + 1.3 + body::EYE_HEIGHT,
+            cz as f32 - 4.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack(crate::mud::MUD_BRICKS);
+        let _ = self.hotbar.give_stack(crate::mud::PACKED_MUD);
+        let _ = self.hotbar.give_stack(crate::mud::MUD);
+        let _ = self.hotbar.collect(crate::mud::WATER_BOTTLE);
+        let _ = self.hotbar.collect("wheat");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.mud_told = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("mud");
+        self.gui.push_chat("bricks");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
 
     pub fn arm_powder_snow_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
