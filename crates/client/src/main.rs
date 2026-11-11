@@ -165,6 +165,8 @@ struct Args {
     shot_blast: Option<std::path::PathBuf>,
     /// Shrine furnace clay→bricks, then quit.
     shot_furnace: Option<std::path::PathBuf>,
+    /// Crafting table 3×3 Whimscape panel, then quit.
+    shot_crafting_table: Option<std::path::PathBuf>,
     /// Marsh clay bank, then quit.
     shot_clay: Option<std::path::PathBuf>,
     /// Decorated pot craft at shrine table, then quit.
@@ -571,6 +573,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_camp_smoker: args.shot_camp_smoker,
         shot_blast: args.shot_blast,
         shot_furnace: args.shot_furnace,
+        shot_crafting_table: args.shot_crafting_table,
         shot_clay: args.shot_clay,
         shot_pot: args.shot_pot,
         shot_compound: args.shot_compound,
@@ -758,6 +761,8 @@ struct App {
     shot_camp_smoker: Option<std::path::PathBuf>,
     shot_blast: Option<std::path::PathBuf>,
     shot_furnace: Option<std::path::PathBuf>,
+    /// Crafting table 3×3 Whimscape panel, then quit.
+    shot_crafting_table: Option<std::path::PathBuf>,
     shot_clay: Option<std::path::PathBuf>,
     shot_pot: Option<std::path::PathBuf>,
     shot_compound: Option<std::path::PathBuf>,
@@ -1013,6 +1018,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_furnace.take() {
                     state.arm_furnace_shot(path);
+                }
+                if let Some(path) = self.shot_crafting_table.take() {
+                    state.arm_crafting_table_shot(path);
                 }
                 if let Some(path) = self.shot_clay.take() {
                     state.arm_clay_shot(path);
@@ -1611,6 +1619,7 @@ where
         shot_camp_smoker: None,
         shot_blast: None,
         shot_furnace: None,
+        shot_crafting_table: None,
         shot_clay: None,
         shot_pot: None,
         shot_compound: None,
@@ -1904,6 +1913,15 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-furnace".to_string())?;
                 parsed.shot_furnace = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-crafting-table"
+            | "--shot-crafting-table-ui"
+            | "--shot-craft-table"
+            | "--shot-craft-ui" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-crafting-table".to_string())?;
+                parsed.shot_crafting_table = Some(std::path::PathBuf::from(value));
             }
             "--shot-clay" | "--shot-clay-bank" => {
                 let value = iter

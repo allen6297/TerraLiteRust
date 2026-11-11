@@ -22915,6 +22915,69 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Open the shrine crafting table 3×3 with a shaped pole recipe, then quit with a PNG.
+    pub fn arm_crafting_table_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, 2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (tx, tz) = rebuild_world::SHRINE_TABLE;
+        let mut ty = 4;
+        for y in 0..80 {
+            if self.world.block_at(tx, y, tz).id == "crafting_table" {
+                ty = y;
+                break;
+            }
+        }
+        self.chunk_bake.touch(tx, tz);
+        let focus = glam::Vec3::new(tx as f32 + 0.5, ty as f32 + 1.0, tz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            tx as f32 - 1.0,
+            ty as f32 + 1.35 + body::EYE_HEIGHT,
+            tz as f32 + 4.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        // craft:pole shaped column (oak_log in 0/3/6) — needs the full 3×3.
+        let _ = self.gui.open_craft();
+        let _ = self.gui.give_craft_at(0, "oak_log");
+        let _ = self.gui.give_craft_at(3, "oak_log");
+        let _ = self.gui.give_craft_at(6, "oak_log");
+        self.gui.select_craft(9);
+        self.gui.push_chat("crafting");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("oak_log");
+        let _ = self.hotbar.collect("oak_log");
+        let _ = self.hotbar.collect("stone");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(tx + dx * 8, tz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the shrine furnace Whimscape panel mid-cook, then quit with a PNG.
     pub fn arm_furnace_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -32363,6 +32426,9 @@ impl State {
             }
             if self.gui.take_furnace_take() {
                 self.take_furnace_output();
+            }
+            if self.gui.take_craft_take() {
+                self.take_craft_result();
             }
             if action != gui::MenuAction::None {
                 self.hotbar_dirty = true;

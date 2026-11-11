@@ -680,6 +680,8 @@ pub struct Gui {
     /// `0..9` is the grid. `9` is the result.
     craft_selected: usize,
     craft: hotbar::Bag,
+    /// Set when egui asks render to pull the crafting result.
+    craft_take: bool,
     /// Player-inventory Craft tab 2×2 (slots `0..3`). Preview-only until taken.
     inv_craft: hotbar::Bag,
     /// True when `inv_craft` holds an EMI ghost layout (not taken from bags).
@@ -887,6 +889,7 @@ impl Gui {
                 craft_open: false,
                 craft_selected: 0,
                 craft: hotbar::Bag::new(),
+                craft_take: false,
                 inv_craft: hotbar::Bag::new(),
                 inv_craft_ghost: false,
                 furnace_open: false,
@@ -1018,6 +1021,7 @@ impl Gui {
                     craft_open: false,
                     craft_selected: 0,
                     craft: hotbar::Bag::new(),
+                    craft_take: false,
                     inv_craft: hotbar::Bag::new(),
                     inv_craft_ghost: false,
                     furnace_open: false,
@@ -1159,6 +1163,7 @@ impl Gui {
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
+            craft_take: false,
             inv_craft: hotbar::Bag::new(),
             inv_craft_ghost: false,
             furnace_open: false,
@@ -1800,12 +1805,62 @@ impl Gui {
         }
         self.craft = hotbar::Bag::new();
         self.craft_selected = 0;
+        self.craft_take = false;
         self.craft_open = true;
         true
     }
 
     pub fn craft_open(&self) -> bool {
         self.craft_open
+    }
+
+    /// `0..8` grid cells, `9` is the result highlight.
+    pub fn craft_selected(&self) -> usize {
+        self.craft_selected
+    }
+
+    pub fn select_craft(&mut self, index: usize) {
+        if index <= 9 {
+            self.craft_selected = index;
+        }
+    }
+
+    pub fn craft_slot(&self, index: usize) -> Option<&str> {
+        if index >= 9 {
+            return None;
+        }
+        self.craft.slot(index)
+    }
+
+    pub fn craft_count(&self, index: usize) -> u16 {
+        if index >= 9 {
+            return 0;
+        }
+        self.craft.count(index)
+    }
+
+    /// Place one of `id` into a specific grid cell.
+    pub fn give_craft_at(&mut self, index: usize, id: &str) -> bool {
+        if !self.craft_open || index >= 9 {
+            return false;
+        }
+        self.craft.insert_at(index, id)
+    }
+
+    /// Take one from a grid cell back toward the player.
+    pub fn take_craft_slot(&mut self, index: usize) -> Option<&'static str> {
+        if !self.craft_open || index >= 9 {
+            return None;
+        }
+        self.craft.take_one(index)
+    }
+
+    pub fn request_craft_take(&mut self) {
+        self.craft_take = true;
+    }
+
+    pub fn take_craft_take(&mut self) -> bool {
+        std::mem::replace(&mut self.craft_take, false)
     }
 
     /// One from the hotbar into the selected grid slot. The result slot refuses.
@@ -1839,6 +1894,7 @@ impl Gui {
     }
 
     pub fn drain_craft(&mut self) -> Vec<&'static str> {
+        self.craft_take = false;
         self.craft.drain()
     }
 
@@ -3955,13 +4011,8 @@ impl Gui {
             return chest_quads(width, height, &self.chest, self.chest_selected);
         }
         if self.craft_open {
-            return craft_quads(
-                width,
-                height,
-                &self.craft,
-                self.craft_selected,
-                self.craft_preview(),
-            );
+            // egui draws the Whimscape crafting table panel.
+            return Vec::new();
         }
         if self.furnace_open {
             // egui draws the Whimscape furnace / smoker / blast panel.
@@ -9630,6 +9681,7 @@ mod tests {
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
+            craft_take: false,
             inv_craft: hotbar::Bag::new(),
             inv_craft_ghost: false,
             furnace_open: false,
@@ -11354,17 +11406,10 @@ mod tests {
             Some("chiseled_stone_bricks")
         );
         assert_eq!(gui.pull_craft().as_deref(), Some("chiseled_stone_bricks"));
+        // Whimscape egui owns the crafting panel; legacy quads stay empty.
         let drawn = gui.paint(1280.0, 720.0, &hotbar::Bag::new());
-        assert!(
-            drawn
-                .iter()
-                .any(|quad| quad.color == PANEL && quad.tex > 0.0)
-        );
-        assert!(
-            drawn
-                .iter()
-                .any(|quad| quad.color == HEADER && quad.tex > 0.0)
-        );
+        assert!(drawn.is_empty());
+        assert!(gui.craft_open());
         assert!(gui.on_press(KeyCode::Escape));
         assert!(!gui.craft_open());
 
