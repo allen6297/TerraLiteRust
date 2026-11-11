@@ -1334,6 +1334,10 @@ pub struct State {
     place_click_at: Option<Instant>,
     /// Seconds until the next compound fill seep pulse.
     compound_flow_wait: f32,
+    /// Seconds until the next hopper pull/push pulse.
+    hopper_wait: f32,
+    /// One tip when a hopper first moves an item this session.
+    hopper_told: bool,
     /// Pulses since the last lamp battery drain (slow charge consume).
     lamp_drain_wait: u8,
     /// Pulses until the next ember generator charge tick.
@@ -2699,6 +2703,8 @@ impl State {
             ctrl_mod: false,
             place_click_at: None,
             compound_flow_wait: 0.35,
+            hopper_wait: crate::hopper::HOPPER_PERIOD,
+            hopper_told: false,
             lamp_drain_wait: 0,
             gen_charge_wait: 0,
             compound_flow_told: false,
@@ -8343,6 +8349,7 @@ impl State {
             "ender_chest" => "ENDER CHEST",
             "copper_chest" => "COPPER CHEST",
             "shulker_box" => "SHULKER BOX",
+            "hopper" => "HOPPER",
             _ => "CHEST",
         };
         if self.gui.open_chest_as(&slots, title) {
@@ -12457,6 +12464,138 @@ impl State {
 
     /// Slow pipe seep: copy fill into one nearby empty host each pulse.
     /// Powered pumps push first; pipe/wire/pump runs pulse faster.
+    /// Pull from the chest above each nearby hopper, then push into the facing chest.
+    fn tick_hoppers(&mut self, dt: f32) {
+        if !self.playing || self.menu.is_open() || self.dead {
+            return;
+        }
+        if self.cook_shot_path.is_some() {
+            return;
+        }
+        self.hopper_wait -= dt;
+        if self.hopper_wait > 0.0 {
+            return;
+        }
+        self.hopper_wait = crate::hopper::HOPPER_PERIOD;
+        if self.told_disconnect {
+            return;
+        }
+        let eye = self.camera.eye;
+        let ox = eye.x.floor() as i32;
+        let oy = eye.y.floor() as i32;
+        let oz = eye.z.floor() as i32;
+        let path = crate::net::world_file(&self.loaded_world);
+        let Ok(mut chests) = rebuild_world::read_chests(&path) else {
+            return;
+        };
+        let open = self.chest_at;
+        let mut dirty: Vec<(i32, i32, i32)> = Vec::new();
+        let mark = |dirty: &mut Vec<(i32, i32, i32)>, at: (i32, i32, i32)| {
+            if !dirty.contains(&at) {
+                dirty.push(at);
+            }
+        };
+        for dx in -10..=10 {
+            for dy in -4..=4 {
+                for dz in -10..=10 {
+                    let x = ox + dx;
+                    let y = oy + dy;
+                    let z = oz + dz;
+                    let block = self.world.block_at(x, y, z);
+                    if block.id != "hopper" {
+                        continue;
+                    }
+                    if open == Some((x, y, z)) {
+                        continue;
+                    }
+                    let above = (x, y + 1, z);
+                    let dir = crate::hopper::hopper_dir(block.metadata);
+                    let dest = (x + dir[0], y + dir[1], z + dir[2]);
+                    if open == Some(above) || open == Some(dest) {
+                        continue;
+                    }
+
+                    let mut hopper_slots = take_container_slots(&mut chests, x, y, z, "hopper");
+                    let mut hopper_dirty = false;
+                    let above_id = self.world.block_at(above.0, above.1, above.2).id;
+                    if crate::hopper::hopper_inventory(above_id) {
+                        let mut above_slots =
+                            take_container_slots(&mut chests, above.0, above.1, above.2, above_id);
+                        if crate::hopper::move_one(
+                            &mut above_slots,
+                            &mut hopper_slots,
+                            crate::hopper::HOPPER_SLOTS,
+                            hotbar::stack_cap,
+                        )
+                        .is_some()
+                        {
+                            mark(&mut dirty, above);
+                            hopper_dirty = true;
+                        }
+                        put_container_slots(
+                            &mut chests,
+                            above.0,
+                            above.1,
+                            above.2,
+                            above_id,
+                            above_slots,
+                        );
+                    }
+
+                    let dest_id = self.world.block_at(dest.0, dest.1, dest.2).id;
+                    if crate::hopper::hopper_inventory(dest_id) {
+                        let mut dest_slots =
+                            take_container_slots(&mut chests, dest.0, dest.1, dest.2, dest_id);
+                        if crate::hopper::move_one(
+                            &mut hopper_slots,
+                            &mut dest_slots,
+                            crate::hopper::HOPPER_SLOTS,
+                            hotbar::stack_cap,
+                        )
+                        .is_some()
+                        {
+                            mark(&mut dirty, dest);
+                            hopper_dirty = true;
+                        }
+                        put_container_slots(
+                            &mut chests,
+                            dest.0,
+                            dest.1,
+                            dest.2,
+                            dest_id,
+                            dest_slots,
+                        );
+                    }
+
+                    if hopper_dirty {
+                        mark(&mut dirty, (x, y, z));
+                    }
+                    put_container_slots(&mut chests, x, y, z, "hopper", hopper_slots);
+                }
+            }
+        }
+        if dirty.is_empty() {
+            return;
+        }
+        if let Err(err) = rebuild_world::write_chests(&path, &chests) {
+            eprintln!("could not save hopper transfer: {err}");
+            return;
+        }
+        for (x, y, z) in dirty {
+            if let Some(chest) = chests
+                .iter()
+                .find(|chest| chest.x == x && chest.y == y && chest.z == z)
+            {
+                let wire = crate::hopper::wire_slots(&chest.slots);
+                let _ = self.link.send(encode_chest(x, y, z, &wire));
+            }
+        }
+        if !self.hopper_told {
+            self.hopper_told = true;
+            self.gui.push_chat("hopper");
+        }
+    }
+
     fn tick_compound_flow(&mut self, dt: f32) {
         if !self.playing || self.menu.is_open() || self.dead {
             return;
@@ -13757,6 +13896,14 @@ impl State {
             || block.id == "lightning_rod"
         {
             block = Block::new(block.id, look::torch_facing(hit.axis, hit.normal));
+        }
+        if block.id == "hopper" {
+            // Output faces look (never up). Pulls from above; pushes into facing.
+            let forward = self.camera.forward();
+            block = Block::new(
+                "hopper",
+                crate::hopper::hopper_facing_from_look([forward.x, forward.y, forward.z]),
+            );
         }
         if block.id == "pump" {
             // Face along the look — pushes away from the player. Starts off (valve).
@@ -22297,6 +22444,127 @@ impl State {
     }
 
     /// Open the camp cartography table mid-widen, then quit with a PNG.
+    /// Hopper pulling from a chest above into a chest below, then quit with a PNG.
+    pub fn arm_hopper_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let bottom = ground + 1;
+        let mid = bottom + 1;
+        let top = mid + 1;
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: cx,
+                    y: bottom,
+                    z: cz,
+                    block: Block::new("chest", 0),
+                },
+                CellChange {
+                    x: cx,
+                    y: mid,
+                    z: cz,
+                    block: Block::new("hopper", 3),
+                },
+                CellChange {
+                    x: cx,
+                    y: top,
+                    z: cz,
+                    block: Block::new("chest", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(cx, cz);
+
+        let save = crate::net::world_file(&self.loaded_world);
+        let mut above = vec![rebuild_world::CarriedSlot {
+            slot: 0,
+            id: "dirt".into(),
+            count: 8,
+        }];
+        let mut hopper_slots = Vec::new();
+        let mut below_slots = Vec::new();
+        // Simulate a few transfers so the column already shows intake.
+        for _ in 0..3 {
+            let _ = crate::hopper::move_one(
+                &mut above,
+                &mut hopper_slots,
+                crate::hopper::HOPPER_SLOTS,
+                hotbar::stack_cap,
+            );
+            let _ = crate::hopper::move_one(
+                &mut hopper_slots,
+                &mut below_slots,
+                crate::hopper::HOPPER_SLOTS,
+                hotbar::stack_cap,
+            );
+        }
+        let _ = crate::hopper::move_one(
+            &mut above,
+            &mut hopper_slots,
+            crate::hopper::HOPPER_SLOTS,
+            hotbar::stack_cap,
+        );
+        let _ = rebuild_world::store_chest_slots(&save, cx, top, cz, "chest", &above);
+        let _ = rebuild_world::store_chest_slots(&save, cx, mid, cz, "hopper", &hopper_slots);
+        let _ = rebuild_world::store_chest_slots(&save, cx, bottom, cz, "chest", &below_slots);
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, mid as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 - 2.4,
+            mid as f32 + 0.35 + body::EYE_HEIGHT,
+            cz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("hopper");
+        let _ = self.hotbar.collect("chest");
+        let _ = self.hotbar.collect("dirt");
+        self.hotbar_dirty = true;
+        let _ = self.gui.open_chest_as(&hopper_slots, "HOPPER");
+        self.chest_at = Some((cx, mid, cz));
+        self.hopper_told = true;
+        self.gui.push_chat("hopper");
+        self.gui.push_chat("pull above · push below");
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Open the stonecutter Whimscape panel (stairs / slabs / walls), then quit with a PNG.
     pub fn arm_stonecutter_ui_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -29520,6 +29788,7 @@ impl State {
         self.gui.age_chat(dt);
         self.try_portal_travel(dt);
         self.tick_compound_flow(dt);
+        self.tick_hoppers(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();
@@ -33230,6 +33499,48 @@ fn pot_plant(metadata: u8, holding_flower: bool) -> PotPlant {
     } else {
         PotPlant::NeedFlower
     }
+}
+
+fn take_container_slots(
+    chests: &mut Vec<rebuild_world::StoredChest>,
+    x: i32,
+    y: i32,
+    z: i32,
+    id: &str,
+) -> Vec<rebuild_world::CarriedSlot> {
+    if let Some(index) = chests
+        .iter()
+        .position(|chest| chest.x == x && chest.y == y && chest.z == z)
+    {
+        return chests.remove(index).slots;
+    }
+    let _ = id;
+    Vec::new()
+}
+
+fn put_container_slots(
+    chests: &mut Vec<rebuild_world::StoredChest>,
+    x: i32,
+    y: i32,
+    z: i32,
+    id: &str,
+    slots: Vec<rebuild_world::CarriedSlot>,
+) {
+    if let Some(chest) = chests
+        .iter_mut()
+        .find(|chest| chest.x == x && chest.y == y && chest.z == z)
+    {
+        chest.id = id.to_string();
+        chest.slots = slots;
+        return;
+    }
+    chests.push(rebuild_world::StoredChest {
+        x,
+        y,
+        z,
+        id: id.to_string(),
+        slots,
+    });
 }
 
 /// Dominant look axis → pump facing bits (`0..=5`).

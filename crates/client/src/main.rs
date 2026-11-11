@@ -23,6 +23,7 @@ mod dig;
 mod drops;
 mod egui_ui;
 mod gui;
+mod hopper;
 mod hotbar;
 mod item_icon;
 mod jobs;
@@ -421,6 +422,8 @@ struct Args {
     shot_chart: Option<std::path::PathBuf>,
     /// Stonecutter Whimscape recipe picker, then quit.
     shot_stonecutter_ui: Option<std::path::PathBuf>,
+    /// Hopper pull/push column, then quit.
+    shot_hopper: Option<std::path::PathBuf>,
     /// Mine-mouth lodestone + linked compass, then quit.
     shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
@@ -701,6 +704,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_hang: args.shot_hang,
         shot_chart: args.shot_chart,
         shot_stonecutter_ui: args.shot_stonecutter_ui,
+        shot_hopper: args.shot_hopper,
         shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
@@ -898,6 +902,7 @@ struct App {
     shot_hang: Option<std::path::PathBuf>,
     shot_chart: Option<std::path::PathBuf>,
     shot_stonecutter_ui: Option<std::path::PathBuf>,
+    shot_hopper: Option<std::path::PathBuf>,
     shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
@@ -1401,6 +1406,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_stonecutter_ui.take() {
                     state.arm_stonecutter_ui_shot(path);
                 }
+                if let Some(path) = self.shot_hopper.take() {
+                    state.arm_hopper_shot(path);
+                }
                 if let Some(path) = self.shot_lodestone.take() {
                     state.arm_lodestone_shot(path);
                 }
@@ -1757,6 +1765,7 @@ where
         shot_hang: None,
         shot_chart: None,
         shot_stonecutter_ui: None,
+        shot_hopper: None,
         shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
@@ -2695,6 +2704,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-stonecutter-ui".to_string())?;
                 parsed.shot_stonecutter_ui = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-hopper" | "--shot-hopper-ui" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-hopper".to_string())?;
+                parsed.shot_hopper = Some(std::path::PathBuf::from(value));
             }
             "--shot-lodestone" | "--shot-compass-link" => {
                 let value = iter

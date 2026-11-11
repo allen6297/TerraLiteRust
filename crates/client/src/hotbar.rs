@@ -306,7 +306,7 @@ const DIGIT_CELL: f32 = 2.0;
 const DIGIT_GAP: f32 = 2.0;
 
 /// Per-item hotbar limit. Script `item.stack` can lower it; default is 64.
-fn stack_cap(id: &str) -> u16 {
+pub fn stack_cap(id: &str) -> u16 {
     let cap = Pack::builtin().max_stack(id);
     if cap == 0 { STACK } else { cap.min(STACK) }
 }

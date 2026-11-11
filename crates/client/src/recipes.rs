@@ -667,6 +667,7 @@ mod tests {
                 "grindstone".to_string(),
                 "hanging_sign".to_string(),
                 "hay_bale".to_string(),
+                "hopper".to_string(),
                 "healing_potion".to_string(),
                 "heart_of_the_sea".to_string(),
                 "heavy_core".to_string(),

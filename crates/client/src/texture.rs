@@ -511,6 +511,7 @@ mod tests {
             "assets/terralite/textures/copper_chest.png",
             "assets/terralite/textures/barrel.png",
             "assets/terralite/textures/ender_chest.png",
+            "assets/terralite/textures/hopper.png",
             "assets/terralite/textures/shulker_box.png",
             "assets/terralite/textures/end_rod.png",
             "assets/terralite/textures/end_stone_bricks.png",
