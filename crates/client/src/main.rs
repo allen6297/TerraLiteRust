@@ -2707,7 +2707,7 @@ where
                     .ok_or_else(|| "missing value for --shot-brew".to_string())?;
                 parsed.shot_brew = Some(std::path::PathBuf::from(value));
             }
-            "--shot-smith" | "--shot-smithing" => {
+            "--shot-smith" | "--shot-smithing" | "--shot-smithing-ui" | "--shot-smith-ui" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-smith".to_string())?;

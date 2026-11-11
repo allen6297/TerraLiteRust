@@ -20927,7 +20927,7 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Open the shaft smith panel mid-spark after an iron upgrade, then quit with a PNG.
+    /// Open the shaft smithing egui ready to upgrade diamond → netherite, then quit with a PNG.
     pub fn arm_smith_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -20971,20 +20971,23 @@ impl State {
 
         let spark_at = [sx as f32 + 0.5, sy as f32 + 0.95, sz as f32 + 0.5];
         self.note_shot_at = Some(spark_at);
-        self.note_shot_pitch = 4;
+        self.note_shot_pitch = 11;
         self.note_shot_book = false;
         self.note_shot_brew = false;
         self.drops.puff(spark_at, [0.86, 0.58, 0.36]);
         self.rebuild_drops();
-        self.play_world(crate::audio::Sound::Note(4), spark_at);
-        let _ = self.gui.open_smith([sx, sy, sz]);
-        self.gui.note_smith("iron");
-        self.gui.push_chat("iron");
-        self.found_mine = true;
+        self.play_world(crate::audio::Sound::Note(11), spark_at);
         self.hotbar.install_saved(0, &[]);
-        let _ = self.hotbar.give_stack("stone_pickaxe");
-        let _ = self.hotbar.collect("iron_ore");
-        let _ = self.hotbar.smith_pick();
+        let _ = self.hotbar.give_stack("diamond_pickaxe");
+        let _ = self.hotbar.collect("netherite_ingot");
+        let _ = self.hotbar.collect("netherite_ingot");
+        let _ = self.gui.open_smith([sx, sy, sz]);
+        *self.gui.smith_trim_mut() = 1; // Coast trim stub selected
+        self.gui.note_smith("ready");
+        self.gui.push_chat("smith");
+        self.found_mine = true;
+        let tip = crate::gui::tip_for("diamond_pickaxe", Some(32));
+        self.gui.pin_tip(tip);
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -27218,10 +27221,14 @@ impl State {
         self.gui.note_smith(word);
         self.gui.push_chat(word);
         self.hotbar_dirty = true;
-        if matches!(word, "iron" | "diamond" | "heavy") {
+        if matches!(word, "iron" | "diamond" | "netherite" | "heavy") {
             if let Some(at) = self.gui.smith_at() {
                 let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
-                let pitch = if word == "diamond" { 11 } else { 4 };
+                let pitch = if matches!(word, "diamond" | "netherite") {
+                    11
+                } else {
+                    4
+                };
                 self.play_world(crate::audio::Sound::Note(pitch), source);
                 self.drops.puff(source, [0.86, 0.58, 0.36]);
                 self.rebuild_drops();
@@ -32288,6 +32295,14 @@ impl State {
                         self.found_chime = true;
                         self.gui.push_chat("chime");
                     }
+                }
+            }
+            if self.gui.take_smith_spark() {
+                if let Some(at) = self.gui.smith_at() {
+                    let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                    self.play_world(crate::audio::Sound::Note(11), source);
+                    self.drops.puff(source, [0.86, 0.58, 0.36]);
+                    self.rebuild_drops();
                 }
             }
             if action != gui::MenuAction::None {

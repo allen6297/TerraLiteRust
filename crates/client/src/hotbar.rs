@@ -89,7 +89,7 @@ fn blast_result(id: &str) -> Option<&'static str> {
 }
 
 /// Diamond gear a smithing table turns into netherite for one ingot.
-fn netherite_upgrade(id: &str) -> Option<&'static str> {
+pub fn netherite_upgrade(id: &str) -> Option<&'static str> {
     match id {
         "diamond_pickaxe" => Some("netherite_pickaxe"),
         "diamond_sword" => Some("netherite_sword"),
@@ -102,6 +102,9 @@ fn netherite_upgrade(id: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Cosmetic trim stubs shown on the smithing UI (no gameplay effect yet).
+pub const SMITH_TRIMS: &[&str] = &["None", "Coast", "Dune", "Eye", "Rib", "Sentry"];
 
 /// Furnace one-step lines that the blast furnace refuses (clay → bricks).
 fn furnace_result(id: &str) -> Option<&'static str> {
@@ -1417,10 +1420,22 @@ impl Hotbar {
             }) else {
                 return "need ingot";
             };
+            let keep = (item.keen, item.sturdy, item.lucky, item.uses);
             self.consume_at(cost);
             let next = Block::new(next, 0).id;
+            let max = Pack::builtin().tool_uses(next);
             if let Some(slot) = self.slots.get_mut(self.selected) {
-                *slot = Some(fresh(next, 1));
+                let mut upgraded = fresh(next, 1);
+                upgraded.keen = keep.0;
+                upgraded.sturdy = keep.1;
+                upgraded.lucky = keep.2;
+                if max > 0 {
+                    // Keep remaining uses ratio when upgrading a worn tool.
+                    let old_max = Pack::builtin().tool_uses(item.id).max(1);
+                    let ratio = keep.3 as f32 / old_max as f32;
+                    upgraded.uses = ((max as f32) * ratio).round().max(1.0) as u16;
+                }
+                *slot = Some(upgraded);
             }
             return "netherite";
         }

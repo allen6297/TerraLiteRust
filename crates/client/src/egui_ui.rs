@@ -226,6 +226,7 @@ impl EguiHost {
             || gui.trade_open()
             || gui.anvil_open()
             || gui.enchant_open()
+            || gui.smith_open()
             || map_open
     }
 
@@ -320,12 +321,21 @@ impl EguiHost {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.smith_open() {
+                if draw_smithing(ui, gui, hotbar, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
             // Chat plate sits above the status stack during play / pause / death.
             // Hide under creative + player inventory (same rule as the old quads).
-            if !gui.bag_open() && !gui.player_inv_open() && !gui.anvil_open() && !gui.enchant_open()
+            if !gui.bag_open()
+                && !gui.player_inv_open()
+                && !gui.anvil_open()
+                && !gui.enchant_open()
+                && !gui.smith_open()
             {
                 draw_chat_plate(ui, gui, icons);
             }
@@ -3232,6 +3242,218 @@ fn draw_enchanting(
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(gui.enchant_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn draw_smithing(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = hotbar.selected();
+    let held = hotbar.slot(selected).unwrap_or("").to_string();
+    let held_uses = hotbar.count(selected);
+    let has_item = !held.is_empty();
+    let netherite_next = hotbar::netherite_upgrade(&held);
+    let has_ingot = hotbar.holds("netherite_ingot", 1);
+    let can_netherite = netherite_next.is_some() && has_ingot;
+    let can_other = hotbar.smith_target().is_some() && netherite_next.is_none();
+    let ingot_n = {
+        let mut n = 0u16;
+        for i in 0..hotbar::SLOTS {
+            if hotbar.slot(i) == Some("netherite_ingot") {
+                n = n.saturating_add(hotbar.count(i));
+            }
+        }
+        n
+    };
+    let trim_idx = gui.smith_trim().min(hotbar::SMITH_TRIMS.len().saturating_sub(1));
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(36.0);
+                show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "SMITHING");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Upgrade diamond gear with a netherite ingot · {ingot_n} ingot(s)"
+                        ))
+                        .size(13.0)
+                        .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            if has_item {
+                                let tip = gui::tip_for_tool(
+                                    &held,
+                                    Some(held_uses),
+                                    hotbar.is_keen(selected),
+                                    hotbar.is_sturdy(selected),
+                                    hotbar.is_lucky(selected),
+                                );
+                                let tex = icon_texture(ui.ctx(), icons, &held);
+                                let _ = slot_button(
+                                    ui,
+                                    icons,
+                                    tex,
+                                    false,
+                                    if held_uses > 1 {
+                                        Some(held_uses)
+                                    } else {
+                                        None
+                                    },
+                                );
+                                ui.add_space(6.0);
+                                ui.label(RichText::new("→").size(18.0).color(DETAIL));
+                                ui.add_space(6.0);
+                                if let Some(next) = netherite_next {
+                                    let next_tip = gui::tip_for(next, Some(1));
+                                    let tex = icon_texture(ui.ctx(), icons, next);
+                                    let _ = slot_button(ui, icons, tex, false, None);
+                                    ui.add_space(8.0);
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            RichText::new(&tip.name)
+                                                .size(14.0)
+                                                .color(INK)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!("becomes {}", next_tip.name))
+                                                .size(12.0)
+                                                .color(MUTED),
+                                        );
+                                    });
+                                } else {
+                                    ui.add_space(8.0);
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            RichText::new(&tip.name)
+                                                .size(14.0)
+                                                .color(INK)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(&tip.line).size(12.0).color(MUTED),
+                                        );
+                                    });
+                                }
+                            } else {
+                                ui.label(
+                                    RichText::new("Select diamond gear (or a pick to tier up).")
+                                        .size(14.0)
+                                        .color(MUTED),
+                                );
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Trim (stub)").size(13.0).color(DETAIL));
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        for (index, name) in hotbar::SMITH_TRIMS.iter().enumerate() {
+                            let on = trim_idx == index;
+                            if chrome_button(
+                                ui,
+                                icons,
+                                name,
+                                on,
+                                Vec2::new(64.0, 26.0),
+                                12.0,
+                            )
+                            .clicked()
+                            {
+                                *gui.smith_trim_mut() = index;
+                                touched = true;
+                            }
+                            ui.add_space(4.0);
+                        }
+                    });
+                    ui.label(
+                        RichText::new("Cosmetic name only — no armor-trim stats yet.")
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let upgrade_ok = can_netherite || can_other;
+                        let caption = if can_netherite {
+                            "Upgrade (−1 ingot)"
+                        } else if can_other {
+                            "Upgrade"
+                        } else if netherite_next.is_some() {
+                            "Need netherite ingot"
+                        } else {
+                            "Need diamond gear"
+                        };
+                        ui.add_enabled_ui(upgrade_ok, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                caption,
+                                upgrade_ok,
+                                Vec2::new(200.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let word = hotbar.smith_pick();
+                                gui.note_smith(word);
+                                if matches!(
+                                    word,
+                                    "netherite" | "iron" | "diamond" | "heavy"
+                                ) {
+                                    gui.request_smith_spark();
+                                    let trim = hotbar::SMITH_TRIMS
+                                        .get(gui.smith_trim())
+                                        .copied()
+                                        .unwrap_or("None");
+                                    if word == "netherite" && trim != "None" {
+                                        if let Some(id) = hotbar.slot(hotbar.selected()) {
+                                            let base = gui::tip_for(id, Some(1)).name;
+                                            let named = format!("{trim} {base}");
+                                            let _ = hotbar.rename_selected(&named);
+                                        }
+                                    }
+                                    if let Some(id) = hotbar.slot(hotbar.selected()) {
+                                        let tip = gui::tip_for_tool(
+                                            id,
+                                            Some(hotbar.count(hotbar.selected())),
+                                            hotbar.is_keen(hotbar.selected()),
+                                            hotbar.is_sturdy(hotbar.selected()),
+                                            hotbar.is_lucky(hotbar.selected()),
+                                        );
+                                        let mut tip = tip;
+                                        if let Some(label) = hotbar.label_of(hotbar.selected()) {
+                                            tip.name = label.to_string();
+                                        }
+                                        gui.pin_tip(tip);
+                                    }
+                                }
+                                touched = true;
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(gui.smith_note())
                             .size(13.0)
                             .color(DETAIL),
                     );

@@ -725,6 +725,10 @@ pub struct Gui {
     smith_open: bool,
     /// The line under the smith title. Enter replaces it with the upgrade word.
     smith_note: String,
+    /// Selected cosmetic trim stub index into [`hotbar::SMITH_TRIMS`].
+    smith_trim: usize,
+    /// Set when an upgrade should spark at the table.
+    smith_spark: bool,
     /// The smithing table the panel is upgrading at.
     smith_at: Option<[i32; 3]>,
     loom_open: bool,
@@ -904,6 +908,8 @@ impl Gui {
                 grind_at: None,
                 smith_open: false,
                 smith_note: String::new(),
+                smith_trim: 0,
+                smith_spark: false,
                 smith_at: None,
                 loom_open: false,
                 loom_note: String::new(),
@@ -1030,6 +1036,8 @@ impl Gui {
                     grind_at: None,
                     smith_open: false,
                     smith_note: String::new(),
+                    smith_trim: 0,
+                    smith_spark: false,
                     smith_at: None,
                     loom_open: false,
                     loom_note: String::new(),
@@ -1166,6 +1174,8 @@ impl Gui {
             grind_at: None,
             smith_open: false,
             smith_note: String::new(),
+            smith_trim: 0,
+            smith_spark: false,
             smith_at: None,
             loom_open: false,
             loom_note: String::new(),
@@ -2205,13 +2215,15 @@ impl Gui {
         self.grind_note = note.to_string();
     }
 
-    /// A smith panel. Other screens keep it closed.
+    /// A smith upgrade panel. Other screens keep it closed.
     pub fn open_smith(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
         self.smith_at = Some(at);
-        self.smith_note = "enter spends one iron ore".to_string();
+        self.smith_note = "diamond + netherite ingot → netherite".to_string();
+        self.smith_trim = 0;
+        self.smith_spark = false;
         self.smith_open = true;
         true
     }
@@ -2222,6 +2234,26 @@ impl Gui {
 
     pub fn smith_at(&self) -> Option<[i32; 3]> {
         self.smith_at
+    }
+
+    pub fn smith_note(&self) -> &str {
+        &self.smith_note
+    }
+
+    pub fn smith_trim(&self) -> usize {
+        self.smith_trim
+    }
+
+    pub fn smith_trim_mut(&mut self) -> &mut usize {
+        &mut self.smith_trim
+    }
+
+    pub fn request_smith_spark(&mut self) {
+        self.smith_spark = true;
+    }
+
+    pub fn take_smith_spark(&mut self) -> bool {
+        std::mem::replace(&mut self.smith_spark, false)
     }
 
     /// The word the last upgrade left on the panel.
@@ -3819,7 +3851,8 @@ impl Gui {
             return grind_quads(width, height, &self.grind_note);
         }
         if self.smith_open {
-            return smith_quads(width, height, &self.smith_note);
+            // egui draws the Whimscape smithing panel.
+            return Vec::new();
         }
         if self.loom_open {
             return loom_quads(width, height, &self.loom_note);
@@ -9491,6 +9524,8 @@ mod tests {
             grind_at: None,
             smith_open: false,
             smith_note: String::new(),
+            smith_trim: 0,
+            smith_spark: false,
             smith_at: None,
             loom_open: false,
             loom_note: String::new(),
