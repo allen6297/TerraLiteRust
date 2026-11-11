@@ -2,8 +2,9 @@
 BRIDGE=Minecraft block PNGs remapped under assets/terralite/textures/ (+ block/) for TerraLite atlas overlays.
 ITEMS=assets/minecraft/textures/item/*.png -> assets/terralite/textures/item/ (hotbar/inventory prefer these over Blockbench)
 ENTITY=assets/minecraft/textures/entity/** -> assets/minecraft/textures/entity/ + flat aliases under assets/terralite/textures/entity/ (zombie/piglin/villager/golem/…)
-DIRT=optifine/ctm/overlays/10_dirt/0.png (Whimscape omits vanilla dirt.png)
-GRASS_TOP=optifine/ctm/overlays/70_grass_block_top/0.png
-GRASS_SIDE=textures/block/grass_path_side.png
+DIRT=coarse_dirt.png (Whimscape omits vanilla dirt.png; do NOT use optifine/ctm/overlays/10_dirt — those are sparse masks)
+DIRT_ALT=rooted_dirt.png / packed_mud.png / mud.png for dirt_alt_1..3
+GRASS_TOP=moss_block.png (Whimscape omits solid grass_block_top; CTM 70_grass_block_top overlays are sparse masks)
+GRASS_SIDE=textures/block/grass_path_side.png with opaque moss fringe on row 0 (clear fringe discarded by world shader)
 WATER=water_still.png -> water.png
 LAVA=lava_still.png -> lava.png
