@@ -1344,6 +1344,8 @@ pub struct State {
     piston_told: bool,
     /// Button cells still feeding redstone dust: (cell, seconds left).
     redstone_pulse: Vec<([i32; 3], f32)>,
+    /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
+    redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Device cells currently considered powered by redstone.
     redstone_powered: HashSet<[i32; 3]>,
     /// One tip when dust first carries power this session.
@@ -2718,6 +2720,7 @@ impl State {
             piston_pulse: Vec::new(),
             piston_told: false,
             redstone_pulse: Vec::new(),
+            redstone_delay: Vec::new(),
             redstone_powered: HashSet::new(),
             redstone_told: false,
             lamp_drain_wait: 0,
@@ -7118,6 +7121,10 @@ impl State {
         }
         if hinge(block.id) {
             self.toggle_swing(block.id, hit.block, block.metadata);
+            return;
+        }
+        if crate::redstone::is_repeater(block.id) {
+            self.cycle_repeater(hit.block, block.metadata);
             return;
         }
         if block.id == "button" {
@@ -13937,6 +13944,15 @@ impl State {
             block = Block::new(
                 block.id,
                 crate::piston::facing_from_look([forward.x, forward.y, forward.z]),
+            );
+        }
+        if crate::redstone::is_repeater(block.id) {
+            let forward = self.camera.forward();
+            block = Block::new(
+                "redstone_repeater",
+                crate::redstone::with_facing(crate::redstone::facing_from_look([
+                    forward.x, forward.y, forward.z,
+                ])),
             );
         }
         if block.id == "pump" {
@@ -22612,6 +22628,147 @@ impl State {
     }
 
 
+
+    /// Lever → dust → repeater (delay 2, powered) → refreshed dust → lamp, then quit.
+    pub fn arm_repeater_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 10) {
+            for z in (cz - 1)..=(cz + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        let rep = crate::redstone::make_repeater(0, 2, true);
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("lever", 1),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 15),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 14),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz,
+                block: rep,
+            },
+            CellChange {
+                x: cx + 4,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 15),
+            },
+            CellChange {
+                x: cx + 5,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 14),
+            },
+            CellChange {
+                x: cx + 6,
+                y,
+                z: cz,
+                block: Block::new("lamp", 1),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz + 1,
+                block: Block::new("button", 0),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 1)..=(cx + 10) {
+            self.chunk_bake.touch(x, cz);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 3.5, y as f32 + 0.45, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 3.5,
+            y as f32 + 1.15 + body::EYE_HEIGHT,
+            cz as f32 - 5.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("redstone_repeater");
+        let _ = self.hotbar.collect("redstone_dust");
+        let _ = self.hotbar.collect("lever");
+        let _ = self.hotbar.collect("lamp");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.redstone_told = true;
+        self.redstone_powered.insert([cx + 6, y, cz]);
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("repeater");
+        self.gui.push_chat("delay 2");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Lever → dust run → lamp / piston / dispenser, then quit with a PNG.
     pub fn arm_redstone_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -29967,6 +30124,99 @@ impl State {
     }
 
 
+
+    fn cycle_repeater(&mut self, at: [i32; 3], metadata: u8) {
+        if self.told_disconnect {
+            return;
+        }
+        let block = self.world.block_at(at[0], at[1], at[2]);
+        let next = crate::redstone::cycle_delay(metadata);
+        let ticks = crate::redstone::delay_ticks(next);
+        let updated = Block::new("redstone_repeater", next).with_fill(block.fill);
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: updated,
+        }]);
+        let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Thunk, source);
+        self.gui.push_chat(&format!("delay {ticks}"));
+        self.redstone_delay.retain(|(cell, _, _)| *cell != at);
+        self.refresh_redstone(at);
+    }
+
+    fn schedule_repeaters(
+        &mut self,
+        focus: [i32; 3],
+        radius: i32,
+        buttons: &[[i32; 3]],
+        powers: &std::collections::HashMap<[i32; 3], u8>,
+    ) {
+        let planned =
+            crate::redstone::plan_repeater_schedules(&self.world, focus, radius, buttons, powers);
+        for (cell, secs, want) in planned {
+            if let Some(entry) = self.redstone_delay.iter_mut().find(|(c, _, _)| *c == cell) {
+                if entry.2 == want {
+                    continue;
+                }
+                *entry = (cell, secs, want);
+            } else {
+                self.redstone_delay.push((cell, secs, want));
+            }
+        }
+        self.redstone_delay.retain(|(cell, _, want)| {
+            let block = self.world.block_at(cell[0], cell[1], cell[2]);
+            if !crate::redstone::is_repeater(block.id) {
+                return false;
+            }
+            crate::redstone::repeater_powered(block) != *want
+        });
+    }
+
+    fn tick_redstone_delay(&mut self, dt: f32) {
+        if self.redstone_delay.is_empty() {
+            return;
+        }
+        let mut keep = Vec::new();
+        let mut flips = Vec::new();
+        let pending = std::mem::take(&mut self.redstone_delay);
+        for (cell, left, want) in pending {
+            let next = left - dt;
+            if next <= 0.0 {
+                flips.push((cell, want));
+            } else {
+                keep.push((cell, next, want));
+            }
+        }
+        self.redstone_delay = keep;
+        if flips.is_empty() {
+            return;
+        }
+        let mut changes = Vec::new();
+        for (cell, want) in &flips {
+            let block = self.world.block_at(cell[0], cell[1], cell[2]);
+            if !crate::redstone::is_repeater(block.id) {
+                continue;
+            }
+            if crate::redstone::repeater_powered(block) == *want {
+                continue;
+            }
+            changes.push(CellChange {
+                x: cell[0],
+                y: cell[1],
+                z: cell[2],
+                block: crate::redstone::with_repeater_powered(block, *want),
+            });
+        }
+        if !changes.is_empty() {
+            self.send_places_batch(&changes);
+        }
+        for (cell, _) in flips {
+            self.refresh_redstone(cell);
+        }
+    }
+
     /// Lever/button edge: update dust power and drive wire-linked devices.
     fn pulse_redstone(&mut self, at: [i32; 3], power_on: bool, button: bool) {
         if button && power_on {
@@ -30033,9 +30283,10 @@ impl State {
                 self.gui.push_chat("redstone");
             }
         }
-        // Re-read powers after local apply so device scan sees lit dust.
+        // Re-read powers after local apply so device / repeater scan sees lit dust.
         let powers =
             crate::redstone::plan_dust_power(&self.world, focus, RADIUS, &buttons);
+        self.schedule_repeaters(focus, RADIUS, &buttons, &powers);
         let now = crate::redstone::powered_devices(
             &self.world,
             focus,
@@ -30606,6 +30857,7 @@ impl State {
         self.tick_hoppers(dt);
         self.tick_piston_pulse(dt);
         self.tick_redstone_pulse(dt);
+        self.tick_redstone_delay(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();
