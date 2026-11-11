@@ -715,6 +715,8 @@ pub struct Gui {
     brew_open: bool,
     /// The line under the brew title. Enter replaces it with the brew word.
     brew_note: String,
+    /// Set when a brew should bubble at the stand.
+    brew_bubble: bool,
     /// The brewing stand the panel is mixing at.
     brew_at: Option<[i32; 3]>,
     grind_open: bool,
@@ -904,6 +906,7 @@ impl Gui {
                 enchant_at: None,
                 brew_open: false,
                 brew_note: String::new(),
+                brew_bubble: false,
                 brew_at: None,
                 grind_open: false,
                 grind_note: String::new(),
@@ -1033,6 +1036,7 @@ impl Gui {
                     enchant_at: None,
                     brew_open: false,
                     brew_note: String::new(),
+                    brew_bubble: false,
                     brew_at: None,
                     grind_open: false,
                     grind_note: String::new(),
@@ -1172,6 +1176,7 @@ impl Gui {
             enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
+            brew_bubble: false,
             brew_at: None,
             grind_open: false,
             grind_note: String::new(),
@@ -2168,17 +2173,14 @@ impl Gui {
         self.enchant_note = note.to_string();
     }
 
-    /// A brew panel. Other screens keep it closed.
+    /// A brewing stand panel. Other screens keep it closed.
     pub fn open_brewing(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
         self.brew_at = Some(at);
-        self.brew_note =
-            "enter: water+powder / awkward+powder strength / awkward+cream fire res / awkward+wart / water+wart+powder, or healing+gravel splash"
-                .to_string();
-
-
+        self.brew_note = "bottles + ingredient + blaze powder".to_string();
+        self.brew_bubble = false;
         self.brew_open = true;
         true
     }
@@ -2189,6 +2191,18 @@ impl Gui {
 
     pub fn brew_at(&self) -> Option<[i32; 3]> {
         self.brew_at
+    }
+
+    pub fn brew_note(&self) -> &str {
+        &self.brew_note
+    }
+
+    pub fn request_brew_bubble(&mut self) {
+        self.brew_bubble = true;
+    }
+
+    pub fn take_brew_bubble(&mut self) -> bool {
+        std::mem::replace(&mut self.brew_bubble, false)
     }
 
     /// The word the last brew left on the panel.
@@ -3863,7 +3877,8 @@ impl Gui {
             return Vec::new();
         }
         if self.brew_open {
-            return brew_quads(width, height, &self.brew_note);
+            // egui draws the Whimscape brewing panel.
+            return Vec::new();
         }
         if self.grind_open {
             // egui draws the Whimscape grindstone panel.
@@ -9537,6 +9552,7 @@ mod tests {
             enchant_at: None,
             brew_open: false,
             brew_note: String::new(),
+            brew_bubble: false,
             brew_at: None,
             grind_open: false,
             grind_note: String::new(),

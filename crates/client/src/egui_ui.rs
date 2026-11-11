@@ -228,6 +228,7 @@ impl EguiHost {
             || gui.enchant_open()
             || gui.smith_open()
             || gui.grind_open()
+            || gui.brew_open()
             || map_open
     }
 
@@ -332,6 +333,11 @@ impl EguiHost {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.brew_open() {
+                if draw_brewing(ui, gui, hotbar, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
@@ -343,6 +349,7 @@ impl EguiHost {
                 && !gui.enchant_open()
                 && !gui.smith_open()
                 && !gui.grind_open()
+                && !gui.brew_open()
             {
                 draw_chat_plate(ui, gui, icons);
             }
@@ -3249,6 +3256,195 @@ fn draw_enchanting(
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(gui.enchant_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn draw_brewing(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let bottles = hotbar.brew_bottles();
+    let fuel = hotbar.brew_fuel();
+    let ingredient = hotbar.brew_target();
+    let result = hotbar.brew_result();
+    let recipe = hotbar.brew_recipe_label();
+    let can_brew = ingredient.is_some() && result.is_some();
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(32.0);
+                show_panel(ui, 480.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "BREWING");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("Blaze powder fuel · {fuel}"))
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Bottles").size(13.0).color(DETAIL));
+                    ui.add_space(2.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            if bottles.is_empty() {
+                                for _ in 0..3 {
+                                    let _ = slot_button(ui, icons, None, false, None);
+                                    ui.add_space(6.0);
+                                }
+                                ui.label(
+                                    RichText::new("empty — add water or potions")
+                                        .size(12.0)
+                                        .color(MUTED),
+                                );
+                            } else {
+                                for (id, count) in bottles.iter().take(3) {
+                                    let tex = icon_texture(ui.ctx(), icons, id);
+                                    let _ = slot_button(
+                                        ui,
+                                        icons,
+                                        tex,
+                                        false,
+                                        if *count > 1 { Some(*count) } else { None },
+                                    );
+                                    ui.add_space(4.0);
+                                }
+                                if bottles.len() > 3 {
+                                    ui.label(
+                                        RichText::new(format!("+{}", bottles.len() - 3))
+                                            .size(12.0)
+                                            .color(MUTED),
+                                    );
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Ingredient").size(12.0).color(DETAIL));
+                            ui.add_space(2.0);
+                            let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                            chrome_well(ui, well, ROW, |ui| {
+                                if let Some(id) = ingredient {
+                                    let tip = gui::tip_for(id, Some(1));
+                                    let tex = icon_texture(ui.ctx(), icons, id);
+                                    ui.horizontal(|ui| {
+                                        let _ = slot_button(ui, icons, tex, false, None);
+                                        ui.label(
+                                            RichText::new(&tip.name).size(13.0).color(INK),
+                                        );
+                                    });
+                                } else {
+                                    let _ = slot_button(ui, icons, None, false, None);
+                                    ui.label(
+                                        RichText::new("—").size(13.0).color(MUTED),
+                                    );
+                                }
+                            });
+                        });
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Fuel").size(12.0).color(DETAIL));
+                            ui.add_space(2.0);
+                            let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                            chrome_well(ui, well, ROW, |ui| {
+                                let tex = icon_texture(ui.ctx(), icons, "blaze_powder");
+                                ui.horizontal(|ui| {
+                                    let _ = slot_button(
+                                        ui,
+                                        icons,
+                                        tex,
+                                        fuel > 0,
+                                        if fuel > 0 { Some(fuel) } else { None },
+                                    );
+                                    ui.label(
+                                        RichText::new(if fuel > 0 {
+                                            "blaze powder"
+                                        } else {
+                                            "need powder"
+                                        })
+                                        .size(13.0)
+                                        .color(if fuel > 0 { INK } else { MUTED }),
+                                    );
+                                });
+                            });
+                        });
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Result").size(12.0).color(DETAIL));
+                            ui.add_space(2.0);
+                            let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                            chrome_well(ui, well, ROW, |ui| {
+                                if let Some(id) = result {
+                                    let tip = gui::tip_for(id, Some(1));
+                                    let tex = icon_texture(ui.ctx(), icons, id);
+                                    ui.horizontal(|ui| {
+                                        let _ = slot_button(ui, icons, tex, can_brew, None);
+                                        ui.label(
+                                            RichText::new(&tip.name).size(13.0).color(INK),
+                                        );
+                                    });
+                                } else {
+                                    let _ = slot_button(ui, icons, None, false, None);
+                                    ui.label(
+                                        RichText::new("—").size(13.0).color(MUTED),
+                                    );
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(recipe).size(12.0).color(MUTED));
+                    ui.add_space(8.0);
+                    ui.add_enabled_ui(can_brew, |ui| {
+                        if chrome_button(
+                            ui,
+                            icons,
+                            if can_brew { "Brew" } else { "Need mix" },
+                            can_brew,
+                            Vec2::new(160.0, 32.0),
+                            14.0,
+                        )
+                        .clicked()
+                        {
+                            let word = hotbar.brew_potion();
+                            gui.note_brew(word);
+                            gui.push_chat(word);
+                            if word == "brewed" {
+                                gui.request_brew_bubble();
+                                if let Some(id) = hotbar
+                                    .brew_bottles()
+                                    .into_iter()
+                                    .last()
+                                    .map(|(id, _)| id)
+                                    .or(result)
+                                {
+                                    let tip = gui::tip_for(id, Some(1));
+                                    gui.pin_tip(tip);
+                                }
+                            }
+                            touched = true;
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(gui.brew_note())
                             .size(13.0)
                             .color(DETAIL),
                     );

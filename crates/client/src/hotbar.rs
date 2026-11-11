@@ -1024,6 +1024,88 @@ impl Hotbar {
         }
     }
 
+    /// Bottle-like stacks currently in the bar (for the brewing UI wells).
+    pub fn brew_bottles(&self) -> Vec<(&'static str, u16)> {
+        const BOTTLES: &[&str] = &[
+            "water_bucket",
+            "awkward_potion",
+            "healing_potion",
+            "strength_potion",
+            "fire_resistance_potion",
+            "splash_healing_potion",
+        ];
+        let mut out = Vec::new();
+        for &id in BOTTLES {
+            let mut n = 0u16;
+            for slot in &self.slots {
+                if let Some(item) = slot {
+                    if item.id == id {
+                        n = n.saturating_add(item.count);
+                    }
+                }
+            }
+            if n > 0 {
+                out.push((id, n));
+            }
+        }
+        out
+    }
+
+    /// Blaze powder count in the bar (brewing fuel).
+    pub fn brew_fuel(&self) -> u16 {
+        let mut n = 0u16;
+        for slot in &self.slots {
+            if let Some(item) = slot {
+                if item.id == "blaze_powder" {
+                    n = n.saturating_add(item.count);
+                }
+            }
+        }
+        n
+    }
+
+    /// What the next brew would produce, when [`Self::brew_target`] is ready.
+    pub fn brew_result(&self) -> Option<&'static str> {
+        if self.can_brew_splash() {
+            return Some("splash_healing_potion");
+        }
+        if self.can_brew_strength() {
+            return Some("strength_potion");
+        }
+        if self.can_brew_fire_resistance() {
+            return Some("fire_resistance_potion");
+        }
+        if self.can_finish_awkward() {
+            return Some("healing_potion");
+        }
+        let target = self.brew_target()?;
+        if target == "blaze_powder" {
+            // Water + powder only (no wart) → awkward; with wart the target is wart.
+            return Some("awkward_potion");
+        }
+        // Water + wart/flower + powder → healing.
+        Some("healing_potion")
+    }
+
+    /// Short recipe line for the brewing UI.
+    pub fn brew_recipe_label(&self) -> &'static str {
+        if self.can_brew_splash() {
+            "Healing + gravel → splash healing"
+        } else if self.can_brew_strength() {
+            "Awkward + blaze powder → strength"
+        } else if self.can_brew_fire_resistance() {
+            "Awkward + cream/tear → fire resistance"
+        } else if self.can_finish_awkward() {
+            "Awkward + wart/flower → healing"
+        } else if self.brew_target() == Some("blaze_powder") {
+            "Water + blaze powder → awkward"
+        } else if self.brew_target().is_some() {
+            "Water + wart + powder → healing"
+        } else {
+            "Add water / awkward + ingredient + fuel"
+        }
+    }
+
     /// The ingredient Enter would brew, when the mix fits on the bar.
     ///
     /// Prefer splash conversion (`healing_potion` + `gravel`). Then awkward +

@@ -21052,15 +21052,15 @@ impl State {
         self.rebuild_drops();
         self.play_world(crate::audio::Sound::Bubble, bubble_at);
         let _ = self.gui.open_brewing([bx, by, bz]);
-        self.gui.note_brew("brewed");
-        self.gui.push_chat("brewed");
+        self.gui.note_brew("ready");
         self.gui.push_chat("bubble");
         self.found_shrine = true;
         self.hotbar.install_saved(0, &[]);
+        // Leave water + wart + powder staged so the Whimscape wells show bottles,
+        // ingredient, fuel, and an armed Brew button for the UI shot.
         let _ = self.hotbar.give_stack("water_bucket");
         let _ = self.hotbar.collect("nether_wart_block");
         let _ = self.hotbar.collect("blaze_powder");
-        let _ = self.hotbar.brew_potion();
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -32334,6 +32334,18 @@ impl State {
                     if !self.found_grind {
                         self.found_grind = true;
                         self.gui.push_chat("grind");
+                    }
+                }
+            }
+            if self.gui.take_brew_bubble() {
+                if let Some(at) = self.gui.brew_at() {
+                    let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                    self.play_world(crate::audio::Sound::Bubble, source);
+                    self.drops.brew_bubbles(source);
+                    self.rebuild_drops();
+                    if !self.found_bubble {
+                        self.found_bubble = true;
+                        self.gui.push_chat("bubble");
                     }
                 }
             }
