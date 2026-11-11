@@ -75,7 +75,8 @@ impl PackSelection {
 
     pub fn load() -> Self {
         match fs::read_to_string(selection_file()) {
-            Ok(text) => parse_selection(&text).unwrap_or_default(),
+            // Strip a UTF-8 BOM so Windows-edited saves still parse.
+            Ok(text) => parse_selection(text.trim_start_matches('\u{feff}')).unwrap_or_default(),
             Err(_) => Self::default(),
         }
     }

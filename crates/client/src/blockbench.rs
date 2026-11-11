@@ -1296,6 +1296,56 @@ mod tests {
     }
 
     #[test]
+    fn pack_entity_skins_paint_piglin_villager_ghast_warden() {
+        for id in ["piglin", "villager", "ghast", "warden"] {
+            let Some(skin) = pack_entity_skin(id) else {
+                // Overlay may be off in CI; skip the paint proof when missing.
+                eprintln!("skip paint proof: {id} sheet not in overlays");
+                return;
+            };
+            assert!(
+                skin.width() >= 32 && skin.height() >= 32,
+                "{id} sheet too small"
+            );
+        }
+        let mut pig = parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/piglin.bbmodel"
+        ))
+        .expect("piglin.bbmodel");
+        pig.set_skin(pack_entity_skin("piglin").expect("piglin sheet"));
+        let pig_verts = mesh(&pig, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        assert!(
+            pig_verts.len() > 200,
+            "piglin sheet paint should emit texel quads, got {}",
+            pig_verts.len()
+        );
+
+        let mut ghast = parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/ghast.bbmodel"
+        ))
+        .expect("ghast.bbmodel");
+        ghast.set_skin(pack_entity_skin("ghast").expect("ghast sheet"));
+        let ghast_verts = mesh(&ghast, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        assert!(
+            ghast_verts.len() > 200,
+            "ghast sheet paint should emit texel quads, got {}",
+            ghast_verts.len()
+        );
+
+        let mut warden = parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/warden.bbmodel"
+        ))
+        .expect("warden.bbmodel");
+        warden.set_skin(pack_entity_skin("warden").expect("warden sheet"));
+        let warden_verts = mesh(&warden, "idle", 0.0, 0.0, [0.0, 0.0, 0.0], &[]);
+        assert!(
+            warden_verts.len() > 200,
+            "warden sheet paint should emit texel quads, got {}",
+            warden_verts.len()
+        );
+    }
+
+    #[test]
     fn an_axolotl_idle_opens_the_gills_and_a_swim_lifts_the_tail() {
         let figure = parse(include_str!(
             "../../../resourcepacks/terralite/assets/terralite/models/entity/axolotl.bbmodel"

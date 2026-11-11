@@ -1215,6 +1215,90 @@ fn zombie_figure() -> &'static crate::blockbench::Figure {
     })
 }
 
+fn piglin_figure() -> &'static crate::blockbench::Figure {
+    use std::sync::OnceLock;
+    static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
+    FIGURE.get_or_init(|| {
+        let mut figure = crate::blockbench::parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/piglin.bbmodel"
+        ))
+        .expect("piglin.bbmodel");
+        if let Some(skin) = crate::blockbench::pack_entity_skin("piglin") {
+            figure.set_skin(skin);
+        }
+        figure
+    })
+}
+
+fn villager_figure() -> &'static crate::blockbench::Figure {
+    use std::sync::OnceLock;
+    static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
+    FIGURE.get_or_init(|| {
+        let mut figure = crate::blockbench::parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/villager.bbmodel"
+        ))
+        .expect("villager.bbmodel");
+        if let Some(skin) = crate::blockbench::pack_entity_skin("villager") {
+            figure.set_skin(skin);
+        }
+        figure
+    })
+}
+
+fn ghast_figure() -> &'static crate::blockbench::Figure {
+    use std::sync::OnceLock;
+    static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
+    FIGURE.get_or_init(|| {
+        let mut figure = crate::blockbench::parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/ghast.bbmodel"
+        ))
+        .expect("ghast.bbmodel");
+        if let Some(skin) = crate::blockbench::pack_entity_skin("ghast") {
+            figure.set_skin(skin);
+        }
+        figure
+    })
+}
+
+fn warden_figure() -> &'static crate::blockbench::Figure {
+    use std::sync::OnceLock;
+    static FIGURE: OnceLock<crate::blockbench::Figure> = OnceLock::new();
+    FIGURE.get_or_init(|| {
+        let mut figure = crate::blockbench::parse(include_str!(
+            "../../../resourcepacks/terralite/assets/terralite/models/entity/warden.bbmodel"
+        ))
+        .expect("warden.bbmodel");
+        if let Some(skin) = crate::blockbench::pack_entity_skin("warden") {
+            figure.set_skin(skin);
+        }
+        figure
+    })
+}
+
+/// True when a Whimscape (or other pack) entity sheet is available for `id`.
+fn pack_entity_painted(id: &str) -> bool {
+    use std::sync::OnceLock;
+    match id {
+        "piglin" => {
+            static READY: OnceLock<bool> = OnceLock::new();
+            *READY.get_or_init(|| crate::blockbench::pack_entity_skin("piglin").is_some())
+        }
+        "villager" => {
+            static READY: OnceLock<bool> = OnceLock::new();
+            *READY.get_or_init(|| crate::blockbench::pack_entity_skin("villager").is_some())
+        }
+        "ghast" => {
+            static READY: OnceLock<bool> = OnceLock::new();
+            *READY.get_or_init(|| crate::blockbench::pack_entity_skin("ghast").is_some())
+        }
+        "warden" => {
+            static READY: OnceLock<bool> = OnceLock::new();
+            *READY.get_or_init(|| crate::blockbench::pack_entity_skin("warden").is_some())
+        }
+        other => crate::blockbench::pack_entity_skin(other).is_some(),
+    }
+}
+
 /// Sample pack entity-sheet colors for procedural box mobs when present.
 fn pack_mob_colors(id: &str, regions: &[(u32, u32, u32, u32)]) -> Option<Vec<[f32; 3]>> {
     let skin = crate::blockbench::pack_entity_skin(id)?;
@@ -5076,6 +5160,17 @@ impl Trader {
     }
 
     pub fn vertices(&self) -> Vec<Vertex> {
+        // Prefer Whimscape villager sheet paint; fall back to average-tint boxes.
+        if pack_entity_painted("villager") {
+            return crate::blockbench::mesh(
+                villager_figure(),
+                "idle",
+                self.pose,
+                self.yaw,
+                self.origin,
+                &[],
+            );
+        }
         let [x, y, z] = self.origin;
         let bob = (self.pose * 2.0).sin() * 0.02;
         let mut out = Vec::new();
@@ -5920,6 +6015,12 @@ impl Ghast {
         if self.hearts <= 0 {
             return Vec::new();
         }
+        // Prefer Whimscape ghast sheet paint; fall back to cream procedural face.
+        if pack_entity_painted("ghast") {
+            let bob = (self.swing as f32 * 0.1).sin() * 0.06;
+            let feet = [self.origin[0], self.origin[1] + bob, self.origin[2]];
+            return crate::blockbench::mesh(ghast_figure(), "idle", 0.0, 0.0, feet, &[]);
+        }
         let [x, y, z] = self.origin;
         let bob = (self.swing as f32 * 0.1).sin() * 0.06;
         // Parchment body + cool block light (avoids lantern warm-pulse dimming).
@@ -6598,6 +6699,26 @@ impl Piglin {
     pub fn vertices(&self) -> Vec<Vertex> {
         if self.hearts <= 0 {
             return Vec::new();
+        }
+        // Prefer Whimscape piglin sheet paint; fall back to average-tint boxes.
+        if pack_entity_painted("piglin") {
+            let clip = if self.hunting { "attack" } else { "idle" };
+            let mut out = crate::blockbench::mesh(
+                piglin_figure(),
+                clip,
+                self.pose,
+                self.yaw,
+                self.origin,
+                &[],
+            );
+            if self.hunting {
+                for vertex in &mut out {
+                    vertex.color[0] = (vertex.color[0] * 0.85 + 0.2).min(1.0);
+                    vertex.color[1] *= 0.75;
+                    vertex.color[2] *= 0.7;
+                }
+            }
+            return out;
         }
         let [x, y, z] = self.origin;
         let bob = (self.pose * 2.2).sin() * 0.02;
@@ -7295,6 +7416,19 @@ impl Warden {
     pub fn vertices(&self) -> Vec<Vertex> {
         if !self.alive() {
             return Vec::new();
+        }
+        // Prefer Whimscape warden sheet paint; fall back to dark procedural boxes.
+        if pack_entity_painted("warden") {
+            let bob = (self.swing as f32 * 0.14).sin() * 0.04;
+            let feet = [self.origin[0], self.origin[1] + bob, self.origin[2]];
+            return crate::blockbench::mesh(
+                warden_figure(),
+                "idle",
+                0.0,
+                self.yaw,
+                feet,
+                &[],
+            );
         }
         let [x, y, z] = self.origin;
         let bob = (self.swing as f32 * 0.14).sin() * 0.04;
