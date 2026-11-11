@@ -148,6 +148,8 @@ const CHROME_TAB: &str = "tab";
 const CHROME_TAB_SELECTED: &str = "tab_selected";
 const CHROME_BUTTON: &str = "button";
 const CHROME_BUTTON_HOT: &str = "button_highlighted";
+const CHROME_TIP_BG: &str = "tip_bg";
+const CHROME_TIP_FRAME: &str = "tip_frame";
 
 pub struct EguiHost {
     ctx: Context,
@@ -294,13 +296,13 @@ impl EguiHost {
                 );
             } else if gui.bag_open() {
                 draw_creative(ui, gui, hotbar, bag, icons);
-                draw_pinned_tip(ui, gui);
+                draw_pinned_tip(ui, gui, icons);
             } else if gui.player_inv_open() {
                 let (inv_touched, inv_crafted) =
                     draw_player_inventory(ui, gui, hotbar, bag, armor, icons);
                 touched = inv_touched;
                 crafted = inv_crafted;
-                draw_pinned_tip(ui, gui);
+                draw_pinned_tip(ui, gui, icons);
             } else if gui.trade_open() {
                 if draw_trade(ui, gui, hotbar, bag, icons) {
                     touched = true;
@@ -523,6 +525,18 @@ fn menu_button(
     selected: bool,
 ) -> egui::Response {
     let size = Vec2::new(ui.available_width().max(280.0), 34.0);
+    chrome_button(ui, icons, text, selected, size, 15.0)
+}
+
+/// Compact chrome button (settings Back / dock rows / EMI Fill·Craft).
+fn chrome_button(
+    ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
+    text: &str,
+    selected: bool,
+    size: Vec2,
+    font: f32,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let name = if selected {
@@ -546,7 +560,7 @@ fn menu_button(
                 );
             }
         } else {
-            let fill = if selected { SELECT_SOFT } else { BUTTON };
+            let fill = if selected { SELECT } else { BUTTON };
             let stroke = if selected {
                 Stroke::new(1.5, SELECT)
             } else {
@@ -557,15 +571,59 @@ fn menu_button(
             ui.painter()
                 .rect_stroke(rect, CornerRadius::same(4), stroke, StrokeKind::Outside);
         }
+        let ink = if selected {
+            Color32::from_rgb(20, 18, 12)
+        } else {
+            INK
+        };
         ui.painter().text(
             rect.center(),
             Align2::CENTER_CENTER,
             text,
-            FontId::proportional(15.0),
-            INK,
+            FontId::proportional(font),
+            ink,
         );
     }
     response
+}
+
+/// Dock / inspector / EMI CRAFTING·USES well — panel tile when present.
+/// Callers resolve `panel_tex` first so `&mut icons` stays free inside contents.
+fn chrome_well(
+    ui: &mut Ui,
+    panel_tex: Option<TextureId>,
+    fill_fallback: Color32,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    let fill = if panel_tex.is_some() {
+        Color32::from_rgba_unmultiplied(8, 9, 12, 220)
+    } else {
+        fill_fallback
+    };
+    Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, SLOT_EDGE))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(8, 8))
+        .show(ui, |ui| {
+            if let Some(tex) = panel_tex {
+                let rect = ui.max_rect();
+                ui.painter().image(
+                    tex,
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            add_contents(ui);
+        });
+}
+
+fn chrome_cached(
+    icons: &HashMap<String, TextureHandle>,
+    name: &str,
+) -> Option<TextureId> {
+    icons.get(&format!("__chrome:{name}")).map(|h| h.id())
 }
 
 fn draw_skins_screen(
@@ -1983,13 +2041,17 @@ fn draw_settings(ui: &mut Ui, menu: &mut Menu, icons: &mut HashMap<String, Textu
                     ui.horizontal(|ui| {
                         title_label(ui, "SETTINGS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            // Compact Back — menu_button would stretch full width here.
-                            let back = egui::Button::new(RichText::new("Back").size(14.0).color(INK))
-                                .fill(BUTTON)
-                                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                                .corner_radius(CornerRadius::same(4))
-                                .min_size(Vec2::new(88.0, 30.0));
-                            if ui.add(back).clicked() {
+                            // Compact Back — full-width menu_button would stretch the header.
+                            if chrome_button(
+                                ui,
+                                icons,
+                                "Back",
+                                false,
+                                Vec2::new(88.0, 30.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
                                 if let Some(back) =
                                     menu.menu_rows().iter().position(|label| label == "back")
                                 {
@@ -2027,164 +2089,140 @@ fn draw_settings(ui: &mut Ui, menu: &mut Menu, icons: &mut HashMap<String, Textu
                         ui.set_min_height(body_h);
                         // Left category dock (Godot Project Settings style).
                         // Force vertical: Frames inherit the parent horizontal row.
-                        Frame::new()
-                            .fill(TITLE_PLATE)
-                            .stroke(Stroke::new(1.0, SLOT_EDGE))
-                            .corner_radius(CornerRadius::same(4))
-                            .inner_margin(Margin::symmetric(8, 8))
-                            .show(ui, |ui| {
-                                ui.vertical(|ui| {
-                                    ui.set_width(dock_w);
-                                    ui.set_min_height(body_h);
-                                    ui.label(
-                                        RichText::new("CATEGORIES")
-                                            .size(11.0)
-                                            .color(MUTED)
-                                            .strong(),
-                                    );
-                                    ui.add_space(6.0);
-                                    egui::ScrollArea::vertical()
-                                        .id_salt("settings_dock")
-                                        .max_height(body_h - 28.0)
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            for (i, cat) in categories.iter().enumerate() {
-                                                let selected = i == cat_idx;
-                                                let fill =
-                                                    if selected { SELECT_SOFT } else { BUTTON };
-                                                let stroke = if selected {
-                                                    Stroke::new(1.5, SELECT)
-                                                } else {
-                                                    Stroke::new(1.0, SLOT_EDGE)
-                                                };
-                                                let btn = egui::Button::new(
-                                                    RichText::new(&cat.title)
-                                                        .size(14.0)
-                                                        .color(if selected {
-                                                            Color32::from_rgb(20, 18, 12)
-                                                        } else {
-                                                            INK
-                                                        })
-                                                        .strong(),
-                                                )
-                                                .fill(if selected { SELECT } else { fill })
-                                                .stroke(stroke)
-                                                .corner_radius(CornerRadius::same(3))
-                                                .min_size(Vec2::new(
-                                                    ui.available_width().max(dock_w - 16.0),
-                                                    30.0,
-                                                ));
-                                                if ui.add(btn).clicked() {
-                                                    menu.set_settings_category(i);
-                                                }
-                                                if !cat.detail.is_empty() {
-                                                    ui.label(
-                                                        RichText::new(&cat.detail)
-                                                            .size(11.0)
-                                                            .color(MUTED),
-                                                    );
-                                                    ui.add_space(4.0);
-                                                }
+                        let dock_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+                        chrome_well(ui, dock_tex, TITLE_PLATE, |ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(dock_w);
+                                ui.set_min_height(body_h);
+                                ui.label(
+                                    RichText::new("CATEGORIES")
+                                        .size(11.0)
+                                        .color(MUTED)
+                                        .strong(),
+                                );
+                                ui.add_space(6.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt("settings_dock")
+                                    .max_height(body_h - 28.0)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        for (i, cat) in categories.iter().enumerate() {
+                                            let selected = i == cat_idx;
+                                            let w = ui.available_width().max(dock_w - 16.0);
+                                            if chrome_button(
+                                                ui,
+                                                icons,
+                                                &cat.title,
+                                                selected,
+                                                Vec2::new(w, 30.0),
+                                                14.0,
+                                            )
+                                            .clicked()
+                                            {
+                                                menu.set_settings_category(i);
                                             }
-                                        });
-                                });
+                                            if !cat.detail.is_empty() {
+                                                ui.label(
+                                                    RichText::new(&cat.detail)
+                                                        .size(11.0)
+                                                        .color(MUTED),
+                                                );
+                                                ui.add_space(4.0);
+                                            }
+                                        }
+                                    });
                             });
+                        });
 
                         ui.add_space(10.0);
 
                         // Right inspector property list.
-                        Frame::new()
-                            .fill(WELL)
-                            .stroke(Stroke::new(1.0, SLOT_EDGE))
-                            .corner_radius(CornerRadius::same(4))
-                            .inner_margin(Margin::symmetric(10, 8))
-                            .show(ui, |ui| {
-                                ui.vertical(|ui| {
-                                    let inspector_w = (panel_w - dock_w - 48.0).max(280.0);
-                                    ui.set_width(inspector_w);
-                                    ui.set_min_height(body_h);
-                                    ui.horizontal(|ui| {
+                        let inspector_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+                        chrome_well(ui, inspector_tex, WELL, |ui| {
+                            ui.vertical(|ui| {
+                                let inspector_w = (panel_w - dock_w - 48.0).max(280.0);
+                                ui.set_width(inspector_w);
+                                ui.set_min_height(body_h);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(active.title.to_uppercase())
+                                            .size(15.0)
+                                            .color(DETAIL)
+                                            .strong(),
+                                    );
+                                    if !active.detail.is_empty() {
                                         ui.label(
-                                            RichText::new(active.title.to_uppercase())
-                                                .size(15.0)
-                                                .color(DETAIL)
-                                                .strong(),
+                                            RichText::new(format!("— {}", active.detail))
+                                                .size(12.0)
+                                                .color(MUTED),
                                         );
-                                        if !active.detail.is_empty() {
+                                    }
+                                });
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+
+                                let query = menu.settings_query().to_lowercase();
+                                let props: Vec<_> = active
+                                    .options
+                                    .iter()
+                                    .filter(|label| {
+                                        if query.is_empty() {
+                                            return true;
+                                        }
+                                        let name = label.to_lowercase();
+                                        let hint = menu.settings_hint(label).to_lowercase();
+                                        name.contains(&query) || hint.contains(&query)
+                                    })
+                                    .cloned()
+                                    .collect();
+
+                                egui::ScrollArea::vertical()
+                                    .id_salt("settings_inspector")
+                                    .max_height(body_h - 48.0)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        if props.is_empty() {
                                             ui.label(
-                                                RichText::new(format!("— {}", active.detail))
-                                                    .size(12.0)
+                                                RichText::new("no matching properties")
+                                                    .size(13.0)
                                                     .color(MUTED),
                                             );
                                         }
-                                    });
-                                    ui.add_space(6.0);
-                                    ui.separator();
-                                    ui.add_space(4.0);
-
-                                    let query = menu.settings_query().to_lowercase();
-                                    let props: Vec<_> = active
-                                        .options
-                                        .iter()
-                                        .filter(|label| {
-                                            if query.is_empty() {
-                                                return true;
-                                            }
-                                            let name = label.to_lowercase();
-                                            let hint = menu.settings_hint(label).to_lowercase();
-                                            name.contains(&query) || hint.contains(&query)
-                                        })
-                                        .cloned()
-                                        .collect();
-
-                                    egui::ScrollArea::vertical()
-                                        .id_salt("settings_inspector")
-                                        .max_height(body_h - 48.0)
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            if props.is_empty() {
-                                                ui.label(
-                                                    RichText::new("no matching properties")
-                                                        .size(13.0)
-                                                        .color(MUTED),
-                                                );
-                                            }
-                                            for label in props {
-                                                let Some(row_index) =
-                                                    menu.settings_row_index(&label)
-                                                else {
-                                                    continue;
+                                        for label in props {
+                                            let Some(row_index) = menu.settings_row_index(&label)
+                                            else {
+                                                continue;
+                                            };
+                                            let name = gui::title_case_label(&label);
+                                            let hint = menu.settings_hint(&label);
+                                            let control = menu.settings_control(&label);
+                                            let locked = label == "world" && menu.size_locked();
+                                            if let Some(pending) = inspector_property_row(
+                                                ui,
+                                                icons,
+                                                row_index,
+                                                &name,
+                                                &hint,
+                                                &control,
+                                                locked,
+                                            ) {
+                                                action = match pending {
+                                                    SettingsPending::Toggle(on) => {
+                                                        menu.set_settings_toggle(row_index, on)
+                                                    }
+                                                    SettingsPending::Choice(choice) => menu
+                                                        .set_settings_choice(row_index, choice),
+                                                    SettingsPending::Open => {
+                                                        menu.activate_row(row_index)
+                                                    }
                                                 };
-                                                let name = gui::title_case_label(&label);
-                                                let hint = menu.settings_hint(&label);
-                                                let control = menu.settings_control(&label);
-                                                let locked =
-                                                    label == "world" && menu.size_locked();
-                                                if let Some(pending) = inspector_property_row(
-                                                    ui,
-                                                    row_index,
-                                                    &name,
-                                                    &hint,
-                                                    &control,
-                                                    locked,
-                                                ) {
-                                                    action = match pending {
-                                                        SettingsPending::Toggle(on) => menu
-                                                            .set_settings_toggle(row_index, on),
-                                                        SettingsPending::Choice(choice) => menu
-                                                            .set_settings_choice(
-                                                                row_index, choice,
-                                                            ),
-                                                        SettingsPending::Open => {
-                                                            menu.activate_row(row_index)
-                                                        }
-                                                    };
-                                                }
-                                                ui.add_space(4.0);
                                             }
-                                        });
-                                });
+                                            ui.add_space(4.0);
+                                        }
+                                    });
                             });
+                        });
                     });
                 });
             });
@@ -2201,6 +2239,7 @@ enum SettingsPending {
 /// Inspector row: property label | control (Godot editor style).
 fn inspector_property_row(
     ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
     index: usize,
     name: &str,
     hint: &str,
@@ -2208,12 +2247,27 @@ fn inspector_property_row(
     locked: bool,
 ) -> Option<SettingsPending> {
     let mut pending = None;
+    let row_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+    let fill = if row_tex.is_some() {
+        Color32::from_rgba_unmultiplied(14, 15, 20, 230)
+    } else {
+        ROW
+    };
     Frame::new()
-        .fill(ROW)
+        .fill(fill)
         .stroke(Stroke::new(1.0, SLOT_EDGE))
         .corner_radius(CornerRadius::same(3))
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
+            if let Some(tex) = row_tex {
+                let rect = ui.max_rect();
+                ui.painter().image(
+                    tex,
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 55),
+                );
+            }
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 // Left property label column.
@@ -2288,14 +2342,16 @@ fn inspector_property_row(
                                 }
                             }
                             SettingsControl::Link { caption } => {
-                                let btn = egui::Button::new(
-                                    RichText::new(*caption).size(13.0).color(INK).strong(),
+                                if chrome_button(
+                                    ui,
+                                    icons,
+                                    caption,
+                                    false,
+                                    Vec2::new(96.0, 28.0),
+                                    13.0,
                                 )
-                                .fill(BUTTON)
-                                .stroke(Stroke::new(1.0, SELECT))
-                                .corner_radius(CornerRadius::same(3))
-                                .min_size(Vec2::new(96.0, 28.0));
-                                if ui.add(btn).clicked() {
+                                .clicked()
+                                {
                                     pending = Some(SettingsPending::Open);
                                 }
                             }
@@ -2721,7 +2777,7 @@ fn draw_creative_panel(
                                         let tip = gui::tip_for(id, None);
                                         let tex = icon_texture(ui.ctx(), icons, id);
                                         let resp = slot_button(ui, icons, tex, selected, None);
-                                        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
                                         if resp.hovered() {
                                             gui.select_emi(id);
                                         }
@@ -3101,7 +3157,7 @@ fn draw_emi_sidebar(
                                         let tip = gui::tip_for(id, None);
                                         let tex = icon_texture(ui.ctx(), icons, id);
                                         let resp = slot_button(ui, icons, tex, is_sel, None);
-                                        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                                        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
                                         if resp.clicked() {
                                             gui.select_emi(id);
                                         }
@@ -3132,127 +3188,123 @@ fn draw_emi_sidebar(
         if let Some(id) = gui.emi_selected().map(str::to_string) {
             ui.add_space(10.0);
             // CRAFTING panel — how this item is made.
-            Frame::new()
-                .fill(ROW)
-                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(Margin::symmetric(8, 8))
-                .show(ui, |ui| {
-                    ui.label(RichText::new("CRAFTING").size(13.0).color(INK).strong());
-                    ui.add_space(4.0);
-                    match gui.emi_crafting() {
-                        Some(inputs) if !inputs.is_empty() => {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                                for input in &inputs {
-                                    let tip = gui::tip_for(input, None);
-                                    let tex = icon_texture(ui.ctx(), icons, input);
-                                    let resp = slot_button(ui, icons, tex, false, None);
-                                    resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                    if resp.clicked() {
-                                        gui.select_emi(input);
-                                    }
+            let craft_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+            chrome_well(ui, craft_tex, ROW, |ui| {
+                ui.label(RichText::new("CRAFTING").size(13.0).color(INK).strong());
+                ui.add_space(4.0);
+                match gui.emi_crafting() {
+                    Some(inputs) if !inputs.is_empty() => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                            for input in &inputs {
+                                let tip = gui::tip_for(input, None);
+                                let tex = icon_texture(ui.ctx(), icons, input);
+                                let resp = slot_button(ui, icons, tex, false, None);
+                                resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                                if resp.clicked() {
+                                    gui.select_emi(input);
                                 }
-                                ui.label(RichText::new("→").size(16.0).color(DETAIL));
-                                let tip = gui::tip_for(&id, None);
-                                let tex = icon_texture(ui.ctx(), icons, &id);
-                                let resp = slot_button(ui, icons, tex, true, None);
-                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                if resp.clicked() && gui.emi_can_ghost_fill() {
+                            }
+                            ui.label(RichText::new("→").size(16.0).color(DETAIL));
+                            let tip = gui::tip_for(&id, None);
+                            let tex = icon_texture(ui.ctx(), icons, &id);
+                            let resp = slot_button(ui, icons, tex, true, None);
+                            resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                            if resp.clicked() && gui.emi_can_ghost_fill() {
+                                fill_click = true;
+                            }
+                        });
+                        if let Some(pattern) = gui.emi_pattern() {
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("shape").color(MUTED).size(11.0));
+                            egui::Grid::new("emi_pattern")
+                                .spacing([2.0, 2.0])
+                                .min_col_width(SLOT * 0.55)
+                                .show(ui, |ui| {
+                                    for (i, cell) in pattern.iter().enumerate() {
+                                        let tex = if cell.is_empty() {
+                                            None
+                                        } else {
+                                            icon_texture(ui.ctx(), icons, cell)
+                                        };
+                                        let resp = slot_button_sized(
+                                            ui,
+                                            icons,
+                                            tex,
+                                            false,
+                                            None,
+                                            SLOT * 0.55,
+                                            false,
+                                        );
+                                        if resp.clicked() && gui.emi_can_ghost_fill() {
+                                            fill_click = true;
+                                        }
+                                        if (i + 1) % 3 == 0 {
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                        }
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if gui.emi_can_ghost_fill() {
+                                if chrome_button(
+                                    ui,
+                                    icons,
+                                    "Fill",
+                                    true,
+                                    Vec2::new(72.0, 24.0),
+                                    13.0,
+                                )
+                                .clicked()
+                                {
                                     fill_click = true;
                                 }
-                            });
-                            if let Some(pattern) = gui.emi_pattern() {
-                                ui.add_space(4.0);
-                                ui.label(RichText::new("shape").color(MUTED).size(11.0));
-                                egui::Grid::new("emi_pattern")
-                                    .spacing([2.0, 2.0])
-                                    .min_col_width(SLOT * 0.55)
-                                    .show(ui, |ui| {
-                                        for (i, cell) in pattern.iter().enumerate() {
-                                            let tex = if cell.is_empty() {
-                                                None
-                                            } else {
-                                                icon_texture(ui.ctx(), icons, cell)
-                                            };
-                                            let resp = slot_button_sized(
-                                                ui,
-                                                icons,
-                                                tex,
-                                                false,
-                                                None,
-                                                SLOT * 0.55,
-                                                false,
-                                            );
-                                            if resp.clicked() && gui.emi_can_ghost_fill() {
-                                                fill_click = true;
-                                            }
-                                            if (i + 1) % 3 == 0 {
-                                                ui.end_row();
-                                            }
-                                        }
-                                    });
                             }
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                if gui.emi_can_ghost_fill() {
-                                    let fill = egui::Button::new(
-                                        RichText::new("Fill").size(13.0).color(INK),
-                                    )
-                                    .fill(SELECT_SOFT)
-                                    .stroke(Stroke::new(1.0, SELECT))
-                                    .corner_radius(CornerRadius::same(3))
-                                    .min_size(Vec2::new(72.0, 24.0));
-                                    if ui.add(fill).clicked() {
-                                        fill_click = true;
-                                    }
-                                }
-                                let craft = egui::Button::new(
-                                    RichText::new("Craft").size(13.0).color(INK),
-                                )
-                                .fill(BUTTON)
-                                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                                .corner_radius(CornerRadius::same(3))
-                                .min_size(Vec2::new(72.0, 24.0));
-                                if ui.add(craft).clicked() {
-                                    craft_click = true;
-                                }
-                            });
-                        }
-                        _ => {
-                            ui.label(RichText::new("no recipe").color(MUTED).size(12.0));
-                        }
+                            if chrome_button(
+                                ui,
+                                icons,
+                                "Craft",
+                                false,
+                                Vec2::new(72.0, 24.0),
+                                13.0,
+                            )
+                            .clicked()
+                            {
+                                craft_click = true;
+                            }
+                        });
                     }
-                });
+                    _ => {
+                        ui.label(RichText::new("no recipe").color(MUTED).size(12.0));
+                    }
+                }
+            });
 
             ui.add_space(8.0);
             // USES panel — what this item crafts into.
             let uses = gui.emi_uses();
-            Frame::new()
-                .fill(ROW)
-                .stroke(Stroke::new(1.0, SLOT_EDGE))
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(Margin::symmetric(8, 8))
-                .show(ui, |ui| {
-                    ui.label(RichText::new("USES").size(13.0).color(INK).strong());
-                    ui.add_space(4.0);
-                    if uses.is_empty() {
-                        ui.label(RichText::new("unused").color(MUTED).size(12.0));
-                    } else {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                            for result in &uses {
-                                let tip = gui::tip_for(result, None);
-                                let tex = icon_texture(ui.ctx(), icons, result);
-                                let resp = slot_button(ui, icons, tex, false, None);
-                                resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
-                                if resp.clicked() {
-                                    gui.select_emi(result);
-                                }
+            let uses_tex = chrome_texture(ui.ctx(), icons, CHROME_PANEL);
+            chrome_well(ui, uses_tex, ROW, |ui| {
+                ui.label(RichText::new("USES").size(13.0).color(INK).strong());
+                ui.add_space(4.0);
+                if uses.is_empty() {
+                    ui.label(RichText::new("unused").color(MUTED).size(12.0));
+                } else {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                        for result in &uses {
+                            let tip = gui::tip_for(result, None);
+                            let tex = icon_texture(ui.ctx(), icons, result);
+                            let resp = slot_button(ui, icons, tex, false, None);
+                            resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                            if resp.clicked() {
+                                gui.select_emi(result);
                             }
-                        });
-                    }
-                });
+                        }
+                    });
+                }
+            });
         }
     });
     if fill_click {
@@ -3378,11 +3430,12 @@ fn offhand_equip_slot(
     );
     if let Some(id) = worn_id {
         let tip = gui::tip_for(id, Some(count.max(1)));
-        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
     } else {
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
+                icons,
                 &gui::ItemTip::plain("Offhand", "empty — F swaps with selected"),
             );
         });
@@ -3409,11 +3462,12 @@ fn equip_slot(
     let resp = slot_button(ui, icons, tex, false, None);
     if let Some(id) = worn_id {
         let tip = gui::tip_for(id, Some(1));
-        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
     } else if !armor_side {
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
+                icons,
                 &gui::ItemTip::plain("Accessory", "empty — not wired yet"),
             );
         });
@@ -3421,6 +3475,7 @@ fn equip_slot(
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
+                icons,
                 &gui::ItemTip::plain("Equipment", "empty — not wired yet"),
             );
         });
@@ -3501,7 +3556,7 @@ fn draw_inv_body_grid(
                 );
                 if !id.is_empty() {
                     let tip = gui::tip_for(&id, Some(count));
-                    resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                    resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
                     if resp.hovered() {
                         gui.select_emi(&id);
                     }
@@ -3551,7 +3606,7 @@ fn draw_hotbar_row(
                 );
                 if !id.is_empty() {
                     let tip = gui::tip_for_keen(id, Some(count), hotbar.is_keen(slot));
-                    resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+                    resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
                     if resp.hovered() {
                         hover_id = Some(id.to_string());
                     }
@@ -3673,7 +3728,7 @@ fn craft_input_slot(
         } else {
             gui::tip_for(&id, Some(count))
         };
-        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
     }
     if !resp.clicked() {
         return false;
@@ -3703,11 +3758,12 @@ fn craft_out_slot(
         } else {
             gui::tip_for(id, None)
         };
-        resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
+        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
     } else {
         resp.clone().on_hover_ui(|ui| {
             show_tip(
                 ui,
+                icons,
                 &gui::ItemTip::plain("OUT", "match a recipe in the 2x2"),
             );
         });
@@ -3780,7 +3836,7 @@ fn close_button(
 }
 
 /// Cook-shot helper: park a tip in the upper-right so the plate is visible.
-fn draw_pinned_tip(ui: &mut Ui, gui: &Gui) {
+fn draw_pinned_tip(ui: &mut Ui, gui: &Gui, icons: &HashMap<String, TextureHandle>) {
     let Some(tip) = gui.pinned_tip().cloned() else {
         return;
     };
@@ -3788,19 +3844,45 @@ fn draw_pinned_tip(ui: &mut Ui, gui: &Gui) {
         .anchor(Align2::RIGHT_TOP, [-24.0, 48.0])
         .interactable(false)
         .show(ui.ctx(), |ui| {
-            show_tip(ui, &tip);
+            show_tip(ui, icons, &tip);
         });
 }
 
-fn show_tip(ui: &mut Ui, tip: &gui::ItemTip) {
-    Frame::new()
-        .fill(TIP_BG)
-        .stroke(Stroke::new(1.0, TIP_EDGE))
+fn show_tip(ui: &mut Ui, icons: &HashMap<String, TextureHandle>, tip: &gui::ItemTip) {
+    let tip_bg = chrome_cached(icons, CHROME_TIP_BG);
+    let tip_frame = chrome_cached(icons, CHROME_TIP_FRAME);
+    let fill = if tip_bg.is_some() {
+        Color32::from_rgba_unmultiplied(12, 11, 16, 240)
+    } else {
+        TIP_BG
+    };
+    let stroke = if tip_frame.is_some() {
+        Stroke::new(1.5, Color32::from_rgb(72, 58, 40))
+    } else {
+        Stroke::new(1.0, TIP_EDGE)
+    };
+    let out = Frame::new()
+        .fill(fill)
+        .stroke(stroke)
         .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
             // Keep tips compact — name / id / hint / a few stats.
             ui.set_max_width(220.0);
+            // Sample Whimscape tip plate behind the copy (content draws after).
+            if let Some(tex) = tip_bg {
+                let r = ui.max_rect();
+                let band = egui::Rect::from_min_size(
+                    r.min,
+                    Vec2::new(r.width().min(220.0), r.height().min(140.0)),
+                );
+                ui.painter().image(
+                    tex,
+                    band,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 70),
+                );
+            }
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&tip.name).size(14.0).color(INK).strong());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -3838,6 +3920,15 @@ fn show_tip(ui: &mut Ui, tip: &gui::ItemTip) {
                 }
             }
         });
+    // Whimscape tip frame is a border plate — stretch over the final tip rect.
+    if let Some(tex) = tip_frame {
+        ui.painter().image(
+            tex,
+            out.response.rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
 }
 
 fn rarity_chip(ui: &mut Ui, rarity: gui::Rarity) {
@@ -3991,6 +4082,8 @@ fn warm_chrome(ctx: &Context, icons: &mut HashMap<String, TextureHandle>) {
         CHROME_TAB_SELECTED,
         CHROME_BUTTON,
         CHROME_BUTTON_HOT,
+        CHROME_TIP_BG,
+        CHROME_TIP_FRAME,
     ] {
         let _ = chrome_texture(ctx, icons, name);
     }
