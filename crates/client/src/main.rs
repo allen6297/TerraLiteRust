@@ -341,6 +341,8 @@ struct Args {
     shot_respawn_anchor: Option<std::path::PathBuf>,
     /// Soul Speed on soul sand / soil, then quit.
     shot_soul_speed: Option<std::path::PathBuf>,
+    /// Nether pocket strider on lava, then quit.
+    shot_strider: Option<std::path::PathBuf>,
     /// Bastion remnant gold stash, then quit.
     shot_bastion_remnant: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
@@ -651,6 +653,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_gold_armor_piglin: args.shot_gold_armor_piglin,
         shot_respawn_anchor: args.shot_respawn_anchor,
         shot_soul_speed: args.shot_soul_speed,
+        shot_strider: args.shot_strider,
         shot_bastion_remnant: args.shot_bastion_remnant,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
@@ -836,6 +839,7 @@ struct App {
     shot_gold_armor_piglin: Option<std::path::PathBuf>,
     shot_respawn_anchor: Option<std::path::PathBuf>,
     shot_soul_speed: Option<std::path::PathBuf>,
+    shot_strider: Option<std::path::PathBuf>,
     shot_bastion_remnant: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -1264,6 +1268,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_soul_speed.take() {
                     state.arm_soul_speed_shot(path);
                 }
+                if let Some(path) = self.shot_strider.take() {
+                    state.arm_strider_shot(path);
+                }
                 if let Some(path) = self.shot_bastion_remnant.take() {
                     state.arm_bastion_remnant_shot(path);
                 }
@@ -1671,6 +1678,7 @@ where
         shot_gold_armor_piglin: None,
         shot_respawn_anchor: None,
         shot_soul_speed: None,
+        shot_strider: None,
         shot_bastion_remnant: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
@@ -2412,6 +2420,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-soul-speed".to_string())?;
                 parsed.shot_soul_speed = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-strider" | "--shot-lava-strider" | "--shot-strider-ride" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-strider".to_string())?;
+                parsed.shot_strider = Some(std::path::PathBuf::from(value));
             }
             "--shot-bastion-remnant" | "--shot-bastion" => {
                 let value = iter

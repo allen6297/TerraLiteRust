@@ -1641,6 +1641,9 @@ pub struct State {
     pig: crate::mobs::Pig,
     pig_buf: Option<wgpu::Buffer>,
     pig_count: u32,
+    strider: crate::mobs::Strider,
+    strider_buf: Option<wgpu::Buffer>,
+    strider_count: u32,
     horse: crate::mobs::Horse,
     horse_buf: Option<wgpu::Buffer>,
     horse_count: u32,
@@ -2864,6 +2867,9 @@ impl State {
             pig: crate::mobs::Pig::new(),
             pig_buf: None,
             pig_count: 0,
+            strider: crate::mobs::Strider::new(),
+            strider_buf: None,
+            strider_count: 0,
             horse: crate::mobs::Horse::new(),
             horse_buf: None,
             horse_count: 0,
@@ -4913,6 +4919,24 @@ impl State {
                 }),
         );
         self.pig_count = vertices.len() as u32;
+    }
+
+    fn rebuild_strider(&mut self) {
+        let vertices = self.strider.vertices();
+        if vertices.is_empty() {
+            self.strider_buf = None;
+            self.strider_count = 0;
+            return;
+        }
+        self.strider_buf = Some(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("strider"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+        );
+        self.strider_count = vertices.len() as u32;
     }
 
     fn rebuild_horse(&mut self) {
@@ -10136,6 +10160,104 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Mounted strider on a nether lava pool, then quit with a PNG.
+    pub fn arm_strider_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        // Widen the SE lava corner into a rideable pool.
+        let mut cells = Vec::new();
+        for dx in 2..=4 {
+            for dz in 2..=4 {
+                cells.push(CellChange {
+                    x: px + dx,
+                    y: fy - 1,
+                    z: pz + dz,
+                    block: Block::new("lava", 0),
+                });
+                cells.push(CellChange {
+                    x: px + dx,
+                    y: fy,
+                    z: pz + dz,
+                    block: Block::new("air", 0),
+                });
+            }
+        }
+        apply_changes(&mut self.world, &cells);
+        for dx in 2..=4 {
+            for dz in 2..=4 {
+                self.chunk_bake.touch(px + dx, pz + dz);
+            }
+        }
+
+        let at = [px as f32 + 3.5, fy as f32, pz as f32 + 3.5];
+        if !self.strider.place_at(at, &self.world) {
+            apply_changes(
+                &mut self.world,
+                &[CellChange {
+                    x: px + 3,
+                    y: fy - 1,
+                    z: pz + 3,
+                    block: Block::new("lava", 0),
+                }],
+            );
+            let _ = self.strider.place_at(at, &self.world);
+        }
+        // Show the body without mounting so cook-shot camera is not overridden by seat.
+        self.strider.dismount();
+        self.rebuild_strider();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("strider");
+        self.gui.push_chat("f to mount · wasd steers");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("warped_fungus_on_a_stick");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        // Stand on the pool rim and look down at the strider + lava.
+        let eye = glam::Vec3::new(
+            px as f32 + 2.2,
+            fy as f32 + 1.35 + body::EYE_HEIGHT,
+            pz as f32 + 2.2,
+        );
+        let focus = glam::Vec3::new(at[0], at[1] + 0.55, at[2]);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.lava_heat = 0.4;
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        self.set_capture(false);
+        let _ = self.window.focus_window();
+    }
+
     /// Soul Speed boots racing a soul-sand path, then quit with a PNG.
     pub fn arm_soul_speed_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -12645,6 +12767,34 @@ impl State {
         }
     }
 
+    fn steer_strider(&mut self, dt: f32) {
+        let (forward, right) = self.camera.walk_axes();
+        let mut wish = glam::Vec3::ZERO;
+        if self.input.forward {
+            wish += forward;
+        }
+        if self.input.back {
+            wish -= forward;
+        }
+        if self.input.right {
+            wish += right;
+        }
+        if self.input.left {
+            wish -= right;
+        }
+        if wish.length_squared() > 0.0 {
+            wish = wish.normalize() * crate::mobs::STRIDER_SPEED;
+        }
+        if self.strider.steer(dt, wish.x, wish.z, &self.world) {
+            self.rebuild_strider();
+        }
+        if let Some(seat) = self.strider.seat() {
+            self.camera.eye = glam::Vec3::from(seat);
+            self.camera.velocity_y = 0.0;
+            self.camera.on_ground = true;
+        }
+    }
+
     fn steer_horse(&mut self, dt: f32) {
         if self.horse_shot_path.is_some() {
             if let Some(seat) = self.horse.seat() {
@@ -12903,6 +13053,7 @@ impl State {
         let bodies = [
             ("sheep", self.sheep.bounds()),
             ("pig", self.pig.bounds()),
+            ("strider", self.strider.bounds()),
             ("horse", self.horse.bounds()),
             ("zombie", self.zombie.bounds()),
             ("breeze", self.breeze.bounds()),
@@ -13038,6 +13189,9 @@ impl State {
         }
         if self.pig.aimed(eye, forward) {
             return Some("pig");
+        }
+        if self.strider.aimed(eye, forward) {
+            return Some("strider");
         }
         if self.boat.aimed(eye, forward) {
             return Some("boat");
@@ -26055,6 +26209,12 @@ impl State {
                     let right = self.camera.walk_axes().1;
                     self.camera.eye += right * 1.0;
                     self.gui.push_chat("dismounted");
+                } else if self.strider.ridden() {
+                    self.strider.dismount();
+                    self.rebuild_strider();
+                    let right = self.camera.walk_axes().1;
+                    self.camera.eye += right * 1.0;
+                    self.gui.push_chat("dismounted");
                 } else if self.gui.chest_open() {
                     self.flush_chest();
                     self.gui.close_chest();
@@ -26123,6 +26283,23 @@ impl State {
                         self.camera.on_ground = true;
                     }
                     self.gui.push_chat("mounted");
+                } else if self.strider.alive()
+                    && self.strider.near([
+                        self.camera.eye.x,
+                        self.camera.eye.y,
+                        self.camera.eye.z,
+                    ])
+                    && !self.looking_at_use()
+                {
+                    if self.strider.mount() {
+                        self.rebuild_strider();
+                        if let Some(seat) = self.strider.seat() {
+                            self.camera.eye = glam::Vec3::from(seat);
+                            self.camera.velocity_y = 0.0;
+                            self.camera.on_ground = true;
+                        }
+                        self.gui.push_chat("strider");
+                    }
                 } else if !self.try_mace()
                     && !self.try_horn()
                     && !self.try_brush()
@@ -28235,12 +28412,31 @@ impl State {
     }
 
     fn note_magma(&mut self, dt: f32) {
+        // Strider riders stay cool over magma / lava.
+        if self.strider.ridden() {
+            self.magma_left = 0.0;
+            return;
+        }
         let standing = body::stands_on_magma(self.camera.eye, &self.world);
         let (left, burn) = body::cactus_poke(standing, self.magma_left, dt);
         self.magma_left = left;
         if burn {
             self.gui.push_chat("burn");
             self.hurt(1);
+        }
+    }
+
+    /// Spawn a strider on a nether-pocket lava pool once the chunk is in range.
+    fn ensure_nether_strider(&mut self) {
+        if self.strider.alive() {
+            return;
+        }
+        let (px, pz) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        // Southeast corner lava pool (matches stamp_nether_pocket).
+        let at = [px as f32 + 3.5, fy as f32, pz as f32 + 3.5];
+        if self.strider.place_at(at, &self.world) {
+            self.rebuild_strider();
         }
     }
 
@@ -28378,6 +28574,7 @@ impl State {
         self.air_peak = self.camera.eye.y;
         self.boat.dismount();
         self.pig.dismount();
+        self.strider.dismount();
         self.horse.dismount();
         self.release_plate();
         self.pose_dirty = true;
@@ -29287,6 +29484,7 @@ impl State {
         let mut obstacles = vec![
             self.sheep.bounds(),
             self.pig.bounds(),
+            self.strider.bounds(),
             self.horse.bounds(),
             self.zombie.bounds(),
             self.breeze.bounds(),
@@ -29326,6 +29524,12 @@ impl State {
             self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
         } else if self.pig.ridden() {
             self.steer_pig(dt);
+            self.sprint_asked = false;
+            self.sprint_blocked = false;
+            self.sprint_run = 0.0;
+            self.sprint_kick = (self.sprint_kick - dt * 6.0).max(0.0);
+        } else if self.strider.ridden() {
+            self.steer_strider(dt);
             self.sprint_asked = false;
             self.sprint_blocked = false;
             self.sprint_run = 0.0;
@@ -29722,11 +29926,16 @@ impl State {
                 self.rebuild_sheep();
                 self.pig.tick_near(steps, feet, &self.world);
                 self.rebuild_pig();
+                self.ensure_nether_strider();
+                self.strider.tick_near(steps, &self.world);
+                self.rebuild_strider();
             } else {
                 self.sheep_buf = None;
                 self.sheep_count = 0;
                 self.pig_buf = None;
                 self.pig_count = 0;
+                self.strider_buf = None;
+                self.strider_count = 0;
                 self.fox_buf = None;
                 self.fox_count = 0;
                 self.goat_buf = None;
@@ -30766,6 +30975,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, pig.slice(..));
                     pass.draw(0..self.pig_count, 0..1);
+                }
+            }
+            if let Some(strider) = &self.strider_buf {
+                if self.strider_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, strider.slice(..));
+                    pass.draw(0..self.strider_count, 0..1);
                 }
             }
             if let Some(horse) = &self.horse_buf {

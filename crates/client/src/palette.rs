@@ -139,6 +139,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "emerald" => [0.22, 0.72, 0.38],
         "soul_sand" => [0.42, 0.32, 0.22],
         "soul_soil" => [0.36, 0.26, 0.18],
+        "warped_fungus_on_a_stick" => [0.18, 0.62, 0.55],
         "magma" => [0.78, 0.28, 0.08],
         "lava" => [0.92, 0.32, 0.06],
         "sandstone" => [0.86, 0.72, 0.40],

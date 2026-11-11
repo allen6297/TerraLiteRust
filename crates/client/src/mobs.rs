@@ -33,6 +33,8 @@ use crate::mesh::Vertex;
 
 /// Horizontal speed while riding a pig, in blocks per second.
 pub const RIDE_SPEED: f32 = 6.0;
+/// Horizontal speed while riding a strider across lava, in blocks per second.
+pub const STRIDER_SPEED: f32 = 5.5;
 /// Horizontal speed while riding a horse, in blocks per second.
 pub const HORSE_SPEED: f32 = 9.0;
 const BOARD: f32 = 2.5;
@@ -399,6 +401,206 @@ impl Pig {
         yaw_mesh(&mut out, self.origin, self.yaw);
         out
     }
+}
+
+/// A lava-striding mount for the nether pocket. Mount with F, steer with WASD.
+pub struct Strider {
+    origin: [f32; 3],
+    yaw: f32,
+    ridden: bool,
+    alive: bool,
+}
+
+impl Strider {
+    pub fn new() -> Self {
+        Self {
+            origin: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+            ridden: false,
+            alive: false,
+        }
+    }
+
+    pub fn alive(&self) -> bool {
+        self.alive
+    }
+
+    pub fn ridden(&self) -> bool {
+        self.ridden
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    /// Place on a lava surface. False when the cell is not lava.
+    pub fn place_at(&mut self, at: [f32; 3], world: &Cluster) -> bool {
+        let Some(y) = lava_surface_y(world, at[0], at[2]) else {
+            return false;
+        };
+        self.origin = [at[0], y, at[2]];
+        self.yaw = 0.0;
+        self.ridden = false;
+        self.alive = true;
+        true
+    }
+
+    pub fn mount(&mut self) -> bool {
+        if !self.alive || self.ridden {
+            return false;
+        }
+        self.ridden = true;
+        true
+    }
+
+    pub fn dismount(&mut self) {
+        self.ridden = false;
+    }
+
+    pub fn near(&self, eye: [f32; 3]) -> bool {
+        if !self.alive {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let dx = eye[0] - x;
+        let dy = eye[1] - (y + 0.55);
+        let dz = eye[2] - z;
+        dx * dx + dy * dy + dz * dz < BOARD * BOARD
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if !self.alive {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.55, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=6.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 0.9
+    }
+
+    pub fn seat(&self) -> Option<[f32; 3]> {
+        if !self.ridden {
+            return None;
+        }
+        let [x, y, z] = self.origin;
+        Some([x, y + 0.7 + EYE_HEIGHT, z])
+    }
+
+    /// Slide across lava by `vx` / `vz`. Land without lava is refused.
+    pub fn steer(&mut self, dt: f32, vx: f32, vz: f32, world: &Cluster) -> bool {
+        if !self.ridden || !self.alive || dt <= 0.0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let mut next = self.origin;
+        let nx = x + vx * dt;
+        if let Some(ny) = lava_surface_y(world, nx, z) {
+            next[0] = nx;
+            next[1] = ny;
+        }
+        let nz = z + vz * dt;
+        if let Some(ny) = lava_surface_y(world, next[0], nz) {
+            next[2] = nz;
+            next[1] = ny;
+        }
+        let moved = next != self.origin;
+        face_box(&mut self.yaw, next[0] - x, next[2] - z);
+        // Keep y from an unused previous surface if neither axis moved.
+        let _ = y;
+        self.origin = next;
+        moved
+    }
+
+    /// Idle sway on the lava pad when not ridden.
+    pub fn tick_near(&mut self, count: u32, world: &Cluster) {
+        if !self.alive || self.ridden || count == 0 {
+            return;
+        }
+        if let Some(y) = lava_surface_y(world, self.origin[0], self.origin[2]) {
+            self.origin[1] = y;
+        }
+        self.yaw += 0.04 * count as f32;
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if !self.alive {
+            return ([0.0, -64.0, 0.0], [0.0, -64.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.45, y, z - 0.35], [x + 0.45, y + 1.15, z + 0.35])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if !self.alive {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let mut out = Vec::new();
+        // Long maroon-magenta body — reads against netherrack.
+        push_box(
+            &mut out,
+            [x, y + 0.55, z],
+            [0.52, 0.36, 0.32],
+            [0.78, 0.28, 0.42],
+        );
+        // Hair tufts.
+        push_box(
+            &mut out,
+            [x - 0.12, y + 0.98, z],
+            [0.12, 0.22, 0.12],
+            [0.92, 0.62, 0.72],
+        );
+        push_box(
+            &mut out,
+            [x + 0.18, y + 1.02, z + 0.05],
+            [0.10, 0.20, 0.10],
+            [0.88, 0.55, 0.65],
+        );
+        // Stilt legs into the lava.
+        for &(ox, oz) in &[(-0.22f32, -0.16), (0.22, -0.16), (-0.22, 0.16), (0.22, 0.16)] {
+            push_box(
+                &mut out,
+                [x + ox, y + 0.18, z + oz],
+                [0.06, 0.22, 0.06],
+                [0.45, 0.14, 0.18],
+            );
+        }
+        // Soft saddle read when mounted.
+        if self.ridden {
+            push_box(
+                &mut out,
+                [x, y + 0.82, z],
+                [0.26, 0.05, 0.18],
+                [0.35, 0.55, 0.42],
+            );
+        }
+        yaw_mesh(&mut out, self.origin, self.yaw);
+        out
+    }
+}
+
+/// Top of a lava cell under `(x, z)`, if any within a short vertical scan.
+fn lava_surface_y(world: &Cluster, x: f32, z: f32) -> Option<f32> {
+    let ix = x.floor() as i32;
+    let iz = z.floor() as i32;
+    for iy in (0..48).rev() {
+        if world.block_at(ix, iy, iz).id == "lava" {
+            return Some(iy as f32 + 1.0);
+        }
+    }
+    None
 }
 
 /// Wheat tames it; a saddle then lets you mount and gallop. A lead hitches it to a fence.
@@ -8018,6 +8220,45 @@ mod tests {
         assert_eq!(ride.origin[0], stuck);
         ride.dismount();
         assert!(ride.seat().is_none());
+    }
+
+    #[test]
+    fn a_strider_mounts_and_steers_on_lava() {
+        let mut blocks = Vec::new();
+        for z in 0..8u8 {
+            for x in 0..8u8 {
+                blocks.push((x, 0, z, Block::new("lava", 0)));
+            }
+        }
+        // Dry stone rim the strider must refuse.
+        for z in 0..8u8 {
+            blocks.push((7, 0, z, Block::new("stone", 0)));
+        }
+        let world =
+            Cluster::try_from_chunks(0, 0, [Chunk::from_blocks(0, 0, blocks).unwrap()]).unwrap();
+        let mut strider = Strider::new();
+        assert!(!strider.place_at([7.5, 0.0, 1.5], &world)); // stone rim
+        assert!(strider.place_at([1.5, 0.0, 1.5], &world));
+        assert!((strider.origin()[1] - 1.0).abs() < 1.0e-3);
+        assert!(strider.mount());
+        assert!(!strider.mount());
+        assert!(strider.seat().is_some());
+        assert!(strider.steer(0.2, STRIDER_SPEED, 0.0, &world));
+        assert!(strider.origin()[0] > 1.5);
+        let edge = strider.origin()[0];
+        // Drive toward the stone rim — should stop on lava.
+        for _ in 0..80 {
+            strider.steer(1.0 / 60.0, STRIDER_SPEED, 0.0, &world);
+        }
+        assert!(
+            strider.origin()[0] < 7.0,
+            "stayed on lava at {}",
+            strider.origin()[0]
+        );
+        assert!(strider.origin()[0] >= edge);
+        assert!(!strider.vertices().is_empty());
+        strider.dismount();
+        assert!(strider.seat().is_none());
     }
 
     #[test]

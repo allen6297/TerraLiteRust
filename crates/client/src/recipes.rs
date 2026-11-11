@@ -773,6 +773,7 @@ mod tests {
                 "trial_spawner".to_string(),
                 "tripwire".to_string(),
                 "vine".to_string(),
+                "warped_fungus_on_a_stick".to_string(),
                 "water".to_string(),
                 "wheat".to_string(),
                 "wheat_seeds".to_string(),
