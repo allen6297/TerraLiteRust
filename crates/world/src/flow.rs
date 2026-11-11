@@ -356,6 +356,16 @@ fn lamp_power(
     y: i32,
     z: i32,
 ) -> (bool, Option<(i32, i32, i32, crate::chunk::Block)>) {
+    // Adjacent redstone dust (power > 0) or a flipped lever lights the lamp.
+    for [dx, dy, dz] in POWER_NEIGHBORS {
+        let block = world.block_at(x + dx, y + dy, z + dz);
+        if block.id == "redstone_dust" && (block.metadata & 15) > 0 {
+            return (true, None);
+        }
+        if block.id == "lever" && block.metadata & 1 != 0 {
+            return (true, None);
+        }
+    }
     let mut seen = HashSet::new();
     let mut queue = Vec::new();
     seen.insert((x, y, z));

@@ -745,6 +745,7 @@ mod tests {
                 "rail".to_string(),
                 "red_nether_bricks".to_string(),
                 "red_sandstone".to_string(),
+                "redstone_dust".to_string(),
                 "respawn_anchor".to_string(),
                 "saddle".to_string(),
                 "sand".to_string(),

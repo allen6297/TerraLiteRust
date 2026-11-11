@@ -4,7 +4,7 @@
 //! exposed sides, and keeping both windings visible means a face is not lost
 //! if its triangle order is flipped.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1342,6 +1342,12 @@ pub struct State {
     piston_pulse: Vec<([i32; 3], f32)>,
     /// One tip when a piston first extends this session.
     piston_told: bool,
+    /// Button cells still feeding redstone dust: (cell, seconds left).
+    redstone_pulse: Vec<([i32; 3], f32)>,
+    /// Device cells currently considered powered by redstone.
+    redstone_powered: HashSet<[i32; 3]>,
+    /// One tip when dust first carries power this session.
+    redstone_told: bool,
     /// Pulses since the last lamp battery drain (slow charge consume).
     lamp_drain_wait: u8,
     /// Pulses until the next ember generator charge tick.
@@ -2711,6 +2717,9 @@ impl State {
             hopper_told: false,
             piston_pulse: Vec::new(),
             piston_told: false,
+            redstone_pulse: Vec::new(),
+            redstone_powered: HashSet::new(),
+            redstone_told: false,
             lamp_drain_wait: 0,
             gen_charge_wait: 0,
             compound_flow_told: false,
@@ -7131,6 +7140,7 @@ impl State {
             }
             self.power_spitters([hit.block[0], hit.block[1], hit.block[2]]);
             self.power_pistons([hit.block[0], hit.block[1], hit.block[2]], true, true);
+            self.pulse_redstone([hit.block[0], hit.block[1], hit.block[2]], true, true);
             return;
         }
         if block.id == "lever" {
@@ -22601,6 +22611,154 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+
+    /// Lever → dust run → lamp / piston / dispenser, then quit with a PNG.
+    pub fn arm_redstone_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 10) {
+            for z in (cz - 1)..=(cz + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        // Lever on → lit dust trail → lamp, piston (extended + dirt pushed), dispenser.
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("lever", 1),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 15),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 14),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 13),
+            },
+            CellChange {
+                x: cx + 4,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 12),
+            },
+            CellChange {
+                x: cx + 5,
+                y,
+                z: cz,
+                block: Block::new("lamp", 1),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz + 1,
+                block: Block::new("piston", crate::piston::with_extended(0, true)),
+            },
+            CellChange {
+                x: cx + 5,
+                y,
+                z: cz + 1,
+                block: Block::new("dirt", 0),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz - 1,
+                block: Block::new("dispenser", 5),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 1)..=(cx + 10) {
+            self.chunk_bake.touch(x, cz);
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 3.5, y as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 3.5,
+            y as f32 + 1.2 + body::EYE_HEIGHT,
+            cz as f32 - 5.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("redstone_dust");
+        let _ = self.hotbar.collect("lever");
+        let _ = self.hotbar.collect("lamp");
+        let _ = self.hotbar.collect("piston");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.redstone_told = true;
+        self.redstone_powered.insert([cx + 5, y, cz]);
+        self.redstone_powered.insert([cx + 3, y, cz + 1]);
+        self.redstone_powered.insert([cx + 3, y, cz - 1]);
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("redstone");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Piston and sticky piston mid-push with lever on, then quit with a PNG.
     pub fn arm_piston_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -29799,12 +29957,142 @@ impl State {
             self.power_spitters(at);
         }
         self.power_pistons(at, turning_on, false);
+        self.pulse_redstone(at, turning_on, false);
         let Some((cell, other)) = press_target(&self.world, at) else {
             return;
         };
         if let Some(want_open) = lever_wants(turning_on, other.metadata & 1 == 1) {
             self.lever_follow = Some((cell, want_open));
         }
+    }
+
+
+    /// Lever/button edge: update dust power and drive wire-linked devices.
+    fn pulse_redstone(&mut self, at: [i32; 3], power_on: bool, button: bool) {
+        if button && power_on {
+            self.redstone_pulse
+                .retain(|(cell, _)| *cell != at);
+            self.redstone_pulse
+                .push((at, crate::redstone::BUTTON_PULSE));
+        }
+        if !button && !power_on {
+            // Lever off — drop any stale button pulse on this cell.
+            self.redstone_pulse.retain(|(cell, _)| *cell != at);
+        }
+        self.refresh_redstone(at);
+    }
+
+    fn tick_redstone_pulse(&mut self, dt: f32) {
+        if self.redstone_pulse.is_empty() {
+            return;
+        }
+        let mut keep = Vec::new();
+        let mut expired = Vec::new();
+        let pulses = std::mem::take(&mut self.redstone_pulse);
+        for (cell, left) in pulses {
+            let next = left - dt;
+            if next <= 0.0 {
+                expired.push(cell);
+            } else {
+                keep.push((cell, next));
+            }
+        }
+        self.redstone_pulse = keep;
+        for cell in expired {
+            self.refresh_redstone(cell);
+        }
+    }
+
+    fn button_source_cells(&self) -> Vec<[i32; 3]> {
+        self.redstone_pulse.iter().map(|(cell, _)| *cell).collect()
+    }
+
+    /// Recompute dust strength near `focus` and actuate newly powered devices.
+    fn refresh_redstone(&mut self, focus: [i32; 3]) {
+        if self.told_disconnect {
+            return;
+        }
+        const RADIUS: i32 = 18;
+        let buttons = self.button_source_cells();
+        let powers =
+            crate::redstone::plan_dust_power(&self.world, focus, RADIUS, &buttons);
+        let dust_edits = crate::redstone::dust_changes(&self.world, &powers);
+        if !dust_edits.is_empty() {
+            let changes: Vec<CellChange> = dust_edits
+                .iter()
+                .map(|(at, block)| CellChange {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                    block: *block,
+                })
+                .collect();
+            self.send_places_batch(&changes);
+            if !self.redstone_told {
+                self.redstone_told = true;
+                self.gui.push_chat("redstone");
+            }
+        }
+        // Re-read powers after local apply so device scan sees lit dust.
+        let powers =
+            crate::redstone::plan_dust_power(&self.world, focus, RADIUS, &buttons);
+        let now = crate::redstone::powered_devices(
+            &self.world,
+            focus,
+            RADIUS,
+            &buttons,
+            &powers,
+        );
+        let prior = std::mem::take(&mut self.redstone_powered);
+        for cell in now.iter() {
+            let block = self.world.block_at(cell[0], cell[1], cell[2]);
+            let was = prior.contains(cell);
+            if crate::piston::is_piston(block.id) {
+                if !was {
+                    self.extend_piston(*cell);
+                }
+            } else if crate::dispenser::is_spitter(block.id) {
+                if !was {
+                    self.dispense_at(*cell);
+                }
+            } else if block.id == "lamp" {
+                if !rebuild_world::lamp_on(block.metadata) {
+                    self.set_lamp_power(*cell, true);
+                }
+            }
+        }
+        for cell in prior.iter() {
+            if now.contains(cell) {
+                continue;
+            }
+            let block = self.world.block_at(cell[0], cell[1], cell[2]);
+            if crate::piston::is_piston(block.id) {
+                self.retract_piston(*cell);
+            } else if block.id == "lamp"
+                && !crate::redstone::lamp_redstone_powered(&self.world, *cell, &buttons)
+            {
+                // Leave ember-lit lamps alone; only clear when redstone dropped.
+                // Ember tick will restore if battery/wire still feeds it.
+                self.set_lamp_power(*cell, false);
+            }
+        }
+        self.redstone_powered = now;
+    }
+
+    fn set_lamp_power(&mut self, at: [i32; 3], on: bool) {
+        if self.told_disconnect {
+            return;
+        }
+        let block = self.world.block_at(at[0], at[1], at[2]);
+        if block.id != "lamp" || rebuild_world::lamp_on(block.metadata) == on {
+            return;
+        }
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: rebuild_world::lamp_at(on),
+        }]);
     }
 
     /// Rising-edge power from a lever/button: spit from adjacent dispensers / droppers.
@@ -29871,7 +30159,7 @@ impl State {
     }
 
     fn extend_piston(&mut self, at: [i32; 3]) -> bool {
-        if self.told_disconnect || !self.pending.is_empty() {
+        if self.told_disconnect {
             return false;
         }
         let block = self.world.block_at(at[0], at[1], at[2]);
@@ -29919,7 +30207,7 @@ impl State {
     }
 
     fn retract_piston(&mut self, at: [i32; 3]) {
-        if self.told_disconnect || !self.pending.is_empty() {
+        if self.told_disconnect {
             return;
         }
         let block = self.world.block_at(at[0], at[1], at[2]);
@@ -30317,6 +30605,7 @@ impl State {
         self.tick_compound_flow(dt);
         self.tick_hoppers(dt);
         self.tick_piston_pulse(dt);
+        self.tick_redstone_pulse(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

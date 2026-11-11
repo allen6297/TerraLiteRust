@@ -175,6 +175,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "dropper" => [0.38, 0.36, 0.34],
         "piston" => [0.55, 0.52, 0.42],
         "sticky_piston" => [0.42, 0.62, 0.28],
+        "redstone_dust" => crate::redstone::tint(metadata),
         "campfire" => [0.72, 0.32, 0.08],
         "fletching_table" => [0.55, 0.38, 0.18],
         "smoker" => [0.32, 0.24, 0.18],
