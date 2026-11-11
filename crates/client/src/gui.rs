@@ -8004,6 +8004,8 @@ fn tab_of(id: &str) -> &'static str {
             | "moss_block"
             | "moss_carpet"
             | "azalea"
+            | "bamboo"
+            | "scaffolding"
             | "copper_door"
             | "copper_trapdoor"
             | "decorated_pot"

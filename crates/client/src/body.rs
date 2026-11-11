@@ -1342,6 +1342,8 @@ fn for_solids(bounds: &Aabb, world: &Cluster, extra: &[Aabb], mut visit: impl Fn
                     || block.id == "flower_pot"
                     || block.id == "cobweb"
                     || block.id == "sugar_cane"
+                    || block.id == "bamboo"
+                    || block.id == "scaffolding"
                     || block.id == "wheat_crop"
                     || block.id == "chorus_plant"
                     || block.id == "chorus_flower"
@@ -1465,7 +1467,7 @@ fn touches_climb(body: &Aabb, world: &Cluster) -> bool {
         for z in z0..=z1 {
             for x in x0..=x1 {
                 let id = world.block_at(x, y, z).id;
-                if id == "ladder" || id == "vine" {
+                if id == "ladder" || id == "vine" || id == "scaffolding" {
                     return true;
                 }
             }

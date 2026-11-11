@@ -206,6 +206,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "budding_amethyst" | "amethyst_block" | "small_amethyst_bud" | "medium_amethyst_bud" | "amethyst_cluster" | "tinted_glass" | "amethyst_shard" => crate::amethyst::tint(id),
         "dripstone_block" | "pointed_dripstone" => crate::dripstone::tint(id),
         "moss_block" | "moss_carpet" | "azalea" => crate::moss::tint(id),
+        "bamboo" | "scaffolding" => crate::bamboo::tint(id),
         "slimeball" => [0.42, 0.78, 0.36],
         "arrow" => [0.62, 0.58, 0.42],
         "raw" => [0.72, 0.40, 0.36],

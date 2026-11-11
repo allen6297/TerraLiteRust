@@ -1358,6 +1358,12 @@ pub struct State {
     dripstone_told: bool,
     /// One tip when moss bone meal first spreads this session.
     moss_told: bool,
+    /// Seconds until the next nearby bamboo growth roll.
+    bamboo_grow_wait: f32,
+    /// One tip when bamboo grows or scaffolding cascades this session.
+    bamboo_told: bool,
+    /// Suppress scaffolding cascade while applying cascade breaks.
+    scaffold_cascade: u8,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
     /// Comparator front signal strengths from the last refresh.
@@ -2751,6 +2757,9 @@ impl State {
             dripstone_wait: crate::dripstone::DRIP_PERIOD,
             dripstone_told: false,
             moss_told: false,
+            bamboo_grow_wait: crate::bamboo::GROW_PERIOD,
+            bamboo_told: false,
+            scaffold_cascade: 0,
             redstone_delay: Vec::new(),
             comparator_out: std::collections::HashMap::new(),
             observer_pulse: Vec::new(),
@@ -9646,6 +9655,75 @@ impl State {
         }
     }
 
+
+    fn tick_bamboo_grow(&mut self, dt: f32) {
+        if self.told_disconnect {
+            return;
+        }
+        self.bamboo_grow_wait -= dt;
+        if self.bamboo_grow_wait > 0.0 {
+            return;
+        }
+        self.bamboo_grow_wait = crate::bamboo::GROW_PERIOD;
+        let focus = [
+            self.camera.eye.x.floor() as i32,
+            self.camera.eye.y.floor() as i32,
+            self.camera.eye.z.floor() as i32,
+        ];
+        let Some((at, next)) =
+            crate::bamboo::plan_grow(&self.world, focus, crate::bamboo::GROW_RADIUS)
+        else {
+            return;
+        };
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: next,
+        }]);
+        if !self.bamboo_told {
+            self.bamboo_told = true;
+            self.gui.push_chat("bamboo");
+        }
+    }
+
+    /// Place scaffolding atop an existing tower when looking at scaffolding.
+    fn try_scaffold_place(&mut self) -> bool {
+        let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
+            return false;
+        };
+        if !crate::bamboo::is_scaffolding(id) {
+            return false;
+        }
+        let Some(hit) = look::raycast(self.camera.eye, self.camera.forward(), &self.world) else {
+            return false;
+        };
+        let Some(at) = crate::bamboo::plan_scaffold_place(&self.world, hit.block) else {
+            return false;
+        };
+        if !self.pending.is_empty() {
+            return true;
+        }
+        let slot = self.hotbar.selected();
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        self.send_edit(
+            encode_place(
+                at[0],
+                at[1],
+                at[2],
+                Block::new("scaffolding", 0),
+                PlayerBox { min, max },
+            ),
+            TAG_PLACE,
+            Some(slot),
+        );
+        if !self.bamboo_told {
+            self.bamboo_told = true;
+            self.gui.push_chat("scaffold");
+        }
+        true
+    }
+
     /// Till dirt or grass into farmland with a hoe. True when holding a hoe.
     fn try_till(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
@@ -9830,6 +9908,30 @@ impl State {
             self.drops.puff(mote, [0.72, 0.82, 0.32]);
             self.rebuild_drops();
             self.gui.push_chat(if next >= 3 { "ripe" } else { "grow" });
+            return true;
+        }
+        if crate::bamboo::is_bamboo(block.id) {
+            let Some((at, next)) = crate::bamboo::plan_fertilize(&self.world, hit.block) else {
+                self.gui.push_chat("tall");
+                return true;
+            };
+            let slot = self.hotbar.selected();
+            self.hotbar.consume_at(slot);
+            self.send_places_batch(&[CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block: next,
+            }]);
+            let mote = [at[0] as f32 + 0.5, at[1] as f32 + 0.35, at[2] as f32 + 0.5];
+            self.drops.puff(mote, [0.45, 0.85, 0.38]);
+            self.rebuild_drops();
+            self.hotbar_dirty = true;
+            self.gui.push_chat("grow");
+            if !self.bamboo_told {
+                self.bamboo_told = true;
+                self.gui.push_chat("bamboo");
+            }
             return true;
         }
         if block.id != "sugar_cane" {
@@ -14174,6 +14276,7 @@ impl State {
             || self.try_fertilize()
             || self.try_wax_copper()
             || self.try_scrape_copper()
+            || self.try_scaffold_place()
         {
             return;
         }
@@ -14496,6 +14599,21 @@ impl State {
                 }
                 self.drops.spawn("wheat_seeds", cell_at, remains);
                 self.rebuild_drops();
+            }
+            if crate::bamboo::is_scaffolding(before.id) && self.scaffold_cascade == 0 {
+                let cascade =
+                    crate::bamboo::plan_cascade(&self.world, [cell.x, cell.y, cell.z]);
+                if !cascade.is_empty() {
+                    self.scaffold_cascade = 1;
+                    for at in &cascade {
+                        self.send_edit(encode_break(at[0], at[1], at[2]), TAG_BREAK, None);
+                    }
+                    self.scaffold_cascade = 0;
+                    if !self.bamboo_told {
+                        self.bamboo_told = true;
+                    }
+                    self.gui.push_chat("cascade");
+                }
             }
             if before.id == "beehive" && self.hotbar.slot(self.hotbar.selected()).is_none() {
                 self.bee.anger();
@@ -23658,6 +23776,125 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+
+    pub fn arm_bamboo_scaffolding_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.38);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let floor = ground + 1;
+        let y = floor + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 2)..=(cx + 5) {
+            for z in (cz - 2)..=(cz + 2) {
+                changes.push(CellChange {
+                    x,
+                    y: floor,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+                for dy in 1..=6 {
+                    changes.push(CellChange {
+                        x,
+                        y: y + dy,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        // Bamboo stalks
+        for &(dx, h) in &[(0, 3), (1, 5), (-1, 2)] {
+            for yy in 0..h {
+                changes.push(CellChange {
+                    x: cx + dx,
+                    y: y + yy,
+                    z: cz,
+                    block: Block::new("bamboo", 0),
+                });
+            }
+        }
+        // Scaffolding tower
+        for yy in 0..5 {
+            changes.push(CellChange {
+                x: cx + 3,
+                y: y + yy,
+                z: cz,
+                block: Block::new("scaffolding", 0),
+            });
+        }
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 2)..=(cx + 5) {
+            for z in (cz - 2)..=(cz + 2) {
+                self.chunk_bake.touch(x, z);
+            }
+        }
+
+        let focus = glam::Vec3::new(cx as f32 + 1.5, y as f32 + 2.2, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 1.2,
+            y as f32 + 1.6 + body::EYE_HEIGHT,
+            cz as f32 - 5.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bamboo");
+        let _ = self.hotbar.give_stack("scaffolding");
+        let _ = self.hotbar.collect("bone_meal");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.bamboo_told = true;
+        self.bamboo_grow_wait = crate::bamboo::GROW_PERIOD;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("bamboo");
+        self.gui.push_chat("scaffold");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Dirt update face → observer (pulsing) → dust → lamp, then quit.
     pub fn arm_observer_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -32567,6 +32804,7 @@ impl State {
         self.tick_copper_oxide(dt);
         self.tick_amethyst_grow(dt);
         self.tick_dripstone(dt);
+        self.tick_bamboo_grow(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

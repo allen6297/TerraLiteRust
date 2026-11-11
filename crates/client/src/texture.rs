@@ -497,6 +497,8 @@ mod tests {
             "assets/terralite/textures/moss_block.png",
             "assets/terralite/textures/moss_carpet.png",
             "assets/terralite/textures/azalea.png",
+            "assets/terralite/textures/bamboo.png",
+            "assets/terralite/textures/scaffolding.png",
             "assets/terralite/textures/decorated_pot.png",
             "assets/terralite/textures/copper_grate.png",
             "assets/terralite/textures/copper_door.png",

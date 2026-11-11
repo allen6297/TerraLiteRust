@@ -614,6 +614,8 @@ mod tests {
                 "moss_block".to_string(),
                 "moss_carpet".to_string(),
                 "azalea".to_string(),
+                "bamboo".to_string(),
+                "scaffolding".to_string(),
 
                 "copper_chest".to_string(),
                 "copper_door".to_string(),
