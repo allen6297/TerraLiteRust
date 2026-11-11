@@ -5493,6 +5493,303 @@ impl Blaze {
     }
 }
 
+/// Nether pocket piglin — gold-ingot barter, angry when struck.
+pub const PIGLIN_PAD: (i32, i32) = rebuild_world::NETHER_PIGLIN;
+
+const PIGLIN_HEARTS: i32 = 8;
+const PIGLIN_REACH: f32 = 1.4;
+const PIGLIN_STEP: f32 = 0.1;
+const PIGLIN_SWING_EVERY: u32 = 24;
+const PIGLIN_HUNT: f32 = 12.0;
+
+/// Loot a gold ingot buys from a calm piglin.
+pub const PIGLIN_BARTER: &[&str] = &[
+    "ender_pearl",
+    "gravel",
+    "leather_cap",
+    "soul_sand",
+    "quartz",
+    "blackstone",
+    "nether_bricks",
+    "fire_charge",
+    "obsidian",
+    "iron_ore",
+];
+
+/// Gold-hungry piglin that barters when calm and melee-chases when angry.
+pub struct Piglin {
+    origin: [f32; 3],
+    home: [f32; 3],
+    yaw: f32,
+    pose: f32,
+    swing: u32,
+    hearts: i32,
+    down: f32,
+    loose: u32,
+    angry: bool,
+    roll: u32,
+}
+
+impl Piglin {
+    pub fn new() -> Self {
+        let (x, z) = PIGLIN_PAD;
+        let floor = f32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        let home = [x as f32 + 0.5, floor, z as f32 + 0.5];
+        Self {
+            origin: home,
+            home,
+            yaw: std::f32::consts::PI * 0.75,
+            pose: 0.0,
+            swing: 0,
+            hearts: PIGLIN_HEARTS,
+            down: 0.0,
+            loose: 0,
+            angry: false,
+            roll: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    pub fn angry(&self) -> bool {
+        self.angry
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = PIGLIN_HEARTS;
+        self.down = 0.0;
+        self.swing = 0;
+        self.loose = 0;
+        self.angry = false;
+    }
+
+    /// Spend one gold for the next barter roll. `None` when angry or dead.
+    pub fn barter(&mut self) -> Option<&'static str> {
+        if self.angry || self.hearts <= 0 || PIGLIN_BARTER.is_empty() {
+            return None;
+        }
+        let id = PIGLIN_BARTER[self.roll as usize % PIGLIN_BARTER.len()];
+        self.roll = self.roll.wrapping_add(1);
+        Some(id)
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.95, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=5.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 1.0
+    }
+
+    /// Spend hearts and turn angry. True when this hit drops the piglin.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.angry = true;
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.down = 8.0;
+        true
+    }
+
+    /// Return home calm after a knockdown. True on the frame it rises.
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if self.hearts > 0 {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.hearts = PIGLIN_HEARTS;
+        self.origin = self.home;
+        self.swing = 0;
+        self.down = 0.0;
+        self.loose = 0;
+        self.angry = false;
+        true
+    }
+
+    pub fn bump(&mut self, from: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        bump_origin(&mut self.origin, &mut self.loose, from)
+    }
+
+    /// Idle bob when calm; chase and swing when angry. True on a melee hit.
+    pub fn tick_near(
+        &mut self,
+        count: u32,
+        player: [f32; 2],
+        clear: bool,
+        world: &Cluster,
+    ) -> bool {
+        if self.loose > 0 {
+            self.loose = self.loose.saturating_sub(count);
+            return false;
+        }
+        if self.hearts <= 0 {
+            return false;
+        }
+        let mut hit = false;
+        for _ in 0..count {
+            self.pose += 0.05;
+            settle_land(&mut self.origin, world);
+            let dx = player[0] - self.origin[0];
+            let dz = player[1] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            if !self.angry {
+                if dist < 8.0 {
+                    face_forward(&mut self.yaw, dx, dz);
+                }
+                continue;
+            }
+            if dist > PIGLIN_HUNT {
+                continue;
+            }
+            let feet_y = self.origin[1].floor() as i32;
+            if dist > PIGLIN_REACH {
+                let from = [self.origin[0], self.origin[2]];
+                if let Some(next) =
+                    land_step(world, from, player, PIGLIN_STEP.min(dist - PIGLIN_REACH), feet_y, 2)
+                {
+                    face_forward(&mut self.yaw, next[0] - from[0], next[1] - from[1]);
+                    self.origin[0] = next[0];
+                    self.origin[2] = next[1];
+                }
+            } else if clear {
+                face_forward(&mut self.yaw, dx, dz);
+                self.swing = self.swing.wrapping_add(1);
+                if self.swing % PIGLIN_SWING_EVERY == 0 {
+                    hit = true;
+                }
+            }
+            settle_land(&mut self.origin, world);
+        }
+        hit
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if self.hearts <= 0 {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 0.32, y, z - 0.32], [x + 0.32, y + 1.9, z + 0.32])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let bob = (self.pose * 2.2).sin() * 0.02;
+        let hide = if self.angry {
+            [0.62, 0.32, 0.28]
+        } else {
+            [0.72, 0.48, 0.38]
+        };
+        let cloth = [0.28, 0.22, 0.18];
+        let snout = [0.78, 0.42, 0.36];
+        let ear = [0.55, 0.28, 0.24];
+        let mut out = Vec::new();
+        // Legs.
+        push_box(
+            &mut out,
+            [x - 0.12, y + 0.4 + bob, z],
+            [0.1, 0.4, 0.1],
+            hide,
+        );
+        push_box(
+            &mut out,
+            [x + 0.12, y + 0.4 + bob, z],
+            [0.1, 0.4, 0.1],
+            hide,
+        );
+        // Body + belt.
+        push_box(
+            &mut out,
+            [x, y + 1.0 + bob, z],
+            [0.28, 0.38, 0.18],
+            hide,
+        );
+        push_box(
+            &mut out,
+            [x, y + 0.78 + bob, z],
+            [0.3, 0.06, 0.2],
+            cloth,
+        );
+        // Arms.
+        let reach = if self.angry { 0.22 } else { 0.06 };
+        push_box(
+            &mut out,
+            [x - 0.36, y + 1.0 + bob, z + reach],
+            [0.08, 0.32, 0.08],
+            hide,
+        );
+        push_box(
+            &mut out,
+            [x + 0.36, y + 1.0 + bob, z + reach],
+            [0.08, 0.32, 0.08],
+            hide,
+        );
+        // Head + snout + ears.
+        push_box(
+            &mut out,
+            [x, y + 1.52 + bob, z],
+            [0.24, 0.22, 0.22],
+            hide,
+        );
+        push_box(
+            &mut out,
+            [x, y + 1.42 + bob, z + 0.24],
+            [0.1, 0.08, 0.1],
+            snout,
+        );
+        push_box(
+            &mut out,
+            [x - 0.22, y + 1.68 + bob, z],
+            [0.06, 0.12, 0.04],
+            ear,
+        );
+        push_box(
+            &mut out,
+            [x + 0.22, y + 1.68 + bob, z],
+            [0.06, 0.12, 0.04],
+            ear,
+        );
+        yaw_mesh(&mut out, self.origin, self.yaw);
+        out
+    }
+}
+
 /// Fortress corridor pad — stands on [`rebuild_world::NETHER_FORTRESS`].
 pub const WITHER_SKELETON_PAD: (i32, i32) = rebuild_world::NETHER_FORTRESS;
 
@@ -6565,6 +6862,34 @@ mod tests {
         assert!(!guard.alive());
         assert!(guard.rest(10.0));
         assert!(guard.alive());
+    }
+
+    #[test]
+    #[test]
+    fn a_piglin_barters_gold_then_angers_when_struck() {
+        let mut piglin = Piglin::new();
+        assert_eq!(
+            (
+                piglin.origin()[0].floor() as i32,
+                piglin.origin()[2].floor() as i32
+            ),
+            PIGLIN_PAD
+        );
+        assert!(!piglin.angry());
+        assert!(!piglin.vertices().is_empty());
+        let first = piglin.barter().expect("calm barter");
+        assert!(PIGLIN_BARTER.contains(&first));
+        let second = piglin.barter().expect("second barter");
+        assert_ne!(first, second);
+        assert!(!piglin.hurt(1));
+        assert!(piglin.angry());
+        assert!(piglin.barter().is_none());
+        assert!(piglin.hurt(PIGLIN_HEARTS));
+        assert!(!piglin.alive());
+        assert!(piglin.rest(10.0));
+        assert!(piglin.alive());
+        assert!(!piglin.angry());
+        assert!(piglin.barter().is_some());
     }
 
     #[test]

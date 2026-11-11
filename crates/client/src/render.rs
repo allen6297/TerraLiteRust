@@ -1680,6 +1680,11 @@ pub struct State {
     fireballs: crate::fireballs::Fireballs,
     /// Hand over a blaze rod once inventory has room.
     blaze_due: bool,
+    piglin: crate::mobs::Piglin,
+    piglin_buf: Option<wgpu::Buffer>,
+    piglin_count: u32,
+    /// Once: found the nether pocket piglin.
+    found_piglin: bool,
     guardian: crate::mobs::Guardian,
     guardian_buf: Option<wgpu::Buffer>,
     guardian_count: u32,
@@ -2888,6 +2893,10 @@ impl State {
             blaze_count: 0,
             fireballs: crate::fireballs::Fireballs::new(),
             blaze_due: false,
+            piglin: crate::mobs::Piglin::new(),
+            piglin_buf: None,
+            piglin_count: 0,
+            found_piglin: false,
             guardian: crate::mobs::Guardian::new(),
             guardian_buf: None,
             guardian_count: 0,
@@ -3000,6 +3009,7 @@ impl State {
         state.rebuild_trader();
         state.rebuild_iron_golem();
         state.rebuild_blaze();
+        state.rebuild_piglin();
         state.rebuild_guardian();
         state.rebuild_wither();
         state.rebuild_wither_boss();
@@ -5138,6 +5148,23 @@ impl State {
         self.blaze_count = vertices.len() as u32;
     }
 
+    fn rebuild_piglin(&mut self) {
+        let vertices = self.piglin.vertices();
+        if vertices.is_empty() {
+            self.piglin_buf = None;
+            self.piglin_count = 0;
+            return;
+        }
+        self.piglin_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("piglin"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.piglin_count = vertices.len() as u32;
+    }
+
     fn rebuild_guardian(&mut self) {
         let vertices = self.guardian.vertices();
         if vertices.is_empty() {
@@ -5721,21 +5748,29 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && self.blaze.aimed(eye, forward);
+        let piglin_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && self.piglin.aimed(eye, forward);
         let guardian_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !piglin_aimed
             && self.guardian.aimed(eye, forward);
         let wither_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !piglin_aimed
             && !guardian_aimed
             && self.wither.aimed(eye, forward);
         let wither_boss_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
             && self.wither_boss.aimed(eye, forward);
@@ -5743,6 +5778,7 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
             && !wither_boss_aimed
@@ -5751,6 +5787,7 @@ impl State {
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
+            && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
             && !wither_boss_aimed
@@ -5760,6 +5797,7 @@ impl State {
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || piglin_aimed
             || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
@@ -5816,6 +5854,14 @@ impl State {
         let dropped_blaze = blaze_aimed && {
             let origin = self.blaze.origin();
             let dropped = self.hurt_mob("blaze", amount, origin, |s, n| s.blaze.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
+        let dropped_piglin = piglin_aimed && {
+            let origin = self.piglin.origin();
+            let dropped = self.hurt_mob("piglin", amount, origin, |s, n| s.piglin.hurt(n));
             if dropped {
                 xp_at = Some(origin);
             }
@@ -5880,6 +5926,7 @@ impl State {
             || night_index.is_some()
             || breeze_aimed
             || blaze_aimed
+            || piglin_aimed
             || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
@@ -5890,6 +5937,7 @@ impl State {
             || dropped_night
             || dropped_breeze
             || dropped_blaze
+            || dropped_piglin
             || dropped_guardian
             || dropped_wither
             || dropped_wither_boss
@@ -5934,6 +5982,9 @@ impl State {
         if dropped_blaze {
             self.grant_blaze_rod();
         }
+        if dropped_piglin {
+            self.gui.push_chat("angry");
+        }
         if dropped_guardian {
             self.grant_guardian_loot();
         }
@@ -5955,6 +6006,7 @@ impl State {
         self.rebuild_zombie();
         self.rebuild_breeze();
         self.rebuild_blaze();
+        self.rebuild_piglin();
         self.rebuild_guardian();
         self.rebuild_wither();
         self.rebuild_wither_boss();
@@ -6540,6 +6592,27 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_blaze();
+                return true;
+            }
+            let piglin = self.piglin.origin();
+            let (pmin, pmax) = self.piglin.bounds();
+            if point_in_box(tip, pmin, pmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("piglin", amount, piglin, |s, n| s.piglin.hurt(n));
+                if dropped {
+                    self.grant_xp_at(piglin, true);
+                }
+                self.gui.push_chat(if dropped {
+                    "down"
+                } else if self.piglin.angry() {
+                    "angry"
+                } else {
+                    "hit"
+                });
+                self.rebuild_piglin();
                 return true;
             }
             let guardian = self.guardian.origin();
@@ -7352,6 +7425,12 @@ impl State {
         {
             self.found_debris = true;
             self.gui.push_chat("ancient debris");
+        }
+        if !self.found_piglin
+            && near(rebuild_world::NETHER_PIGLIN.0, rebuild_world::NETHER_PIGLIN.1)
+        {
+            self.found_piglin = true;
+            self.gui.push_chat("a piglin");
         }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
@@ -8814,6 +8893,16 @@ impl State {
                         self.rebuild_blaze();
                         hit = true;
                     }
+                    let piglin = self.piglin.origin();
+                    if crate::splash::in_radius(burst.center, piglin) {
+                        let dropped =
+                            self.hurt_mob("piglin", amount, piglin, |s, n| s.piglin.hurt(n));
+                        if dropped {
+                            self.grant_xp_at(piglin, true);
+                        }
+                        self.rebuild_piglin();
+                        hit = true;
+                    }
                     let guardian = self.guardian.origin();
                     if crate::splash::in_radius(burst.center, guardian) {
                         let dropped = self.hurt_mob("guardian", amount, guardian, |s, n| {
@@ -9886,6 +9975,73 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(sx + dx * 8, sz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Nether pocket piglin mid-barter for gold, then quit with a PNG.
+    pub fn arm_piglin_barter_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::NETHER_PIGLIN;
+        let floor = f32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        self.piglin
+            .place_at([px as f32 + 0.5, floor, pz as f32 + 0.5]);
+        let _ = self.piglin.tick_near(6, [px as f32 - 1.5, pz as f32 + 0.5], true, &self.world);
+        self.rebuild_piglin();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.found_piglin = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a piglin");
+        self.gui.push_chat("barter");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("gold_ingot");
+        let _ = self.hotbar.collect("gold_ingot");
+        let _ = self.hotbar.select_digit(1);
+        if let Some(loot) = self.piglin.barter() {
+            let _ = self.hotbar.collect(loot);
+            let tip = match loot {
+                "ender_pearl" => "ender pearl",
+                "leather_cap" => "leather",
+                other => other,
+            };
+            self.gui.push_chat(tip);
+        }
+        self.hotbar_dirty = true;
+
+        let [ox, oy, oz] = self.piglin.origin();
+        let focus = glam::Vec3::new(ox, oy + 1.1, oz);
+        let eye = glam::Vec3::new(ox - 2.2, oy + 0.45 + body::EYE_HEIGHT, oz + 1.6);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -11052,6 +11208,52 @@ impl State {
         self.gui.open_trade(self.trader.stock());
         self.set_capture(false);
         self.gui.push_chat("trades");
+        true
+    }
+
+    /// Right-click a calm piglin while holding a gold ingot to barter.
+    fn try_piglin(&mut self) -> bool {
+        let eye = [self.camera.eye.x, self.camera.eye.y, self.camera.eye.z];
+        let forward = self.camera.forward();
+        let forward = [forward.x, forward.y, forward.z];
+        if !self.piglin.aimed(eye, forward) {
+            return false;
+        }
+        if self.piglin.angry() {
+            self.gui.push_chat("angry");
+            return true;
+        }
+        let Some(held) = self.hotbar.slot(self.hotbar.selected()) else {
+            self.gui.push_chat("need gold");
+            return true;
+        };
+        if held != "gold_ingot" {
+            self.gui.push_chat("need gold");
+            return true;
+        }
+        let Some(loot) = self.piglin.barter() else {
+            self.gui.push_chat("angry");
+            return true;
+        };
+        self.hotbar.consume_selected();
+        if !self.hotbar.collect(loot) {
+            self.bag.collect(loot);
+            self.bag_dirty = true;
+        }
+        self.hotbar_dirty = true;
+        self.found_piglin = true;
+        let tip = match loot {
+            "ender_pearl" => "ender pearl",
+            "leather_cap" => "leather",
+            "soul_sand" => "soul sand",
+            "nether_bricks" => "nether bricks",
+            "fire_charge" => "fire charge",
+            "iron_ore" => "iron ore",
+            other => other,
+        };
+        self.gui.push_chat("barter");
+        self.gui.push_chat(tip);
+        self.rebuild_piglin();
         true
     }
 
@@ -12343,6 +12545,7 @@ impl State {
             ("zombie", self.zombie.bounds()),
             ("breeze", self.breeze.bounds()),
             ("blaze", self.blaze.bounds()),
+            ("piglin", self.piglin.bounds()),
             ("wither_skeleton", self.wither.bounds()),
             ("wither", self.wither_boss.bounds()),
             ("ender_dragon", self.dragon.bounds()),
@@ -12437,6 +12640,9 @@ impl State {
         }
         if self.blaze.aimed(eye, forward) {
             return Some("blaze");
+        }
+        if self.piglin.aimed(eye, forward) {
+            return Some("piglin");
         }
         if self.guardian.aimed(eye, forward) {
             return Some("guardian");
@@ -12631,6 +12837,7 @@ impl State {
             || self.try_axolotl()
             || self.try_chicken()
             || self.try_trader()
+            || self.try_piglin()
             || self.try_parrot()
             || self.try_cat()
             || self.try_wolf()
@@ -29204,6 +29411,25 @@ impl State {
             }
             self.rebuild_blaze();
             {
+                let feet = [self.camera.eye.x, self.camera.eye.z];
+                let from = [
+                    self.piglin.origin()[0],
+                    self.piglin.origin()[1] + 0.9,
+                    self.piglin.origin()[2],
+                ];
+                let clear = look::clear_between(from, eye3, &self.world);
+                if self.piglin.tick_near(steps, feet, clear, &self.world) {
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                    self.apply_damage(amount);
+                    self.gui.push_chat(if blocked { "block" } else { "slash" });
+                }
+                if self.piglin.rest(dt) {
+                    self.rebuild_piglin();
+                }
+                self.rebuild_piglin();
+            }
+            {
                 let from = [
                     self.guardian.origin()[0],
                     self.guardian.origin()[1] + 0.55,
@@ -30189,6 +30415,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, blaze.slice(..));
                     pass.draw(0..self.blaze_count, 0..1);
+                }
+            }
+            if let Some(piglin) = &self.piglin_buf {
+                if self.piglin_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, piglin.slice(..));
+                    pass.draw(0..self.piglin_count, 0..1);
                 }
             }
             if let Some(guardian) = &self.guardian_buf {

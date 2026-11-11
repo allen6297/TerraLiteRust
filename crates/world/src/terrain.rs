@@ -467,6 +467,9 @@ pub const NETHER_DEBRIS: (i32, i32) = (NETHER_PAD.0 + 2, NETHER_PAD.1 + 2);
 /// Second debris vein west of the pad for a rare read.
 pub const NETHER_DEBRIS_B: (i32, i32) = (NETHER_PAD.0 - 2, NETHER_PAD.1 - 1);
 
+/// Piglin pad inside the nether pocket — gold-ingot barter stub.
+pub const NETHER_PIGLIN: (i32, i32) = (NETHER_PAD.0 + 3, NETHER_PAD.1 + 1);
+
 const PORTAL_CHUNK: (i32, i32) = (-2, -2);
 const NETHER_CHUNK: (i32, i32) = (-2, -3);
 
