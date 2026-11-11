@@ -1341,17 +1341,42 @@ impl Hotbar {
         "brewed"
     }
 
-    /// Take enchants off the selected pick and give it four uses back.
+    /// How many enchants the selected tool carries (for grindstone XP refund).
+    pub fn enchant_count(&self, index: usize) -> i32 {
+        let Some(item) = self.item(index) else {
+            return 0;
+        };
+        let mut n = 0;
+        if item.keen {
+            n += 1;
+        }
+        if item.sturdy {
+            n += 1;
+        }
+        if item.lucky {
+            n += 1;
+        }
+        n
+    }
+
+    /// True when the selected tool has at least one enchant to strip.
+    pub fn can_disenchant(&self) -> bool {
+        self.enchant_count(self.selected) > 0
+    }
+
+    /// Take enchants off the selected tool and give it four uses back.
     ///
-    /// `"ground"` clears an enchanted pick. `"sharpened"` is a plain worn pick.
-    /// `"plain"` is a fresh unenchanted pick. `"need a pick"` is anything else.
+    /// `"ground"` clears an enchanted tool. `"sharpened"` is a plain worn tool.
+    /// `"plain"` is a fresh unenchanted tool. `"need a tool"` is anything else.
+    /// Caller should grant XP equal to [`Self::enchant_count`] before the call
+    /// (or read it first) when the result is `"ground"`.
     pub fn grind_pick(&mut self) -> &'static str {
         let Some(item) = self.item(self.selected) else {
-            return "need a pick";
+            return "need a tool";
         };
         let max = Pack::builtin().tool_uses(item.id);
-        if max == 0 || !item.id.ends_with("pickaxe") {
-            return "need a pick";
+        if max == 0 {
+            return "need a tool";
         }
         let enchanted = item.keen || item.sturdy || item.lucky;
         if !enchanted && item.uses >= max {
@@ -3223,7 +3248,7 @@ mod tests {
     #[test]
     fn a_grindstone_clears_efficiency_and_gives_four_uses_back() {
         let mut bar = Hotbar::new();
-        assert_eq!(bar.grind_pick(), "need a pick");
+        assert_eq!(bar.grind_pick(), "need a tool");
         bar.select_digit(2);
         assert!(bar.give_stack("iron_pickaxe"));
         for _ in 0..6 {
@@ -3243,7 +3268,7 @@ mod tests {
         assert_eq!(bar.grind_pick(), "plain");
         bar.select_digit(3);
         assert!(bar.give_stack("shield"));
-        assert_eq!(bar.grind_pick(), "need a pick");
+        assert_eq!(bar.grind_pick(), "plain");
     }
 
     #[test]

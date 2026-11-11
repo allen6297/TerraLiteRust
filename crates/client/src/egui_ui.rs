@@ -227,6 +227,7 @@ impl EguiHost {
             || gui.anvil_open()
             || gui.enchant_open()
             || gui.smith_open()
+            || gui.grind_open()
             || map_open
     }
 
@@ -326,6 +327,11 @@ impl EguiHost {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.grind_open() {
+                if draw_grindstone(ui, gui, hotbar, xp, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
@@ -336,6 +342,7 @@ impl EguiHost {
                 && !gui.anvil_open()
                 && !gui.enchant_open()
                 && !gui.smith_open()
+                && !gui.grind_open()
             {
                 draw_chat_plate(ui, gui, icons);
             }
@@ -3242,6 +3249,192 @@ fn draw_enchanting(
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(gui.enchant_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn draw_grindstone(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    xp: &mut crate::xp::Xp,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = hotbar.selected();
+    let held = hotbar.slot(selected).unwrap_or("").to_string();
+    let held_uses = hotbar.count(selected);
+    let has_item = !held.is_empty();
+    let enchants = hotbar.enchant_count(selected);
+    let can_strip = hotbar.can_disenchant();
+    let can_combine = hotbar.combine_donor().is_some();
+    let keen = hotbar.is_keen(selected);
+    let sturdy = hotbar.is_sturdy(selected);
+    let lucky = hotbar.is_lucky(selected);
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(36.0);
+                show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "GRINDSTONE");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Strip enchants for XP · combine a worn pair · level {}",
+                            xp.level
+                        ))
+                        .size(13.0)
+                        .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            if has_item {
+                                let tip = gui::tip_for_tool(
+                                    &held,
+                                    Some(held_uses),
+                                    keen,
+                                    sturdy,
+                                    lucky,
+                                );
+                                let tex = icon_texture(ui.ctx(), icons, &held);
+                                let _ = slot_button(
+                                    ui,
+                                    icons,
+                                    tex,
+                                    false,
+                                    if held_uses > 1 {
+                                        Some(held_uses)
+                                    } else {
+                                        None
+                                    },
+                                );
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        RichText::new(&tip.name)
+                                            .size(15.0)
+                                            .color(INK)
+                                            .strong(),
+                                    );
+                                    let enchant_line = if enchants == 0 {
+                                        tip.line.clone()
+                                    } else {
+                                        let mut parts = Vec::new();
+                                        if keen {
+                                            parts.push("Efficiency");
+                                        }
+                                        if sturdy {
+                                            parts.push("Unbreaking");
+                                        }
+                                        if lucky {
+                                            parts.push("Fortune");
+                                        }
+                                        format!("{} · +{} XP if stripped", parts.join(", "), enchants)
+                                    };
+                                    ui.label(
+                                        RichText::new(enchant_line).size(12.0).color(MUTED),
+                                    );
+                                });
+                            } else {
+                                ui.label(
+                                    RichText::new("Select a tool in the hotbar.")
+                                        .size(14.0)
+                                        .color(MUTED),
+                                );
+                            }
+                        });
+                    });
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(can_strip, |ui| {
+                            let caption = if can_strip {
+                                format!("Disenchant (+{enchants} XP)")
+                            } else {
+                                "No enchants".to_string()
+                            };
+                            if chrome_button(
+                                ui,
+                                icons,
+                                &caption,
+                                can_strip,
+                                Vec2::new(200.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let refund = hotbar.enchant_count(selected);
+                                let word = hotbar.grind_pick();
+                                gui.note_grind(word);
+                                if word == "ground" {
+                                    let _ = xp.gain(refund.max(1));
+                                    gui.request_grind_scrape();
+                                    if let Some(id) = hotbar.slot(hotbar.selected()) {
+                                        let tip = gui::tip_for_tool(
+                                            id,
+                                            Some(hotbar.count(hotbar.selected())),
+                                            false,
+                                            false,
+                                            false,
+                                        );
+                                        gui.pin_tip(tip);
+                                    }
+                                } else if word == "sharpened" {
+                                    gui.request_grind_scrape();
+                                }
+                                touched = true;
+                            }
+                        });
+                        ui.add_space(8.0);
+                        ui.add_enabled_ui(can_combine, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                if can_combine {
+                                    "Combine pair"
+                                } else {
+                                    "Need a pair"
+                                },
+                                can_combine,
+                                Vec2::new(160.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                let word = hotbar.combine_tool();
+                                gui.note_grind(word);
+                                if word == "combined" {
+                                    gui.request_grind_scrape();
+                                    if let Some(id) = hotbar.slot(hotbar.selected()) {
+                                        let tip = gui::tip_for_tool(
+                                            id,
+                                            Some(hotbar.count(hotbar.selected())),
+                                            hotbar.is_keen(hotbar.selected()),
+                                            hotbar.is_sturdy(hotbar.selected()),
+                                            hotbar.is_lucky(hotbar.selected()),
+                                        );
+                                        gui.pin_tip(tip);
+                                    }
+                                }
+                                touched = true;
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(gui.grind_note())
                             .size(13.0)
                             .color(DETAIL),
                     );

@@ -21398,7 +21398,7 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Open the shaft grindstone panel mid-spark after clearing Efficiency, then quit with a PNG.
+    /// Open the shaft grindstone egui with an enchanted pick ready to strip, then quit with a PNG.
     pub fn arm_grind_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -21447,18 +21447,34 @@ impl State {
         self.drops.puff(spark_at, [0.78, 0.76, 0.70]);
         self.rebuild_drops();
         self.play_world(crate::audio::Sound::Grind, spark_at);
-        let _ = self.gui.open_grind([gx, gy, gz]);
-        self.gui.note_grind("ground");
-        self.gui.push_chat("ground");
-        self.found_grind = true;
-        self.gui.push_chat("grind");
-        self.found_mine = true;
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("iron_pickaxe");
-        // Keen then clear so the tip reads as a freshly ground pick.
-        let _ = self.hotbar.collect("bookshelf");
+        // Enchant so Disenchant is armed; leave a worn twin for Combine.
+        let _ = self.hotbar.collect("lapis_lazuli");
         let _ = self.hotbar.enchant_pick();
-        let _ = self.hotbar.grind_pick();
+        for _ in 0..4 {
+            let _ = self.hotbar.wear_use(0);
+        }
+        // Second worn pick for the combine button.
+        let _ = self.hotbar.select_digit(2);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        for _ in 0..10 {
+            let _ = self.hotbar.wear_use(1);
+        }
+        let _ = self.hotbar.select_digit(1);
+        let _ = self.gui.open_grind([gx, gy, gz]);
+        self.gui.note_grind("ready");
+        self.gui.push_chat("grind");
+        self.found_grind = true;
+        self.found_mine = true;
+        let tip = crate::gui::tip_for_tool(
+            "iron_pickaxe",
+            Some(self.hotbar.count(0)),
+            true,
+            false,
+            false,
+        );
+        self.gui.pin_tip(tip);
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -26426,10 +26442,14 @@ impl State {
                     self.try_brew();
                 }
                 if self.gui.grind_open() && code == KeyCode::Enter {
+                    let refund = self.hotbar.enchant_count(self.hotbar.selected());
                     let word = self.hotbar.grind_pick();
                     self.gui.note_grind(word);
                     self.gui.push_chat(word);
                     self.hotbar_dirty = true;
+                    if word == "ground" {
+                        let _ = self.xp.gain(refund.max(1));
+                    }
                     if matches!(word, "ground" | "sharpened") {
                         if let Some(at) = self.gui.grind_at() {
                             let source =
@@ -32303,6 +32323,18 @@ impl State {
                     self.play_world(crate::audio::Sound::Note(11), source);
                     self.drops.puff(source, [0.86, 0.58, 0.36]);
                     self.rebuild_drops();
+                }
+            }
+            if self.gui.take_grind_scrape() {
+                if let Some(at) = self.gui.grind_at() {
+                    let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.85, at[2] as f32 + 0.5];
+                    self.play_world(crate::audio::Sound::Grind, source);
+                    self.drops.puff(source, [0.78, 0.76, 0.70]);
+                    self.rebuild_drops();
+                    if !self.found_grind {
+                        self.found_grind = true;
+                        self.gui.push_chat("grind");
+                    }
                 }
             }
             if action != gui::MenuAction::None {

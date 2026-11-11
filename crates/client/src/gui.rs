@@ -720,6 +720,8 @@ pub struct Gui {
     grind_open: bool,
     /// The line under the grind title. Enter replaces it with the grind word.
     grind_note: String,
+    /// Set when a grind / combine should scrape at the stone.
+    grind_scrape: bool,
     /// The grindstone the panel is clearing at.
     grind_at: Option<[i32; 3]>,
     smith_open: bool,
@@ -905,6 +907,7 @@ impl Gui {
                 brew_at: None,
                 grind_open: false,
                 grind_note: String::new(),
+                grind_scrape: false,
                 grind_at: None,
                 smith_open: false,
                 smith_note: String::new(),
@@ -1033,6 +1036,7 @@ impl Gui {
                     brew_at: None,
                     grind_open: false,
                     grind_note: String::new(),
+                    grind_scrape: false,
                     grind_at: None,
                     smith_open: false,
                     smith_note: String::new(),
@@ -1171,6 +1175,7 @@ impl Gui {
             brew_at: None,
             grind_open: false,
             grind_note: String::new(),
+            grind_scrape: false,
             grind_at: None,
             smith_open: false,
             smith_note: String::new(),
@@ -2191,13 +2196,14 @@ impl Gui {
         self.brew_note = note.to_string();
     }
 
-    /// A grind panel. Other screens keep it closed.
+    /// A grindstone disenchant / combine panel. Other screens keep it closed.
     pub fn open_grind(&mut self, at: [i32; 3]) -> bool {
         if self.is_open() {
             return false;
         }
         self.grind_at = Some(at);
-        self.grind_note = "enter clears efficiency".to_string();
+        self.grind_note = "strip enchants for XP · or combine a pair".to_string();
+        self.grind_scrape = false;
         self.grind_open = true;
         true
     }
@@ -2208,6 +2214,18 @@ impl Gui {
 
     pub fn grind_at(&self) -> Option<[i32; 3]> {
         self.grind_at
+    }
+
+    pub fn grind_note(&self) -> &str {
+        &self.grind_note
+    }
+
+    pub fn request_grind_scrape(&mut self) {
+        self.grind_scrape = true;
+    }
+
+    pub fn take_grind_scrape(&mut self) -> bool {
+        std::mem::replace(&mut self.grind_scrape, false)
     }
 
     /// The word the last grind left on the panel.
@@ -3848,7 +3866,8 @@ impl Gui {
             return brew_quads(width, height, &self.brew_note);
         }
         if self.grind_open {
-            return grind_quads(width, height, &self.grind_note);
+            // egui draws the Whimscape grindstone panel.
+            return Vec::new();
         }
         if self.smith_open {
             // egui draws the Whimscape smithing panel.
@@ -9521,6 +9540,7 @@ mod tests {
             brew_at: None,
             grind_open: false,
             grind_note: String::new(),
+            grind_scrape: false,
             grind_at: None,
             smith_open: false,
             smith_note: String::new(),
