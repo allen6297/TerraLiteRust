@@ -173,6 +173,8 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "hopper" => [0.42, 0.42, 0.46],
         "dispenser" => [0.40, 0.40, 0.44],
         "dropper" => [0.38, 0.36, 0.34],
+        "piston" => [0.55, 0.52, 0.42],
+        "sticky_piston" => [0.42, 0.62, 0.28],
         "campfire" => [0.72, 0.32, 0.08],
         "fletching_table" => [0.55, 0.38, 0.18],
         "smoker" => [0.32, 0.24, 0.18],

@@ -1338,6 +1338,10 @@ pub struct State {
     hopper_wait: f32,
     /// One tip when a hopper first moves an item this session.
     hopper_told: bool,
+    /// Button-powered pistons waiting to retract: (cell, seconds left).
+    piston_pulse: Vec<([i32; 3], f32)>,
+    /// One tip when a piston first extends this session.
+    piston_told: bool,
     /// Pulses since the last lamp battery drain (slow charge consume).
     lamp_drain_wait: u8,
     /// Pulses until the next ember generator charge tick.
@@ -2705,6 +2709,8 @@ impl State {
             compound_flow_wait: 0.35,
             hopper_wait: crate::hopper::HOPPER_PERIOD,
             hopper_told: false,
+            piston_pulse: Vec::new(),
+            piston_told: false,
             lamp_drain_wait: 0,
             gen_charge_wait: 0,
             compound_flow_told: false,
@@ -7124,6 +7130,7 @@ impl State {
                 self.toggle_swing(other.id, at, other.metadata);
             }
             self.power_spitters([hit.block[0], hit.block[1], hit.block[2]]);
+            self.power_pistons([hit.block[0], hit.block[1], hit.block[2]], true, true);
             return;
         }
         if block.id == "lever" {
@@ -13913,6 +13920,13 @@ impl State {
             block = Block::new(
                 block.id,
                 crate::dispenser::facing_from_look([forward.x, forward.y, forward.z]),
+            );
+        }
+        if crate::piston::is_piston(block.id) {
+            let forward = self.camera.forward();
+            block = Block::new(
+                block.id,
+                crate::piston::facing_from_look([forward.x, forward.y, forward.z]),
             );
         }
         if block.id == "pump" {
@@ -22587,6 +22601,132 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Piston and sticky piston mid-push with lever on, then quit with a PNG.
+    pub fn arm_piston_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        // Side view: pistons face +X; pushed blocks sit one cell past the face.
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 6) {
+            for z in (cz - 1)..=(cz + 1) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("piston", crate::piston::with_extended(0, true)),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: Block::new("dirt", 0),
+            },
+            CellChange {
+                x: cx,
+                y,
+                z: cz + 1,
+                block: Block::new("lever", 1),
+            },
+            CellChange {
+                x: cx + 4,
+                y,
+                z: cz,
+                block: Block::new("sticky_piston", crate::piston::with_extended(0, true)),
+            },
+            CellChange {
+                x: cx + 6,
+                y,
+                z: cz,
+                block: Block::new("cobblestone", 0),
+            },
+            CellChange {
+                x: cx + 4,
+                y,
+                z: cz + 1,
+                block: Block::new("button", 0),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        self.chunk_bake.touch(cx, cz);
+        self.chunk_bake.touch(cx + 4, cz);
+
+        let focus = glam::Vec3::new(cx as f32 + 3.0, y as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 + 3.0,
+            y as f32 + 1.1 + body::EYE_HEIGHT,
+            cz as f32 - 5.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("piston");
+        let _ = self.hotbar.collect("sticky_piston");
+        let _ = self.hotbar.collect("lever");
+        let _ = self.hotbar.collect("dirt");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.piston_told = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("piston");
+        self.gui.push_chat("extend");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Hopper pulling from a chest above into a chest below, then quit with a PNG.
     pub fn arm_hopper_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -29658,6 +29798,7 @@ impl State {
         if turning_on {
             self.power_spitters(at);
         }
+        self.power_pistons(at, turning_on, false);
         let Some((cell, other)) = press_target(&self.world, at) else {
             return;
         };
@@ -29681,6 +29822,169 @@ impl State {
             let id = self.world.block_at(cell[0], cell[1], cell[2]).id;
             if crate::dispenser::is_spitter(id) {
                 self.dispense_at(cell);
+            }
+        }
+    }
+
+    /// Lever/button neighbor power: extend on rising edge, retract on falling.
+    /// `pulse` schedules a button retract after [`crate::piston::BUTTON_PULSE`].
+    fn power_pistons(&mut self, at: [i32; 3], power_on: bool, pulse: bool) {
+        const STEPS: [[i32; 3]; 6] = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ];
+        for step in STEPS {
+            let cell = [at[0] + step[0], at[1] + step[1], at[2] + step[2]];
+            let id = self.world.block_at(cell[0], cell[1], cell[2]).id;
+            if !crate::piston::is_piston(id) {
+                continue;
+            }
+            if power_on {
+                if self.extend_piston(cell) && pulse {
+                    self.piston_pulse.push((cell, crate::piston::BUTTON_PULSE));
+                }
+            } else {
+                self.retract_piston(cell);
+            }
+        }
+    }
+
+    fn tick_piston_pulse(&mut self, dt: f32) {
+        if self.piston_pulse.is_empty() {
+            return;
+        }
+        let mut keep = Vec::new();
+        let pulses = std::mem::take(&mut self.piston_pulse);
+        for (cell, left) in pulses {
+            let next = left - dt;
+            if next <= 0.0 {
+                self.retract_piston(cell);
+            } else {
+                keep.push((cell, next));
+            }
+        }
+        self.piston_pulse = keep;
+    }
+
+    fn extend_piston(&mut self, at: [i32; 3]) -> bool {
+        if self.told_disconnect || !self.pending.is_empty() {
+            return false;
+        }
+        let block = self.world.block_at(at[0], at[1], at[2]);
+        if !crate::piston::is_piston(block.id) || crate::piston::is_extended(block.metadata) {
+            return false;
+        }
+        let dir = crate::piston::facing_dir(block.metadata);
+        let (face_at, beyond_at) = crate::piston::push_cells(at, dir);
+        let face = self.world.block_at(face_at[0], face_at[1], face_at[2]);
+        let beyond = self.world.block_at(beyond_at[0], beyond_at[1], beyond_at[2]);
+        if !crate::piston::can_push(face, beyond) {
+            self.gui.push_chat("jammed");
+            return false;
+        }
+        let mut changes = vec![CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: Block::new(block.id, crate::piston::with_extended(block.metadata, true)),
+        }];
+        if face.id != "air" {
+            changes.push(CellChange {
+                x: face_at[0],
+                y: face_at[1],
+                z: face_at[2],
+                block: Block::AIR,
+            });
+            changes.push(CellChange {
+                x: beyond_at[0],
+                y: beyond_at[1],
+                z: beyond_at[2],
+                block: face,
+            });
+        }
+        self.send_places_batch(&changes);
+        let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Thunk, source);
+        if !self.piston_told {
+            self.piston_told = true;
+            self.gui.push_chat("piston");
+        } else {
+            self.gui.push_chat("extend");
+        }
+        true
+    }
+
+    fn retract_piston(&mut self, at: [i32; 3]) {
+        if self.told_disconnect || !self.pending.is_empty() {
+            return;
+        }
+        let block = self.world.block_at(at[0], at[1], at[2]);
+        if !crate::piston::is_piston(block.id) || !crate::piston::is_extended(block.metadata) {
+            return;
+        }
+        let dir = crate::piston::facing_dir(block.metadata);
+        let (face_at, beyond_at) = crate::piston::push_cells(at, dir);
+        let face = self.world.block_at(face_at[0], face_at[1], face_at[2]);
+        let beyond = self.world.block_at(beyond_at[0], beyond_at[1], beyond_at[2]);
+        let mut changes = vec![CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: Block::new(block.id, crate::piston::with_extended(block.metadata, false)),
+        }];
+        if crate::piston::is_sticky(block.id) && crate::piston::can_pull(face, beyond) {
+            changes.push(CellChange {
+                x: beyond_at[0],
+                y: beyond_at[1],
+                z: beyond_at[2],
+                block: Block::AIR,
+            });
+            changes.push(CellChange {
+                x: face_at[0],
+                y: face_at[1],
+                z: face_at[2],
+                block: beyond,
+            });
+        }
+        self.send_places_batch(&changes);
+        let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Thunk, source);
+        self.gui.push_chat("retract");
+    }
+
+    /// Apply several places locally and queue them on the link.
+    fn send_places_batch(&mut self, changes: &[CellChange]) {
+        if changes.is_empty() || self.told_disconnect {
+            return;
+        }
+        apply_changes(&mut self.world, changes);
+        for change in changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        let (min, max) = body::player_box_bounds(self.camera.eye);
+        for change in changes {
+            self.pending.push_back(PendingEdit {
+                kind: TAG_PLACE,
+                slot: None,
+            });
+            if self
+                .link
+                .send(encode_place(
+                    change.x,
+                    change.y,
+                    change.z,
+                    change.block,
+                    PlayerBox { min, max },
+                ))
+                .is_err()
+            {
+                self.pending.pop_back();
+                self.note_disconnect();
+                return;
             }
         }
     }
@@ -30012,6 +30316,7 @@ impl State {
         self.try_portal_travel(dt);
         self.tick_compound_flow(dt);
         self.tick_hoppers(dt);
+        self.tick_piston_pulse(dt);
         self.tell_landmarks();
         self.tell_cook_heat();
         self.tell_pump();

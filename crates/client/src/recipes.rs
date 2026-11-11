@@ -729,6 +729,7 @@ mod tests {
                 "painting".to_string(),
                 "paper".to_string(),
                 "pipe".to_string(),
+                "piston".to_string(),
                 "plate".to_string(),
                 "polished_basalt".to_string(),
                 "polished_blackstone".to_string(),
@@ -766,6 +767,7 @@ mod tests {
                 "spout".to_string(),
                 "spyglass".to_string(),
                 "stick".to_string(),
+                "sticky_piston".to_string(),
                 "stone".to_string(),
                 "stone_bricks".to_string(),
                 "stone_pickaxe".to_string(),
@@ -795,7 +797,7 @@ mod tests {
         assert_eq!(book.detail("lantern"), "iron ore and oak log make lantern");
         assert_eq!(
             book.detail("cobblestone"),
-            "used to make compass and dispenser and dropper and mossy cobblestone and saddle and shield and smooth stone and stone and stone pickaxe"
+            "used to make compass and dispenser and dropper and mossy cobblestone and piston and saddle and shield and smooth stone and stone and stone pickaxe"
         );
         assert_eq!(
             book.match_grid(&["wheat".into(), "wheat".into(), "wheat".into()]),
@@ -1295,7 +1297,7 @@ mod tests {
         );
         assert_eq!(
             book.detail("oak_log"),
-            "used to make bed and boat and bookshelf and door and jukebox and lantern and leather tunic and minecart and note block and oak stairs and shelf and shield and sign and stick and wooden pickaxe"
+            "used to make bed and boat and bookshelf and door and jukebox and lantern and leather tunic and minecart and note block and oak stairs and piston and shelf and shield and sign and stick and wooden pickaxe"
         );
         assert_eq!(
             book.match_grid(&["stick".into(), "tripwire".into()])
