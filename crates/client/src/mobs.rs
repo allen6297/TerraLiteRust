@@ -5719,6 +5719,14 @@ const WITHER_BOSS_STEP: f32 = 0.07;
 const WITHER_BOSS_SHOOT_EVERY: u32 = 28;
 const WITHER_BOSS_HOME_Y: f32 = 3.2;
 
+const DRAGON_HEARTS: i32 = 20;
+const DRAGON_RADIUS: f32 = 7.5;
+const DRAGON_HOME_Y: f32 = 6.5;
+const DRAGON_CIRCLE_STEP: f32 = 0.035;
+const DRAGON_DIVE_EVERY: u32 = 90;
+const DRAGON_DIVE_SPEED: f32 = 0.22;
+const DRAGON_HIT_RANGE: f32 = 2.4;
+
 /// Three skull cells that complete a soul-sand summon row, when the last skull
 /// sits at `at`. Soul sand must sit under each skull. Row runs along X or Z.
 pub fn wither_ritual_row(
@@ -5935,6 +5943,231 @@ impl Wither {
             [0.12, 0.22, 0.12],
             dark,
         );
+        out
+    }
+}
+
+/// Large flying ender dragon. Circles the End pad, dives at the player, drops an egg.
+pub struct EnderDragon {
+    origin: [f32; 3],
+    home: [f32; 3],
+    angle: f32,
+    yaw: f32,
+    swing: u32,
+    hearts: i32,
+    /// True after the first awaken on the End pad.
+    awakened: bool,
+    /// True after a kill — stays down for the session.
+    spent: bool,
+    diving: bool,
+    dive_left: u32,
+}
+
+impl EnderDragon {
+    pub fn new() -> Self {
+        Self {
+            origin: [0.0, -8.0, 0.0],
+            home: [0.0, -8.0, 0.0],
+            angle: 0.0,
+            yaw: 0.0,
+            swing: 0,
+            hearts: 0,
+            awakened: false,
+            spent: false,
+            diving: false,
+            dive_left: 0,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0 && !self.spent
+    }
+
+    pub fn spent(&self) -> bool {
+        self.spent
+    }
+
+    /// Rise over the End pad once per session.
+    pub fn awaken(&mut self, pad: [f32; 3]) -> bool {
+        if self.awakened || self.spent {
+            return false;
+        }
+        self.home = [pad[0], pad[1] + DRAGON_HOME_Y, pad[2]];
+        self.angle = 0.4;
+        self.origin = [
+            self.home[0] + self.angle.cos() * DRAGON_RADIUS,
+            self.home[1],
+            self.home[2] + self.angle.sin() * DRAGON_RADIUS,
+        ];
+        self.yaw = self.angle + std::f32::consts::FRAC_PI_2;
+        self.hearts = DRAGON_HEARTS;
+        self.swing = 0;
+        self.diving = false;
+        self.dive_left = 0;
+        self.awakened = true;
+        true
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.home = [at[0], at[1], at[2]];
+        self.origin = at;
+        self.angle = 0.0;
+        self.yaw = 0.0;
+        self.hearts = DRAGON_HEARTS;
+        self.swing = 20;
+        self.diving = false;
+        self.dive_left = 0;
+        self.awakened = true;
+        self.spent = false;
+    }
+
+    /// Aim the silhouette for a still shot.
+    pub fn face_yaw(&mut self, yaw: f32) {
+        self.yaw = yaw;
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if !self.alive() {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.4, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=14.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 2.8
+    }
+
+    /// Spend hearts. True when this hit drops the dragon.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if !self.alive() || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.spent = true;
+        self.diving = false;
+        self.dive_left = 0;
+        true
+    }
+
+    /// Circle / dive. True when a dive scrapes the player.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if !self.alive() {
+            return false;
+        }
+        let mut hit = false;
+        for _ in 0..count {
+            self.swing = self.swing.wrapping_add(1);
+            if self.diving {
+                let dx = player[0] - self.origin[0];
+                let dy = (player[1] + 0.4) - self.origin[1];
+                let dz = player[2] - self.origin[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt().max(0.05);
+                self.origin[0] += dx / dist * DRAGON_DIVE_SPEED;
+                self.origin[1] += dy / dist * DRAGON_DIVE_SPEED;
+                self.origin[2] += dz / dist * DRAGON_DIVE_SPEED;
+                self.yaw = dx.atan2(dz);
+                self.dive_left = self.dive_left.saturating_sub(1);
+                if dist < DRAGON_HIT_RANGE {
+                    hit = true;
+                    self.diving = false;
+                    self.dive_left = 0;
+                } else if self.dive_left == 0 || self.origin[1] < self.home[1] - 5.0 {
+                    self.diving = false;
+                }
+            } else {
+                self.angle = (self.angle + DRAGON_CIRCLE_STEP) % (std::f32::consts::TAU);
+                let bob = (self.swing as f32 * 0.08).sin() * 0.35;
+                self.origin[0] = self.home[0] + self.angle.cos() * DRAGON_RADIUS;
+                self.origin[1] = self.home[1] + bob;
+                self.origin[2] = self.home[2] + self.angle.sin() * DRAGON_RADIUS;
+                self.yaw = self.angle + std::f32::consts::FRAC_PI_2;
+                let pdx = player[0] - self.home[0];
+                let pdz = player[2] - self.home[2];
+                let near_pad = pdx * pdx + pdz * pdz < 22.0 * 22.0;
+                if near_pad && self.swing % DRAGON_DIVE_EVERY == 0 {
+                    self.diving = true;
+                    self.dive_left = 56;
+                }
+            }
+        }
+        hit
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if !self.alive() {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        ([x - 1.8, y - 0.4, z - 1.8], [x + 1.8, y + 1.4, z + 1.8])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if !self.alive() {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let flap = (self.swing as f32 * 0.22).sin();
+        // Mid purple so the silhouette holds against the void sky.
+        let body = [0.28, 0.12, 0.36];
+        let wing = [0.42, 0.18, 0.52];
+        let belly = [0.16, 0.08, 0.2];
+        let eye = [0.95, 0.35, 1.0];
+        let mut out = Vec::new();
+        // Long body + neck + head facing +Z before yaw.
+        push_box(&mut out, [x, y + 0.35, z], [0.42, 0.32, 1.25], body);
+        push_box(&mut out, [x, y + 0.2, z], [0.3, 0.18, 0.9], belly);
+        push_box(&mut out, [x, y + 0.5, z + 1.45], [0.26, 0.22, 0.4], body);
+        push_box(&mut out, [x, y + 0.55, z + 2.05], [0.34, 0.26, 0.34], body);
+        push_box(
+            &mut out,
+            [x - 0.14, y + 0.62, z + 2.3],
+            [0.05, 0.05, 0.04],
+            eye,
+        );
+        push_box(
+            &mut out,
+            [x + 0.14, y + 0.62, z + 2.3],
+            [0.05, 0.05, 0.04],
+            eye,
+        );
+        // Wings.
+        let wing_y = y + 0.6 + flap * 0.4;
+        push_box(
+            &mut out,
+            [x - 1.55, wing_y, z],
+            [1.3, 0.07, 0.65],
+            wing,
+        );
+        push_box(
+            &mut out,
+            [x + 1.55, wing_y, z],
+            [1.3, 0.07, 0.65],
+            wing,
+        );
+        // Tail stubs.
+        push_box(&mut out, [x, y + 0.28, z - 1.55], [0.18, 0.16, 0.4], body);
+        push_box(&mut out, [x, y + 0.18, z - 2.25], [0.12, 0.12, 0.32], body);
+        yaw_mesh(&mut out, self.origin, self.yaw);
         out
     }
 }
@@ -6228,6 +6461,32 @@ mod tests {
         assert!(boss.hurt(20));
         assert!(!boss.alive());
         assert!(boss.vertices().is_empty());
+    }
+
+    #[test]
+    fn an_ender_dragon_circles_dives_and_falls() {
+        let mut dragon = EnderDragon::new();
+        assert!(!dragon.alive());
+        assert!(dragon.awaken([24.5, 16.0, -39.5]));
+        assert!(dragon.alive());
+        assert!(!dragon.vertices().is_empty());
+        assert!(!dragon.awaken([24.5, 16.0, -39.5]), "one awaken per session");
+        dragon.place_at([10.0, 20.0, 10.0]);
+        // Stand on the circle path so the next dive closes the gap.
+        let mut scraped = false;
+        for _ in 0..(DRAGON_DIVE_EVERY + 80) {
+            let o = dragon.origin();
+            if dragon.tick_near(1, [o[0], o[1] - 0.5, o[2]]) {
+                scraped = true;
+                break;
+            }
+        }
+        assert!(scraped, "dragon dive should scrape the player");
+        assert!(dragon.hurt(20));
+        assert!(!dragon.alive());
+        assert!(dragon.spent());
+        assert!(dragon.vertices().is_empty());
+        assert!(!dragon.awaken([24.5, 16.0, -39.5]), "spent dragon stays down");
     }
 
     #[test]

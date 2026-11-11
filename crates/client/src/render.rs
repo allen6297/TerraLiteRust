@@ -1700,6 +1700,10 @@ pub struct State {
     wither_shots: crate::wither_shots::WitherShots,
     /// Hand over a nether star once inventory has room.
     nether_star_due: bool,
+    dragon: crate::mobs::EnderDragon,
+    dragon_buf: Option<wgpu::Buffer>,
+    dragon_count: u32,
+    found_end: bool,
 
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
@@ -2883,6 +2887,10 @@ impl State {
             wither_boss_buf: None,
             wither_boss_count: 0,
             wither_shots: crate::wither_shots::WitherShots::new(),
+            dragon: crate::mobs::EnderDragon::new(),
+            dragon_buf: None,
+            dragon_count: 0,
+            found_end: false,
             nether_star_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
@@ -2970,6 +2978,7 @@ impl State {
         state.rebuild_guardian();
         state.rebuild_wither();
         state.rebuild_wither_boss();
+        state.rebuild_dragon();
 
         state.rebuild_bee();
         state.rebuild_fox();
@@ -5264,6 +5273,60 @@ impl State {
         self.wither_boss_count = vertices.len() as u32;
     }
 
+    fn rebuild_dragon(&mut self) {
+        let vertices = self.dragon.vertices();
+        if vertices.is_empty() {
+            self.dragon_buf = None;
+            self.dragon_count = 0;
+            return;
+        }
+        self.dragon_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("ender_dragon"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.dragon_count = vertices.len() as u32;
+    }
+
+    /// Place a dragon egg on the End pad and keep the return portal lit.
+    fn drop_dragon_egg(&mut self) {
+        let (cx, cz) = rebuild_world::END_PAD;
+        let floor = i32::from(rebuild_world::END_FLOOR);
+        let egg = [cx + 1, floor + 1, cz];
+        let portal = [
+            rebuild_world::END_RETURN.0,
+            floor + 1,
+            rebuild_world::END_RETURN.1,
+        ];
+        apply_changes(
+            &mut self.world,
+            &[
+                CellChange {
+                    x: egg[0],
+                    y: egg[1],
+                    z: egg[2],
+                    block: Block::new("dragon_egg", 0),
+                },
+                CellChange {
+                    x: portal[0],
+                    y: portal[1],
+                    z: portal[2],
+                    block: Block::new("end_portal", 0),
+                },
+            ],
+        );
+        self.chunk_bake.touch(egg[0], egg[2]);
+        self.chunk_bake.touch(portal[0], portal[2]);
+        let source = [egg[0] as f32 + 0.5, egg[1] as f32 + 0.4, egg[2] as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Place, source);
+        self.drops.puff(source, [0.35, 0.12, 0.45]);
+        self.rebuild_drops();
+        self.gui.push_chat("dragon egg");
+        self.gui.push_chat("return portal");
+    }
+
     fn rebuild_beacon_beam(&mut self) {
         let Some(at) = self.beacon_at else {
             self.beacon_buf = None;
@@ -5614,6 +5677,14 @@ impl State {
             && !guardian_aimed
             && !wither_aimed
             && self.wither_boss.aimed(eye, forward);
+        let dragon_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && !guardian_aimed
+            && !wither_aimed
+            && !wither_boss_aimed
+            && self.dragon.aimed(eye, forward);
         let guest_index = if zombie_aimed
             || night_index.is_some()
             || breeze_aimed
@@ -5621,6 +5692,7 @@ impl State {
             || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
+            || dragon_aimed
         {
             None
         } else {
@@ -5703,6 +5775,14 @@ impl State {
             }
             dropped
         };
+        let dropped_dragon = dragon_aimed && {
+            let origin = self.dragon.origin();
+            let dropped = self.hurt_mob("ender_dragon", amount, origin, |s, n| s.dragon.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_guest = if let Some(index) = guest_index {
             let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
@@ -5723,6 +5803,7 @@ impl State {
             || guardian_aimed
             || wither_aimed
             || wither_boss_aimed
+            || dragon_aimed
             || guest_index.is_some();
         let dropped = dropped_zombie
             || dropped_night
@@ -5731,6 +5812,7 @@ impl State {
             || dropped_guardian
             || dropped_wither
             || dropped_wither_boss
+            || dropped_dragon
             || dropped_guest;
         let word = if !aimed {
             "swing"
@@ -5779,6 +5861,9 @@ impl State {
         if dropped_wither_boss {
             self.grant_nether_star();
         }
+        if dropped_dragon {
+            self.drop_dragon_egg();
+        }
         if self.hotbar.slot(slot).is_none() {
             self.gui.push_chat("the mace breaks");
         }
@@ -5788,6 +5873,7 @@ impl State {
         self.rebuild_guardian();
         self.rebuild_wither();
         self.rebuild_wither_boss();
+        self.rebuild_dragon();
     }
 
     fn holding_horn(&self) -> bool {
@@ -6416,6 +6502,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_wither_boss();
+                return true;
+            }
+            let dragon = self.dragon.origin();
+            let (dmin, dmax) = self.dragon.bounds();
+            if point_in_box(tip, dmin, dmax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("ender_dragon", amount, dragon, |s, n| s.dragon.hurt(n));
+                if dropped {
+                    self.grant_xp_at(dragon, true);
+                    self.drop_dragon_egg();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_dragon();
                 return true;
             }
             if let Some(index) = self.guests.iter().position(|guest| {
@@ -7115,6 +7217,18 @@ impl State {
         {
             self.found_stronghold = true;
             self.gui.push_chat("a stronghold");
+        }
+        if !self.found_end
+            && near(rebuild_world::END_PAD.0, rebuild_world::END_PAD.1)
+        {
+            self.found_end = true;
+            self.gui.push_chat("the end");
+            let (ex, ez) = rebuild_world::END_PAD;
+            let floor = i32::from(rebuild_world::END_FLOOR);
+            if self.dragon.awaken([ex as f32 + 0.5, floor as f32, ez as f32 + 0.5]) {
+                self.rebuild_dragon();
+                self.gui.push_chat("the dragon rises");
+            }
         }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
@@ -8546,6 +8660,18 @@ impl State {
                         self.rebuild_wither_boss();
                         hit = true;
                     }
+                    let dragon = self.dragon.origin();
+                    if crate::splash::in_radius(burst.center, dragon) {
+                        let dropped = self.hurt_mob("ender_dragon", amount, dragon, |s, n| {
+                            s.dragon.hurt(n)
+                        });
+                        if dropped {
+                            self.grant_xp_at(dragon, true);
+                            self.drop_dragon_egg();
+                        }
+                        self.rebuild_dragon();
+                        hit = true;
+                    }
                     let guest_hits: Vec<(usize, String, [f32; 3])> = self
                         .guests
                         .iter()
@@ -9414,6 +9540,69 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Ender dragon circling the End pad, then quit with a PNG.
+    pub fn arm_ender_dragon_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (ex, ez) = rebuild_world::END_PAD;
+        let floor = i32::from(rebuild_world::END_FLOOR);
+        // Pin above the pad rim — place_at leaves wings mid-flap (swing=20).
+        self.dragon.place_at([
+            ex as f32 + 0.5,
+            floor as f32 + 3.6,
+            ez as f32 + 2.4,
+        ]);
+        // Face the camera south of the pad so the wings fill the still.
+        self.dragon.face_yaw(std::f32::consts::PI);
+        let origin = self.dragon.origin();
+        self.rebuild_dragon();
+        self.found_end = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("the end");
+        self.gui.push_chat("the dragon rises");
+
+        let focus = glam::Vec3::new(origin[0], origin[1] + 0.2, origin[2]);
+        let eye = glam::Vec3::new(
+            ex as f32 + 0.5,
+            floor as f32 + 2.1,
+            ez as f32 - 2.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bow");
+        let _ = self.hotbar.give_stack("arrow");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(ex + dx * 8, ez + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -11514,6 +11703,7 @@ impl State {
             ("blaze", self.blaze.bounds()),
             ("wither_skeleton", self.wither.bounds()),
             ("wither", self.wither_boss.bounds()),
+            ("ender_dragon", self.dragon.bounds()),
             ("copper_golem", self.golem.bounds()),
 
 
@@ -11613,6 +11803,9 @@ impl State {
         }
         if self.wither_boss.aimed(eye, forward) {
             return Some("wither");
+        }
+        if self.dragon.aimed(eye, forward) {
+            return Some("ender_dragon");
         }
         if self.fox.aimed(eye, forward) {
             return Some("fox");
@@ -28401,6 +28594,26 @@ impl State {
                 self.rebuild_drops();
             }
             self.rebuild_wither_boss();
+            {
+                let (ex, ez) = rebuild_world::END_PAD;
+                let near_end = (self.camera.eye.x - (ex as f32 + 0.5)).abs() < 28.0
+                    && (self.camera.eye.z - (ez as f32 + 0.5)).abs() < 28.0;
+                if near_end && !self.dragon.alive() && !self.dragon.spent() {
+                    let floor = i32::from(rebuild_world::END_FLOOR);
+                    if self.dragon.awaken([ex as f32 + 0.5, floor as f32, ez as f32 + 0.5]) {
+                        self.gui.push_chat("the dragon rises");
+                    }
+                }
+                if self.dragon.tick_near(steps, eye3) {
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, 2, self.armor_soak());
+                    self.apply_damage(amount);
+                    self.gui.push_chat(if blocked { "block" } else { "swoop" });
+                    let from = self.dragon.origin();
+                    self.play_world(crate::audio::Sound::Gust, from);
+                }
+                self.rebuild_dragon();
+            }
 
             if let Some(chore) = self.golem.tick(steps, &self.world) {
                 match chore {
@@ -28919,19 +29132,19 @@ impl State {
             fog_start = fog_start * (1.0 - sub) + 1.5 * sub;
             fog_end = fog_end * (1.0 - sub) + 14.0 * sub;
         }
-        // End pocket: black-void fog while standing near the obsidian pad.
+        // End pocket: void sky with soft fog so the dragon still reads.
         let (ex, ez) = rebuild_world::END_PAD;
         let end_dx = self.camera.eye.x - (ex as f32 + 0.5);
         let end_dz = self.camera.eye.z - (ez as f32 + 0.5);
-        if end_dx * end_dx + end_dz * end_dz < 18.0 * 18.0 {
+        if end_dx * end_dx + end_dz * end_dz < 28.0 * 28.0 {
             let void_sky = [0.02, 0.01, 0.04];
             let void_fog = [0.04, 0.02, 0.08];
             for i in 0..3 {
                 sky_rgb[i] = void_sky[i];
                 horizon[i] = void_fog[i];
             }
-            fog_start = 2.0;
-            fog_end = 28.0;
+            fog_start = 10.0;
+            fog_end = 42.0;
         }
         let fog_eye = [eye[0], eye[1], eye[2], fog_start];
         let fog_color = [horizon[0], horizon[1], horizon[2], fog_end];
@@ -29310,6 +29523,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, wither_boss.slice(..));
                     pass.draw(0..self.wither_boss_count, 0..1);
+                }
+            }
+            if let Some(dragon) = &self.dragon_buf {
+                if self.dragon_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, dragon.slice(..));
+                    pass.draw(0..self.dragon_count, 0..1);
                 }
             }
             if let Some(beacon) = &self.beacon_buf {
