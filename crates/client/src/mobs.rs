@@ -6036,6 +6036,316 @@ fn push_box_lit(
     }
 }
 
+/// Magma cube pad — hops near the SE nether-pocket lava.
+pub const MAGMA_CUBE_PAD: (i32, i32) = (
+    rebuild_world::NETHER_PAD.0 + 2,
+    rebuild_world::NETHER_PAD.1 - 2,
+);
+
+const MAGMA_BIG: u8 = 2;
+const MAGMA_SMALL: u8 = 1;
+const MAGMA_BIG_HEARTS: i32 = 6;
+const MAGMA_SMALL_HEARTS: i32 = 3;
+const MAGMA_HOP_EVERY: u32 = 18;
+const MAGMA_HUNT: f32 = 10.0;
+const MAGMA_REACH: f32 = 1.35;
+const MAGMA_STEP: f32 = 0.55;
+
+/// Result of damaging a magma cube under the crosshair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MagmaHit {
+    /// Cubes took damage but still live.
+    Hurt,
+    /// A big cube died and split into smaller ones.
+    Split,
+    /// A small cube died — hand over magma cream.
+    Cream,
+}
+
+struct MagmaBody {
+    origin: [f32; 3],
+    size: u8,
+    hearts: i32,
+    hop: u32,
+    loose: u32,
+}
+
+/// Hopping nether cubes. A big one splits once into smalls; smalls drop cream.
+pub struct MagmaCubes {
+    cubes: Vec<MagmaBody>,
+    home: [f32; 3],
+    down: f32,
+}
+
+impl MagmaCubes {
+    pub fn new() -> Self {
+        let (x, z) = MAGMA_CUBE_PAD;
+        let floor = f32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        let home = [x as f32 + 0.5, floor, z as f32 + 0.5];
+        let mut pack = Self {
+            cubes: Vec::new(),
+            home,
+            down: 0.0,
+        };
+        pack.spawn_big(home);
+        pack
+    }
+
+    fn spawn_big(&mut self, at: [f32; 3]) {
+        self.cubes.clear();
+        self.cubes.push(MagmaBody {
+            origin: at,
+            size: MAGMA_BIG,
+            hearts: MAGMA_BIG_HEARTS,
+            hop: 0,
+            loose: 0,
+        });
+        self.down = 0.0;
+    }
+
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.home = at;
+        self.spawn_big(at);
+    }
+
+    pub fn alive(&self) -> bool {
+        !self.cubes.is_empty()
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.cubes
+            .first()
+            .map(|c| c.origin)
+            .unwrap_or(self.home)
+    }
+
+    /// Closest living cube under the look ray.
+    pub fn aimed_index(&self, eye: [f32; 3], forward: [f32; 3]) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, cube) in self.cubes.iter().enumerate() {
+            let half = magma_half(cube.size);
+            let center = [
+                cube.origin[0],
+                cube.origin[1] + half,
+                cube.origin[2],
+            ];
+            let to = [
+                center[0] - eye[0],
+                center[1] - eye[1],
+                center[2] - eye[2],
+            ];
+            let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+            if !(0.0..=8.0).contains(&along) {
+                continue;
+            }
+            let closest = [
+                eye[0] + forward[0] * along,
+                eye[1] + forward[1] * along,
+                eye[2] + forward[2] * along,
+            ];
+            let dx = closest[0] - center[0];
+            let dy = closest[1] - center[1];
+            let dz = closest[2] - center[2];
+            let reach = half + 0.35;
+            let dist2 = dx * dx + dy * dy + dz * dz;
+            if dist2 > reach * reach {
+                continue;
+            }
+            if best.is_none_or(|(_, so_far)| along < so_far) {
+                best = Some((index, along));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        self.aimed_index(eye, forward).is_some()
+    }
+
+    /// Spend hearts on the aimed cube. Splits a big one; cream from a small.
+    pub fn hurt_aimed(
+        &mut self,
+        eye: [f32; 3],
+        forward: [f32; 3],
+        amount: i32,
+    ) -> Option<MagmaHit> {
+        let index = self.aimed_index(eye, forward)?;
+        self.hurt_at(index, amount)
+    }
+
+    pub fn hurt_at(&mut self, index: usize, amount: i32) -> Option<MagmaHit> {
+        if amount <= 0 || index >= self.cubes.len() {
+            return None;
+        }
+        let size = self.cubes[index].size;
+        let origin = self.cubes[index].origin;
+        self.cubes[index].hearts -= amount;
+        if self.cubes[index].hearts > 0 {
+            self.cubes[index].loose = 8;
+            return Some(MagmaHit::Hurt);
+        }
+        self.cubes.remove(index);
+        if size >= MAGMA_BIG {
+            // One split level — two smalls beside the corpse.
+            self.cubes.push(MagmaBody {
+                origin: [origin[0] - 0.55, origin[1], origin[2] + 0.2],
+                size: MAGMA_SMALL,
+                hearts: MAGMA_SMALL_HEARTS,
+                hop: 4,
+                loose: 6,
+            });
+            self.cubes.push(MagmaBody {
+                origin: [origin[0] + 0.55, origin[1], origin[2] - 0.15],
+                size: MAGMA_SMALL,
+                hearts: MAGMA_SMALL_HEARTS,
+                hop: 10,
+                loose: 6,
+            });
+            if self.cubes.is_empty() {
+                self.down = 12.0;
+            }
+            Some(MagmaHit::Split)
+        } else {
+            if self.cubes.is_empty() {
+                self.down = 12.0;
+            }
+            Some(MagmaHit::Cream)
+        }
+    }
+
+    /// Hop toward the player. True when a landing slap clips them.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if self.cubes.is_empty() {
+            return false;
+        }
+        let floor_y = self.home[1];
+        let mut slap = false;
+        for _ in 0..count {
+            for cube in &mut self.cubes {
+                if cube.loose > 0 {
+                    cube.loose = cube.loose.saturating_sub(1);
+                    continue;
+                }
+                cube.hop = cube.hop.wrapping_add(1);
+                let half = magma_half(cube.size);
+                // Squash/stretch hop arc.
+                let phase = (cube.hop % MAGMA_HOP_EVERY) as f32 / MAGMA_HOP_EVERY as f32;
+                let lift = (phase * std::f32::consts::PI).sin() * (0.35 + half * 0.25);
+                cube.origin[1] = floor_y + lift;
+                if cube.hop % MAGMA_HOP_EVERY != 0 {
+                    continue;
+                }
+                let dx = player[0] - cube.origin[0];
+                let dz = player[2] - cube.origin[2];
+                let dist = (dx * dx + dz * dz).sqrt();
+                if dist > 0.05 && dist < MAGMA_HUNT {
+                    let step = MAGMA_STEP.min(dist);
+                    cube.origin[0] += dx / dist * step;
+                    cube.origin[2] += dz / dist * step;
+                }
+                let px = player[0] - cube.origin[0];
+                let pz = player[2] - cube.origin[2];
+                if px * px + pz * pz <= MAGMA_REACH * MAGMA_REACH {
+                    slap = true;
+                }
+            }
+        }
+        slap
+    }
+
+    /// Respawn a big cube at home after knockdown. True on the frame it rises.
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if !self.cubes.is_empty() {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.spawn_big(self.home);
+        true
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let Some(cube) = self.cubes.first() else {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        };
+        magma_bounds(cube)
+    }
+
+    /// All living AABB pairs for look / projectile tests.
+    pub fn all_bounds(&self) -> Vec<([f32; 3], [f32; 3])> {
+        self.cubes.iter().map(magma_bounds).collect()
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        for cube in &self.cubes {
+            let half = magma_half(cube.size);
+            let [x, y, z] = cube.origin;
+            let phase = (cube.hop % MAGMA_HOP_EVERY) as f32 / MAGMA_HOP_EVERY as f32;
+            let squash = 1.0 - (phase * std::f32::consts::PI).sin() * 0.12;
+            let stretch = 1.0 + (phase * std::f32::consts::PI).sin() * 0.18;
+            let body = [0.92, 0.38, 0.12];
+            let glow = [0.95, 0.45, 0.08];
+            let dark = [0.35, 0.12, 0.05];
+            let eye = [0.08, 0.05, 0.04];
+            push_box_lit(
+                &mut out,
+                [x, y + half * stretch * 0.55, z],
+                [half * squash, half * stretch, half * squash],
+                body,
+                glow,
+            );
+            // Core glow.
+            push_box_lit(
+                &mut out,
+                [x, y + half * stretch * 0.55, z],
+                [half * squash * 0.45, half * stretch * 0.45, half * squash * 0.45],
+                [1.0, 0.72, 0.25],
+                [1.0, 0.55, 0.1],
+            );
+            // Eyes on +Z.
+            let eye_y = y + half * stretch * 0.7;
+            let eye_z = z + half * squash * 0.92;
+            let eye_x = half * squash * 0.35;
+            let eye_h = half * 0.18;
+            push_box_lit(
+                &mut out,
+                [x - eye_x, eye_y, eye_z],
+                [eye_h, eye_h, eye_h * 0.4],
+                eye,
+                dark,
+            );
+            push_box_lit(
+                &mut out,
+                [x + eye_x, eye_y, eye_z],
+                [eye_h, eye_h, eye_h * 0.4],
+                eye,
+                dark,
+            );
+        }
+        out
+    }
+}
+
+fn magma_half(size: u8) -> f32 {
+    if size >= MAGMA_BIG {
+        0.72
+    } else {
+        0.38
+    }
+}
+
+fn magma_bounds(cube: &MagmaBody) -> ([f32; 3], [f32; 3]) {
+    let half = magma_half(cube.size);
+    let [x, y, z] = cube.origin;
+    (
+        [x - half, y, z - half],
+        [x + half, y + half * 2.0, z + half],
+    )
+}
+
 /// Nether pocket piglin — gold-ingot barter; hostile without gold armor, angry when struck.
 pub const PIGLIN_PAD: (i32, i32) = rebuild_world::NETHER_PIGLIN;
 
@@ -7528,6 +7838,49 @@ mod tests {
         assert!(ghast.hurt(GHAST_HEARTS));
         assert!(!ghast.alive());
         assert!(ghast.vertices().is_empty());
+    }
+
+    #[test]
+    fn a_magma_cube_hops_splits_and_drops_cream() {
+        let mut pack = MagmaCubes::new();
+        pack.place_at([0.0, 4.0, 0.0]);
+        assert!(pack.alive());
+        assert!(!pack.vertices().is_empty());
+        let mut slapped = false;
+        for _ in 0..40 {
+            if pack.tick_near(1, [0.4, 4.0, 0.2]) {
+                slapped = true;
+                break;
+            }
+        }
+        assert!(slapped, "magma cube should slap when it lands close");
+        let eye = [0.0_f32, 5.0, 2.5];
+        let forward = {
+            let raw = [0.0_f32, -0.1, -1.0];
+            let len = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
+            [raw[0] / len, raw[1] / len, raw[2] / len]
+        };
+        assert!(pack.aimed(eye, forward));
+        assert_eq!(
+            pack.hurt_aimed(eye, forward, MAGMA_BIG_HEARTS),
+            Some(MagmaHit::Split)
+        );
+        assert_eq!(pack.all_bounds().len(), 2, "big cube splits into two smalls");
+        // Kill both smalls for cream.
+        let mut cream = 0;
+        for _ in 0..8 {
+            if !pack.alive() {
+                break;
+            }
+            match pack.hurt_at(0, MAGMA_SMALL_HEARTS) {
+                Some(MagmaHit::Cream) => cream += 1,
+                Some(MagmaHit::Split) | Some(MagmaHit::Hurt) | None => {}
+            }
+        }
+        assert_eq!(cream, 2, "each small cube should drop cream");
+        assert!(!pack.alive());
+        assert!(pack.rest(12.0));
+        assert!(pack.alive());
     }
 
     #[test]

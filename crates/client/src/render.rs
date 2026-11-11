@@ -1692,6 +1692,12 @@ pub struct State {
     ghast: crate::mobs::Ghast,
     ghast_buf: Option<wgpu::Buffer>,
     ghast_count: u32,
+    /// Hopping nether magma cubes (split once, cream from smalls).
+    magma_cubes: crate::mobs::MagmaCubes,
+    magma_cube_buf: Option<wgpu::Buffer>,
+    magma_cube_count: u32,
+    /// Hand over magma cream once inventory has room.
+    magma_cream_due: bool,
     /// In-flight blaze / ghast fireballs.
     fireballs: crate::fireballs::Fireballs,
     /// Hand over a blaze rod once inventory has room.
@@ -2924,6 +2930,10 @@ impl State {
             ghast: crate::mobs::Ghast::new(),
             ghast_buf: None,
             ghast_count: 0,
+            magma_cubes: crate::mobs::MagmaCubes::new(),
+            magma_cube_buf: None,
+            magma_cube_count: 0,
+            magma_cream_due: false,
             fireballs: crate::fireballs::Fireballs::new(),
             blaze_due: false,
             ghast_due: false,
@@ -3046,6 +3056,7 @@ impl State {
         state.rebuild_iron_golem();
         state.rebuild_blaze();
         state.rebuild_ghast();
+        state.rebuild_magma_cubes();
         state.rebuild_piglin();
         state.rebuild_guardian();
         state.rebuild_wither();
@@ -5224,6 +5235,23 @@ impl State {
         self.ghast_count = vertices.len() as u32;
     }
 
+    fn rebuild_magma_cubes(&mut self) {
+        let vertices = self.magma_cubes.vertices();
+        if vertices.is_empty() {
+            self.magma_cube_buf = None;
+            self.magma_cube_count = 0;
+            return;
+        }
+        self.magma_cube_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("magma_cubes"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.magma_cube_count = vertices.len() as u32;
+    }
+
     fn rebuild_piglin(&mut self) {
         let vertices = self.piglin.vertices();
         if vertices.is_empty() {
@@ -5829,17 +5857,25 @@ impl State {
             && !breeze_aimed
             && !blaze_aimed
             && self.ghast.aimed(eye, forward);
+        let magma_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && !ghast_aimed
+            && self.magma_cubes.aimed(eye, forward);
         let piglin_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
             && !ghast_aimed
+            && !magma_aimed
             && self.piglin.aimed(eye, forward);
         let guardian_aimed = !zombie_aimed
             && night_index.is_none()
             && !breeze_aimed
             && !blaze_aimed
             && !ghast_aimed
+            && !magma_aimed
             && !piglin_aimed
             && self.guardian.aimed(eye, forward);
         let wither_aimed = !zombie_aimed
@@ -5847,6 +5883,7 @@ impl State {
             && !breeze_aimed
             && !blaze_aimed
             && !ghast_aimed
+            && !magma_aimed
             && !piglin_aimed
             && !guardian_aimed
             && self.wither.aimed(eye, forward);
@@ -5855,6 +5892,7 @@ impl State {
             && !breeze_aimed
             && !blaze_aimed
             && !ghast_aimed
+            && !magma_aimed
             && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
@@ -5864,6 +5902,7 @@ impl State {
             && !breeze_aimed
             && !blaze_aimed
             && !ghast_aimed
+            && !magma_aimed
             && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
@@ -5874,6 +5913,7 @@ impl State {
             && !breeze_aimed
             && !blaze_aimed
             && !ghast_aimed
+            && !magma_aimed
             && !piglin_aimed
             && !guardian_aimed
             && !wither_aimed
@@ -5885,6 +5925,7 @@ impl State {
             || breeze_aimed
             || blaze_aimed
             || ghast_aimed
+            || magma_aimed
             || piglin_aimed
             || guardian_aimed
             || wither_aimed
@@ -5956,6 +5997,29 @@ impl State {
             }
             dropped
         };
+        let dropped_magma = magma_aimed && {
+            let origin = self.magma_cubes.origin();
+            match self.magma_cubes.hurt_aimed(eye, forward, amount) {
+                Some(hit) => {
+                    let dropped = matches!(
+                        hit,
+                        crate::mobs::MagmaHit::Split | crate::mobs::MagmaHit::Cream
+                    );
+                    if matches!(hit, crate::mobs::MagmaHit::Cream) {
+                        xp_at = Some(origin);
+                        self.grant_magma_cream();
+                    } else if matches!(hit, crate::mobs::MagmaHit::Split) {
+                        xp_at = Some(origin);
+                        self.drops.embers(origin);
+                        self.drops.puff(origin, [1.0, 0.45, 0.12]);
+                        self.rebuild_drops();
+                    }
+                    self.rebuild_magma_cubes();
+                    dropped
+                }
+                None => false,
+            }
+        };
         let dropped_piglin = piglin_aimed && {
             let origin = self.piglin.origin();
             let dropped = self.hurt_mob("piglin", amount, origin, |s, n| s.piglin.hurt(n));
@@ -6024,6 +6088,7 @@ impl State {
             || breeze_aimed
             || blaze_aimed
             || ghast_aimed
+            || magma_aimed
             || piglin_aimed
             || guardian_aimed
             || wither_aimed
@@ -6036,6 +6101,7 @@ impl State {
             || dropped_breeze
             || dropped_blaze
             || dropped_ghast
+            || dropped_magma
             || dropped_piglin
             || dropped_guardian
             || dropped_wither
@@ -6045,6 +6111,10 @@ impl State {
             || dropped_guest;
         let word = if !aimed {
             "swing"
+        } else if magma_aimed && dropped_magma && !self.magma_cubes.alive() {
+            "down"
+        } else if magma_aimed && self.magma_cubes.alive() && dropped_magma {
+            "split"
         } else if dropped {
             "down"
         } else if falling {
@@ -6708,6 +6778,19 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_ghast();
+                return true;
+            }
+            let magma_hit = self.magma_cubes.all_bounds().into_iter().enumerate().find_map(
+                |(index, (min, max))| point_in_box(tip, min, max).then_some(index),
+            );
+            if let Some(index) = magma_hit {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let origin = self.magma_cubes.origin();
+                if let Some(hit) = self.magma_cubes.hurt_at(index, amount) {
+                    self.note_magma_hit(hit, origin);
+                }
                 return true;
             }
             let piglin = self.piglin.origin();
@@ -8722,6 +8805,47 @@ impl State {
         self.hotbar_dirty = true;
         self.blaze_due = false;
         self.gui.push_chat("blaze rod");
+    }
+
+    /// Hand over magma cream. A full bar leaves the debt for a later tick.
+    fn grant_magma_cream(&mut self) {
+        if !self.hotbar.room_for("magma_cream") && !self.bag.room_for("magma_cream") {
+            if !self.magma_cream_due {
+                self.gui.push_chat("full");
+            }
+            self.magma_cream_due = true;
+            return;
+        }
+        if !self.hotbar.collect("magma_cream") {
+            self.bag.collect("magma_cream");
+            self.bag_dirty = true;
+        }
+        self.gui.push_chat("cream");
+        self.magma_cream_due = false;
+    }
+
+    /// Apply a magma-cube hit outcome (split / cream / hurt chat).
+    fn note_magma_hit(&mut self, hit: crate::mobs::MagmaHit, origin: [f32; 3]) {
+        match hit {
+            crate::mobs::MagmaHit::Hurt => {
+                self.gui.push_chat("hit");
+            }
+            crate::mobs::MagmaHit::Split => {
+                self.grant_xp_at(origin, true);
+                self.drops.embers(origin);
+                self.drops.puff(origin, [1.0, 0.45, 0.12]);
+                self.rebuild_drops();
+                self.gui.push_chat("split");
+            }
+            crate::mobs::MagmaHit::Cream => {
+                self.grant_xp_at(origin, true);
+                self.grant_magma_cream();
+                self.drops.embers(origin);
+                self.rebuild_drops();
+                self.gui.push_chat("down");
+            }
+        }
+        self.rebuild_magma_cubes();
     }
 
     /// Hand over gunpowder + ghast tear. A full bar leaves the debt for a later tick.
@@ -13285,6 +13409,13 @@ impl State {
         for (id, (min, max)) in bodies {
             note(&mut best, id, look::ray_aabb(eye, forward, min, max));
         }
+        for (min, max) in self.magma_cubes.all_bounds() {
+            note(
+                &mut best,
+                "magma_cube",
+                look::ray_aabb(eye, forward, min, max),
+            );
+        }
         for zombie in self.night.iter() {
             if !zombie.living() {
                 continue;
@@ -13360,6 +13491,9 @@ impl State {
         }
         if self.ghast.aimed(eye, forward) {
             return Some("ghast");
+        }
+        if self.magma_cubes.aimed(eye, forward) {
+            return Some("magma_cube");
         }
         if self.piglin.aimed(eye, forward) {
             return Some("piglin");
@@ -20993,6 +21127,104 @@ impl State {
                 self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
             }
         }
+        let _ = self.window.focus_window();
+    }
+
+    /// Big magma cube mid-hop in the nether pocket, then quit with a PNG.
+    pub fn arm_magma_cube_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.16);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = crate::mobs::MAGMA_CUBE_PAD;
+        let (portal_x, portal_z) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        // Magma floor under the hop + clear the return portal so the +Z face reads.
+        let mut cells = vec![
+            CellChange {
+                x: px,
+                y: fy - 1,
+                z: pz,
+                block: Block::new("magma", 0),
+            },
+            CellChange {
+                x: px + 1,
+                y: fy - 1,
+                z: pz,
+                block: Block::new("magma", 0),
+            },
+            CellChange {
+                x: px,
+                y: fy - 1,
+                z: pz - 1,
+                block: Block::new("magma", 0),
+            },
+        ];
+        for dx in 0..=3 {
+            for dy in 0..=4 {
+                cells.push(CellChange {
+                    x: portal_x + dx,
+                    y: fy + dy,
+                    z: portal_z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        apply_changes(&mut self.world, &cells);
+        for &(x, z) in &[(px, pz), (px + 1, pz), (px, pz - 1)] {
+            self.chunk_bake.touch(x, z);
+        }
+        for dx in 0..=3 {
+            self.chunk_bake.touch(portal_x + dx, portal_z);
+        }
+        let origin = [px as f32 + 0.5, fy as f32, pz as f32 + 0.5];
+        self.magma_cubes.place_at(origin);
+        // Mid-hop stretch for the still.
+        let _ = self.magma_cubes.tick_near(9, [origin[0] + 1.2, origin[1], origin[2] + 1.5]);
+        self.rebuild_magma_cubes();
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("magma cube");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_sword");
+        let _ = self.hotbar.collect("magma_cream");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        // Face-on from the north (+Z eyes), portal cleared for the still.
+        let focus = glam::Vec3::new(origin[0], origin[1] + 0.7, origin[2] + 0.15);
+        let eye = glam::Vec3::new(origin[0] + 0.2, origin[1] + 0.9, origin[2] + 2.45);
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        self.camera.on_ground = true;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.lava_heat = 0.45;
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        self.set_capture(false);
         let _ = self.window.focus_window();
     }
 
@@ -30416,6 +30648,26 @@ impl State {
             if self.ghast_due {
                 self.grant_ghast_loot();
             }
+            if self.cook_shot_path.is_none() {
+                if self.magma_cubes.tick_near(steps, eye3) {
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                    // Fire resistance shrugs off the hot slap.
+                    if self.fire_res_left > 0.0 {
+                        self.gui.push_chat("fire res");
+                    } else {
+                        self.apply_damage(amount);
+                        self.gui.push_chat(if blocked { "block" } else { "burn" });
+                    }
+                }
+                if self.magma_cubes.rest(dt) {
+                    self.rebuild_magma_cubes();
+                }
+            }
+            self.rebuild_magma_cubes();
+            if self.magma_cream_due {
+                self.grant_magma_cream();
+            }
             {
                 let feet = [self.camera.eye.x, self.camera.eye.z];
                 let from = [
@@ -31461,6 +31713,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, ghast.slice(..));
                     pass.draw(0..self.ghast_count, 0..1);
+                }
+            }
+            if let Some(magma) = &self.magma_cube_buf {
+                if self.magma_cube_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, magma.slice(..));
+                    pass.draw(0..self.magma_cube_count, 0..1);
                 }
             }
             if let Some(piglin) = &self.piglin_buf {
