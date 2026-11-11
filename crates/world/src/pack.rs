@@ -7757,6 +7757,14 @@ mod tests {
         assert_eq!(pack.food_of("slimeball"), Some(1));
         assert_eq!(pack.food_of("chorus_fruit"), Some(4));
         assert_eq!(pack.tool_icon("chorus_fruit"), Some("chorus_flower"));
+        assert_eq!(
+            break_loot_of("chorus_flower"),
+            vec![("chorus_fruit".to_string(), 1)]
+        );
+        assert_eq!(
+            break_loot_of("chorus_plant"),
+            vec![("chorus_fruit".to_string(), 1)]
+        );
         assert_eq!(pack.food_of("melon_slice"), Some(2));
         assert_eq!(harvest_of("melon"), ("melon_slice", 4));
         assert_eq!(harvest_of("stone"), ("stone", 1));

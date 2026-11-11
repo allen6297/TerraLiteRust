@@ -164,6 +164,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_stronghold(&mut blocks, chunk_x, chunk_z);
     stamp_end_pocket(&mut blocks, chunk_x, chunk_z);
     stamp_end_city(&mut blocks, chunk_x, chunk_z);
+    stamp_end_chorus(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
     stamp_clay_bank(&mut blocks, chunk_x, chunk_z);
     stamp_frog_pads(&mut blocks, chunk_x, chunk_z);
@@ -560,6 +561,15 @@ pub const END_CITY_CHEST: (i32, i32) = END_CITY;
 
 /// Standing floor of the End city tower base.
 pub const END_CITY_FLOOR: u16 = END_FLOOR;
+
+/// Chorus grove on a small end-stone islet east of the End pad (same chunk).
+///
+/// Stalks of `chorus_plant` topped with `chorus_flower`. Break either for
+/// `chorus_fruit` — End food that blinks you a short hop.
+pub const END_CHORUS: (i32, i32) = (28, -44);
+
+/// Floor of the chorus islet (same height as the End pad).
+pub const END_CHORUS_FLOOR: u16 = END_FLOOR;
 
 const END_CHUNK: (i32, i32) = (1, -3);
 
@@ -1524,6 +1534,44 @@ fn stamp_end_city(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z:
     // Inner floor under the chest so it does not hang in air.
     blocks.retain(|(x, y, z, _)| !(*x == chest_lx && *z == chest_lz && *y == floor + 7));
     blocks.push((chest_lx, floor + 7, chest_lz, purpur));
+}
+
+/// Small end-stone islet with chorus stalks east of the End pad.
+fn stamp_end_chorus(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != END_CHUNK {
+        return;
+    }
+    let (cx, cz) = END_CHORUS;
+    let floor = END_CHORUS_FLOOR;
+    let end_stone = Block::new("end_stone", 0);
+    let plant = Block::new("chorus_plant", 0);
+    let flower = Block::new("chorus_flower", 0);
+    // 3×3 floating end-stone pad.
+    for dz in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor && *y <= floor + 5)
+            });
+            blocks.push((lx, floor, lz, end_stone));
+        }
+    }
+    // Center stalk: plant / plant / flower.
+    let mid_lx = (cx - chunk_x * 16) as u8;
+    let mid_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((mid_lx, floor + 1, mid_lz, plant));
+    blocks.push((mid_lx, floor + 2, mid_lz, plant));
+    blocks.push((mid_lx, floor + 3, mid_lz, flower));
+    // Side stalks for a small grove read.
+    for &(dx, dz, height) in &[(1i32, 0i32, 2u16), (-1, 1, 1), (0, -1, 2)] {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz + dz - chunk_z * 16) as u8;
+        for y in 1..=height {
+            blocks.push((lx, floor + y, lz, plant));
+        }
+        blocks.push((lx, floor + height + 1, lz, flower));
+    }
 }
 
 /// Ruined plaza + three house shells + well. Guaranteed in [`VILLAGE_CHUNK`].
@@ -2779,6 +2827,38 @@ mod tests {
         );
         assert_eq!(END_CITY_FLOOR, END_FLOOR);
         assert_ne!((cx, cz), END_PAD);
+    }
+
+    #[test]
+    fn a_chorus_grove_stands_east_of_the_pad() {
+        let pocket = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+        let (cx, cz) = END_CHORUS;
+        let lx = (cx - END_CHUNK.0 * 16) as u8;
+        let lz = (cz - END_CHUNK.1 * 16) as u8;
+        let floor = END_CHORUS_FLOOR;
+        assert_eq!(
+            pocket.block(lx, floor, lz).id,
+            "end_stone",
+            "chorus islet floor"
+        );
+        assert_eq!(
+            pocket.block(lx, floor + 1, lz).id,
+            "chorus_plant",
+            "center stalk"
+        );
+        assert_eq!(
+            pocket.block(lx, floor + 3, lz).id,
+            "chorus_flower",
+            "center bloom"
+        );
+        assert_eq!(
+            pocket.block(lx + 1, floor + 3, lz).id,
+            "chorus_flower",
+            "side bloom"
+        );
+        assert_eq!(END_CHORUS_FLOOR, END_FLOOR);
+        assert_ne!((cx, cz), END_PAD);
+        assert_ne!((cx, cz), END_CITY);
     }
 
     #[test]

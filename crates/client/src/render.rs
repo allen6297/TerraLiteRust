@@ -1715,6 +1715,8 @@ pub struct State {
     found_end: bool,
     /// Once: walked up to the End city remnant tower by the pad.
     found_end_city: bool,
+    /// Once: walked up to the End chorus grove east of the pad.
+    found_chorus: bool,
 
     bee: crate::mobs::Bee,
     bee_buf: Option<wgpu::Buffer>,
@@ -2910,6 +2912,7 @@ impl State {
             levitation_left: 0.0,
             found_end: false,
             found_end_city: false,
+            found_chorus: false,
             nether_star_due: false,
             bee: crate::mobs::Bee::new(),
             bee_buf: None,
@@ -7335,6 +7338,12 @@ impl State {
                 self.gui.push_chat("a shulker");
             }
         }
+        if !self.found_chorus
+            && near(rebuild_world::END_CHORUS.0, rebuild_world::END_CHORUS.1)
+        {
+            self.found_chorus = true;
+            self.gui.push_chat("chorus");
+        }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
         {
@@ -8219,6 +8228,8 @@ impl State {
     }
 
     /// Eat the held food. True when the selected slot is food, even if the bar is full.
+    ///
+    /// Chorus fruit still blinks and spends when the hunger bar is full (pearl-lite).
     fn try_eat(&mut self) -> bool {
         let Some(id) = self.hotbar.slot(self.hotbar.selected()) else {
             return false;
@@ -8228,6 +8239,7 @@ impl State {
         };
         let potion = id == "healing_potion";
         let strength = id == "strength_potion";
+        let chorus = id == "chorus_fruit";
         let fed = self.hunger.eat(amount);
         let before = self.hearts;
         if potion {
@@ -8237,7 +8249,7 @@ impl State {
             self.strength_left = body::STRENGTH_SECS;
             self.strength_show = 1.0;
         }
-        if !fed && self.hearts == before && !strength {
+        if !fed && self.hearts == before && !strength && !chorus {
             return true;
         }
         if potion {
@@ -8246,13 +8258,13 @@ impl State {
         if strength {
             self.gui.push_chat("strength");
         }
-        if id == "chorus_fruit" {
+        if chorus {
             if let Some(eye) = body::chorus_hop(self.camera.eye, &self.world) {
                 self.camera.eye = eye;
                 self.camera.velocity_y = 0.0;
                 self.camera.on_ground = true;
-                self.gui.push_chat("blink");
             }
+            self.gui.push_chat("blink");
         }
         self.hotbar.consume_selected();
         self.hotbar_dirty = true;
@@ -9783,6 +9795,69 @@ impl State {
         let _ = self.hotbar.give_stack("bow");
         let _ = self.hotbar.give_stack("arrow");
         self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// End chorus grove with fruit ready to blink, then quit with a PNG.
+    pub fn arm_chorus_fruit_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::END_CHORUS;
+        let floor = i32::from(rebuild_world::END_CHORUS_FLOOR);
+        self.found_end = true;
+        self.found_end_city = true;
+        self.found_chorus = true;
+        // Keep the void quiet for the still — no pad dragon / city shulker.
+        self.dragon.place_at([0.0, -24.0, 0.0]);
+        let _ = self.dragon.hurt(100);
+        self.rebuild_dragon();
+        let _ = self.shulker.hurt(100);
+        self.rebuild_shulker();
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("chorus");
+        self.gui.push_chat("blink");
+        self.hunger.set_food(4);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("chorus_fruit");
+        let _ = self.hotbar.collect("chorus_fruit");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, floor as f32 + 2.6, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 - 0.2,
+            floor as f32 + 0.35 + body::EYE_HEIGHT,
+            cz as f32 + 2.6,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
         self.set_capture(false);
         for dx in -1..=1 {
             for dz in -1..=1 {
