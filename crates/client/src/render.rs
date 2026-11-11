@@ -1346,6 +1346,8 @@ pub struct State {
     redstone_pulse: Vec<([i32; 3], f32)>,
     /// Repeater output flips waiting out their delay: (cell, seconds left, want_on).
     redstone_delay: Vec<([i32; 3], f32, bool)>,
+    /// Comparator front signal strengths from the last refresh.
+    comparator_out: std::collections::HashMap<[i32; 3], u8>,
     /// Device cells currently considered powered by redstone.
     redstone_powered: HashSet<[i32; 3]>,
     /// One tip when dust first carries power this session.
@@ -2721,6 +2723,7 @@ impl State {
             piston_told: false,
             redstone_pulse: Vec::new(),
             redstone_delay: Vec::new(),
+            comparator_out: std::collections::HashMap::new(),
             redstone_powered: HashSet::new(),
             redstone_told: false,
             lamp_drain_wait: 0,
@@ -7125,6 +7128,10 @@ impl State {
         }
         if crate::redstone::is_repeater(block.id) {
             self.cycle_repeater(hit.block, block.metadata);
+            return;
+        }
+        if crate::redstone::is_comparator(block.id) {
+            self.toggle_comparator(hit.block, block.metadata);
             return;
         }
         if block.id == "button" {
@@ -13953,6 +13960,14 @@ impl State {
                 crate::redstone::with_facing(crate::redstone::facing_from_look([
                     forward.x, forward.y, forward.z,
                 ])),
+            );
+        }
+        if crate::redstone::is_comparator(block.id) {
+            let forward = self.camera.forward();
+            block = crate::redstone::make_comparator(
+                crate::redstone::facing_from_look([forward.x, forward.y, forward.z]),
+                false,
+                false,
             );
         }
         if block.id == "pump" {
@@ -22629,6 +22644,182 @@ impl State {
 
 
 
+
+    /// Chest → comparator (compare) → dust → lamp, plus subtract twin, then quit.
+    pub fn arm_comparator_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(0, 0));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let cx = 8;
+        let cz = 8;
+        let mut ground = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                ground = y;
+            }
+        }
+        let y = ground + 1;
+        let mut changes = Vec::new();
+        for x in (cx - 1)..=(cx + 10) {
+            for z in (cz - 1)..=(cz + 2) {
+                changes.push(CellChange {
+                    x,
+                    y: ground,
+                    z,
+                    block: Block::new("stone", 0),
+                });
+                changes.push(CellChange {
+                    x,
+                    y,
+                    z,
+                    block: Block::AIR,
+                });
+            }
+        }
+        let compare = crate::redstone::make_comparator(0, false, true);
+        let subtract = crate::redstone::make_comparator(0, true, true);
+        changes.extend_from_slice(&[
+            CellChange {
+                x: cx,
+                y,
+                z: cz,
+                block: Block::new("chest", 0),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz,
+                block: compare,
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 11),
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz,
+                block: Block::new("redstone_dust", 10),
+            },
+            CellChange {
+                x: cx + 4,
+                y,
+                z: cz,
+                block: Block::new("lamp", 1),
+            },
+            CellChange {
+                x: cx,
+                y,
+                z: cz + 2,
+                block: Block::new("lever", 1),
+            },
+            CellChange {
+                x: cx + 1,
+                y,
+                z: cz + 2,
+                block: Block::new("redstone_dust", 15),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz + 2,
+                block: subtract,
+            },
+            CellChange {
+                x: cx + 3,
+                y,
+                z: cz + 2,
+                block: Block::new("redstone_dust", 8),
+            },
+            CellChange {
+                x: cx + 2,
+                y,
+                z: cz + 1,
+                block: Block::new("redstone_dust", 7),
+            },
+        ]);
+        apply_changes(&mut self.world, &changes);
+        for x in (cx - 1)..=(cx + 10) {
+            self.chunk_bake.touch(x, cz);
+        }
+
+        let save = crate::net::world_file(&self.loaded_world);
+        let slots = vec![
+            rebuild_world::CarriedSlot {
+                slot: 0,
+                id: "dirt".into(),
+                count: 64,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 1,
+                id: "cobblestone".into(),
+                count: 64,
+            },
+            rebuild_world::CarriedSlot {
+                slot: 2,
+                id: "oak_log".into(),
+                count: 32,
+            },
+        ];
+        let _ = rebuild_world::store_chest_slots(&save, cx, y, cz, "chest", &slots);
+
+        let focus = glam::Vec3::new(cx as f32 + 2.5, y as f32 + 0.45, cz as f32 + 1.0);
+        let eye = glam::Vec3::new(
+            cx as f32 + 2.5,
+            y as f32 + 1.2 + body::EYE_HEIGHT,
+            cz as f32 - 5.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("redstone_comparator");
+        let _ = self.hotbar.collect("redstone_dust");
+        let _ = self.hotbar.collect("chest");
+        let _ = self.hotbar.collect("lamp");
+        self.hotbar_dirty = true;
+
+        self.guests.clear();
+        self.others.clear();
+        self.rebuild_peers();
+        self.redstone_told = true;
+        self.comparator_out.insert([cx + 1, y, cz], 11);
+        self.comparator_out.insert([cx + 2, y, cz + 2], 8);
+        self.redstone_powered.insert([cx + 4, y, cz]);
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("comparator");
+        self.gui.push_chat("compare");
+        self.found_thunk = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Lever → dust → repeater (delay 2, powered) → refreshed dust → lamp, then quit.
     pub fn arm_repeater_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -30125,6 +30316,93 @@ impl State {
 
 
 
+
+    fn toggle_comparator(&mut self, at: [i32; 3], metadata: u8) {
+        if self.told_disconnect {
+            return;
+        }
+        let block = self.world.block_at(at[0], at[1], at[2]);
+        let next = crate::redstone::toggle_subtract(metadata);
+        let mode = if crate::redstone::subtract_mode(next) {
+            "subtract"
+        } else {
+            "compare"
+        };
+        let updated = Block::new("redstone_comparator", next).with_fill(block.fill);
+        self.send_places_batch(&[CellChange {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            block: updated,
+        }]);
+        let source = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+        self.play_world(crate::audio::Sound::Thunk, source);
+        self.gui.push_chat(mode);
+        self.refresh_redstone(at);
+    }
+
+    fn comparator_back_overrides(
+        &self,
+        focus: [i32; 3],
+        radius: i32,
+    ) -> std::collections::HashMap<[i32; 3], u8> {
+        let mut outs = std::collections::HashMap::new();
+        let save = crate::net::world_file(&self.loaded_world);
+        let chests = rebuild_world::read_chests(&save).unwrap_or_default();
+        for dx in -radius..=radius {
+            for dy in -radius..=radius {
+                for dz in -radius..=radius {
+                    let at = [focus[0] + dx, focus[1] + dy, focus[2] + dz];
+                    let block = self.world.block_at(at[0], at[1], at[2]);
+                    if !crate::redstone::is_comparator(block.id) {
+                        continue;
+                    }
+                    let back = crate::redstone::back_cell(at, block.metadata);
+                    let behind = self.world.block_at(back[0], back[1], back[2]);
+                    if !crate::redstone::is_container_block(behind.id) {
+                        continue;
+                    }
+                    let slots = if behind.id == "ender_chest" {
+                        rebuild_world::read_ender_chest(&save).unwrap_or_default()
+                    } else {
+                        chests
+                            .iter()
+                            .find(|c| c.x == back[0] && c.y == back[1] && c.z == back[2])
+                            .map(|c| c.slots.clone())
+                            .unwrap_or_default()
+                    };
+                    let signal =
+                        crate::redstone::container_signal(&slots, hotbar::stack_cap);
+                    outs.insert(at, signal);
+                }
+            }
+        }
+        outs
+    }
+
+    fn apply_comparator_lit(&mut self, outs: &std::collections::HashMap<[i32; 3], u8>) {
+        let mut changes = Vec::new();
+        for (&at, &strength) in outs {
+            let block = self.world.block_at(at[0], at[1], at[2]);
+            if !crate::redstone::is_comparator(block.id) {
+                continue;
+            }
+            let want = strength > 0;
+            if crate::redstone::comparator_lit(block) == want {
+                continue;
+            }
+            changes.push(CellChange {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                block: crate::redstone::with_comparator_lit(block, want),
+            });
+        }
+        if !changes.is_empty() {
+            self.send_places_batch(&changes);
+        }
+    }
+
     fn cycle_repeater(&mut self, at: [i32; 3], metadata: u8) {
         if self.told_disconnect {
             return;
@@ -30264,8 +30542,27 @@ impl State {
         }
         const RADIUS: i32 = 18;
         let buttons = self.button_source_cells();
-        let powers =
+        // Seed dust from levers/repeaters first so comparator backs see live wire.
+        let seed =
             crate::redstone::plan_dust_power(&self.world, focus, RADIUS, &buttons);
+        let backs = self.comparator_back_overrides(focus, RADIUS);
+        let outs = crate::redstone::plan_comparator_outputs(
+            &self.world,
+            focus,
+            RADIUS,
+            &buttons,
+            &seed,
+            &backs,
+        );
+        self.apply_comparator_lit(&outs);
+        self.comparator_out = outs.clone();
+        let powers = crate::redstone::plan_dust_power_with(
+            &self.world,
+            focus,
+            RADIUS,
+            &buttons,
+            &outs,
+        );
         let dust_edits = crate::redstone::dust_changes(&self.world, &powers);
         if !dust_edits.is_empty() {
             let changes: Vec<CellChange> = dust_edits
@@ -30284,15 +30581,21 @@ impl State {
             }
         }
         // Re-read powers after local apply so device / repeater scan sees lit dust.
-        let powers =
-            crate::redstone::plan_dust_power(&self.world, focus, RADIUS, &buttons);
+        let powers = crate::redstone::plan_dust_power_with(
+            &self.world,
+            focus,
+            RADIUS,
+            &buttons,
+            &self.comparator_out,
+        );
         self.schedule_repeaters(focus, RADIUS, &buttons, &powers);
-        let now = crate::redstone::powered_devices(
+        let now = crate::redstone::powered_devices_with(
             &self.world,
             focus,
             RADIUS,
             &buttons,
             &powers,
+            &self.comparator_out,
         );
         let prior = std::mem::take(&mut self.redstone_powered);
         for cell in now.iter() {
@@ -30320,7 +30623,12 @@ impl State {
             if crate::piston::is_piston(block.id) {
                 self.retract_piston(*cell);
             } else if block.id == "lamp"
-                && !crate::redstone::lamp_redstone_powered(&self.world, *cell, &buttons)
+                && !crate::redstone::lamp_redstone_powered_with(
+                    &self.world,
+                    *cell,
+                    &buttons,
+                    &self.comparator_out,
+                )
             {
                 // Leave ember-lit lamps alone; only clear when redstone dropped.
                 // Ember tick will restore if battery/wire still feeds it.

@@ -435,6 +435,8 @@ struct Args {
     shot_redstone: Option<std::path::PathBuf>,
     /// Redstone repeater delay diode, then quit.
     shot_repeater: Option<std::path::PathBuf>,
+    /// Redstone comparator compare/subtract, then quit.
+    shot_comparator: Option<std::path::PathBuf>,
     /// Mine-mouth lodestone + linked compass, then quit.
     shot_lodestone: Option<std::path::PathBuf>,
     /// Camp jukebox disc play, then quit.
@@ -720,6 +722,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_piston: args.shot_piston,
         shot_redstone: args.shot_redstone,
         shot_repeater: args.shot_repeater,
+        shot_comparator: args.shot_comparator,
         shot_lodestone: args.shot_lodestone,
         shot_jukebox: args.shot_jukebox,
         shot_bell: args.shot_bell,
@@ -922,6 +925,7 @@ struct App {
     shot_piston: Option<std::path::PathBuf>,
     shot_redstone: Option<std::path::PathBuf>,
     shot_repeater: Option<std::path::PathBuf>,
+    shot_comparator: Option<std::path::PathBuf>,
     shot_lodestone: Option<std::path::PathBuf>,
     shot_jukebox: Option<std::path::PathBuf>,
     shot_bell: Option<std::path::PathBuf>,
@@ -1440,6 +1444,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_repeater.take() {
                     state.arm_repeater_shot(path);
                 }
+                if let Some(path) = self.shot_comparator.take() {
+                    state.arm_comparator_shot(path);
+                }
                 if let Some(path) = self.shot_lodestone.take() {
                     state.arm_lodestone_shot(path);
                 }
@@ -1801,6 +1808,7 @@ where
         shot_piston: None,
         shot_redstone: None,
         shot_repeater: None,
+        shot_comparator: None,
         shot_lodestone: None,
         shot_jukebox: None,
         shot_bell: None,
@@ -2769,6 +2777,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-repeater".to_string())?;
                 parsed.shot_repeater = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-comparator" | "--shot-redstone-comparator" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-comparator".to_string())?;
+                parsed.shot_comparator = Some(std::path::PathBuf::from(value));
             }
             "--shot-lodestone" | "--shot-compass-link" => {
                 let value = iter
