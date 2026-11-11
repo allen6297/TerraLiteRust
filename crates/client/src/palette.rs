@@ -141,6 +141,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "barrel" => [0.50, 0.32, 0.14],
         "ender_chest" => [0.10, 0.16, 0.18],
         "shulker_box" => [0.44, 0.18, 0.58],
+        "shulker_shell" => [0.58, 0.32, 0.72],
         "anvil" => [0.55, 0.56, 0.60],
         "enchanting_table" => [0.24, 0.16, 0.46],
         "brewing_stand" => [0.42, 0.32, 0.24],

@@ -723,6 +723,7 @@ mod tests {
                 "shelf".to_string(),
                 "shield".to_string(),
                 "shulker_box".to_string(),
+                "shulker_shell".to_string(),
                 "sign".to_string(),
                 "slab".to_string(),
                 "slimeball".to_string(),

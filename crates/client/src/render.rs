@@ -1703,6 +1703,14 @@ pub struct State {
     dragon: crate::mobs::EnderDragon,
     dragon_buf: Option<wgpu::Buffer>,
     dragon_count: u32,
+    shulker: crate::mobs::Shulker,
+    shulker_buf: Option<wgpu::Buffer>,
+    shulker_count: u32,
+    shulker_shots: crate::shulker_shots::ShulkerShots,
+    /// Hand over a shulker shell once inventory has room.
+    shulker_due: bool,
+    /// Seconds of upward float left after a shulker bullet.
+    levitation_left: f32,
     found_end: bool,
     /// Once: walked up to the End city remnant tower by the pad.
     found_end_city: bool,
@@ -2892,6 +2900,12 @@ impl State {
             dragon: crate::mobs::EnderDragon::new(),
             dragon_buf: None,
             dragon_count: 0,
+            shulker: crate::mobs::Shulker::new(),
+            shulker_buf: None,
+            shulker_count: 0,
+            shulker_shots: crate::shulker_shots::ShulkerShots::new(),
+            shulker_due: false,
+            levitation_left: 0.0,
             found_end: false,
             found_end_city: false,
             nether_star_due: false,
@@ -2982,6 +2996,7 @@ impl State {
         state.rebuild_wither();
         state.rebuild_wither_boss();
         state.rebuild_dragon();
+        state.rebuild_shulker();
 
         state.rebuild_bee();
         state.rebuild_fox();
@@ -4795,6 +4810,7 @@ impl State {
         vertices.extend(self.splash.vertices());
         vertices.extend(self.fireballs.vertices());
         vertices.extend(self.wither_shots.vertices());
+        vertices.extend(self.shulker_shots.vertices());
         vertices.extend(self.pearls.vertices());
         if vertices.is_empty() {
             self.drop_buf = None;
@@ -5293,6 +5309,41 @@ impl State {
         self.dragon_count = vertices.len() as u32;
     }
 
+    fn rebuild_shulker(&mut self) {
+        let vertices = self.shulker.vertices();
+        if vertices.is_empty() {
+            self.shulker_buf = None;
+            self.shulker_count = 0;
+            return;
+        }
+        self.shulker_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("shulker"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.shulker_count = vertices.len() as u32;
+    }
+
+    /// Hand over a shulker shell. A full bar leaves the debt for a later tick.
+    fn grant_shulker_shell(&mut self) {
+        if !self.hotbar.room_for("shulker_shell") && !self.bag.room_for("shulker_shell") {
+            if !self.shulker_due {
+                self.gui.push_chat("full");
+            }
+            self.shulker_due = true;
+            return;
+        }
+        if !self.hotbar.collect("shulker_shell") {
+            self.bag.collect("shulker_shell");
+            self.bag_dirty = true;
+        }
+        self.hotbar_dirty = true;
+        self.shulker_due = false;
+        self.gui.push_chat("shulker shell");
+    }
+
     /// Place a dragon egg on the End pad and keep the return portal lit.
     fn drop_dragon_egg(&mut self) {
         let (cx, cz) = rebuild_world::END_PAD;
@@ -5688,6 +5739,15 @@ impl State {
             && !wither_aimed
             && !wither_boss_aimed
             && self.dragon.aimed(eye, forward);
+        let shulker_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && !guardian_aimed
+            && !wither_aimed
+            && !wither_boss_aimed
+            && !dragon_aimed
+            && self.shulker.aimed(eye, forward);
         let guest_index = if zombie_aimed
             || night_index.is_some()
             || breeze_aimed
@@ -5696,6 +5756,7 @@ impl State {
             || wither_aimed
             || wither_boss_aimed
             || dragon_aimed
+            || shulker_aimed
         {
             None
         } else {
@@ -5786,6 +5847,14 @@ impl State {
             }
             dropped
         };
+        let dropped_shulker = shulker_aimed && {
+            let origin = self.shulker.origin();
+            let dropped = self.hurt_mob("shulker", amount, origin, |s, n| s.shulker.hurt(n));
+            if dropped {
+                xp_at = Some(origin);
+            }
+            dropped
+        };
         let dropped_guest = if let Some(index) = guest_index {
             let id = self.guests[index].id().to_string();
             let origin = self.guests[index].origin();
@@ -5807,6 +5876,7 @@ impl State {
             || wither_aimed
             || wither_boss_aimed
             || dragon_aimed
+            || shulker_aimed
             || guest_index.is_some();
         let dropped = dropped_zombie
             || dropped_night
@@ -5816,6 +5886,7 @@ impl State {
             || dropped_wither
             || dropped_wither_boss
             || dropped_dragon
+            || dropped_shulker
             || dropped_guest;
         let word = if !aimed {
             "swing"
@@ -5867,6 +5938,9 @@ impl State {
         if dropped_dragon {
             self.drop_dragon_egg();
         }
+        if dropped_shulker {
+            self.grant_shulker_shell();
+        }
         if self.hotbar.slot(slot).is_none() {
             self.gui.push_chat("the mace breaks");
         }
@@ -5877,6 +5951,7 @@ impl State {
         self.rebuild_wither();
         self.rebuild_wither_boss();
         self.rebuild_dragon();
+        self.rebuild_shulker();
     }
 
     fn holding_horn(&self) -> bool {
@@ -6521,6 +6596,22 @@ impl State {
                 }
                 self.gui.push_chat(if dropped { "down" } else { "hit" });
                 self.rebuild_dragon();
+                return true;
+            }
+            let shulker = self.shulker.origin();
+            let (smin, smax) = self.shulker.bounds();
+            if point_in_box(tip, smin, smax) {
+                if !self.arrows.take_near(tip, 0.5) {
+                    continue;
+                }
+                let dropped =
+                    self.hurt_mob("shulker", amount, shulker, |s, n| s.shulker.hurt(n));
+                if dropped {
+                    self.grant_xp_at(shulker, true);
+                    self.grant_shulker_shell();
+                }
+                self.gui.push_chat(if dropped { "down" } else { "hit" });
+                self.rebuild_shulker();
                 return true;
             }
             if let Some(index) = self.guests.iter().position(|guest| {
@@ -7238,6 +7329,9 @@ impl State {
         {
             self.found_end_city = true;
             self.gui.push_chat("an end city");
+            if self.shulker.alive() {
+                self.gui.push_chat("a shulker");
+            }
         }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
@@ -8682,6 +8776,18 @@ impl State {
                         self.rebuild_dragon();
                         hit = true;
                     }
+                    let shulker = self.shulker.origin();
+                    if crate::splash::in_radius(burst.center, shulker) {
+                        let dropped = self.hurt_mob("shulker", amount, shulker, |s, n| {
+                            s.shulker.hurt(n)
+                        });
+                        if dropped {
+                            self.grant_xp_at(shulker, true);
+                            self.grant_shulker_shell();
+                        }
+                        self.rebuild_shulker();
+                        hit = true;
+                    }
                     let guest_hits: Vec<(usize, String, [f32; 3])> = self
                         .guests
                         .iter()
@@ -9550,6 +9656,72 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Open shulker on the End city tower mid-shot, then quit with a PNG.
+    pub fn arm_shulker_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::END_CITY;
+        let floor = i32::from(rebuild_world::END_CITY_FLOOR);
+        self.shulker.place_at([
+            cx as f32 + 0.5,
+            floor as f32 + 5.0,
+            cz as f32 + 1.55,
+        ]);
+        let origin = self.shulker.origin();
+        self.shulker_shots.pin(
+            [origin[0] + 0.2, origin[1] + 0.55, origin[2] + 1.4],
+            [0.4, 0.2, 2.2],
+        );
+        self.rebuild_shulker();
+        self.rebuild_drops();
+        self.found_end = true;
+        self.found_end_city = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("an end city");
+        self.gui.push_chat("a shulker");
+
+        let focus = glam::Vec3::new(origin[0], origin[1] + 0.45, origin[2]);
+        let eye = glam::Vec3::new(
+            origin[0] + 0.3,
+            origin[1] + 0.35,
+            origin[2] + 4.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bow");
+        let _ = self.hotbar.give_stack("arrow");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -11769,6 +11941,7 @@ impl State {
             ("wither_skeleton", self.wither.bounds()),
             ("wither", self.wither_boss.bounds()),
             ("ender_dragon", self.dragon.bounds()),
+            ("shulker", self.shulker.bounds()),
             ("copper_golem", self.golem.bounds()),
 
 
@@ -11871,6 +12044,9 @@ impl State {
         }
         if self.dragon.aimed(eye, forward) {
             return Some("ender_dragon");
+        }
+        if self.shulker.aimed(eye, forward) {
+            return Some("shulker");
         }
         if self.fox.aimed(eye, forward) {
             return Some("fox");
@@ -27323,6 +27499,32 @@ impl State {
             if !wither_bursts.is_empty() {
                 drops_dirty = true;
             }
+            let (shulker_dirty, shulker_bursts, shulker_hit) =
+                self.shulker_shots.tick(dt, &self.world, eye);
+            if shulker_dirty {
+                drops_dirty = true;
+            }
+            for at in &shulker_bursts {
+                self.drops.puff(*at, [0.72, 0.42, 0.86]);
+            }
+            if shulker_hit {
+                let blocked = self.try_shield_block();
+                let amount = body::bite_hearts(
+                    blocked,
+                    crate::shulker_shots::HIT_HEARTS,
+                    self.armor_soak(),
+                );
+                self.apply_damage(amount);
+                if !blocked {
+                    self.levitation_left = crate::shulker_shots::LEVITATION_SECS;
+                    self.gui.push_chat("levitation");
+                } else {
+                    self.gui.push_chat("block");
+                }
+            }
+            if !shulker_bursts.is_empty() {
+                drops_dirty = true;
+            }
             let (splash_dirty, bursts) = self.splash.tick(dt, &self.world);
             if splash_dirty {
                 drops_dirty = true;
@@ -27883,6 +28085,13 @@ impl State {
         }
         self.lantern_phase += dt;
         self.mace_wait = (self.mace_wait - dt).max(0.0);
+        if self.levitation_left > 0.0 {
+            self.levitation_left = (self.levitation_left - dt).max(0.0);
+            if self.camera.velocity_y < 5.5 {
+                self.camera.velocity_y = 5.5;
+            }
+            self.camera.on_ground = false;
+        }
         if self.strength_left > 0.0 {
             self.strength_left = (self.strength_left - dt).max(0.0);
             self.strength_show = if self.strength_left > 0.8 {
@@ -28678,6 +28887,23 @@ impl State {
                     self.play_world(crate::audio::Sound::Gust, from);
                 }
                 self.rebuild_dragon();
+            }
+            {
+                if self.shulker.tick_near(steps, eye3) {
+                    let from = self.shulker.origin();
+                    let muzzle = [from[0], from[1] + 0.7, from[2] + 0.35];
+                    self.shulker_shots.shoot(muzzle, eye3);
+                    self.play_world(crate::audio::Sound::Gust, muzzle);
+                    self.gui.push_chat("shulker");
+                    self.rebuild_drops();
+                }
+                if self.shulker.rest(dt) {
+                    self.rebuild_shulker();
+                }
+                self.rebuild_shulker();
+            }
+            if self.shulker_due {
+                self.grant_shulker_shell();
             }
 
             if let Some(chore) = self.golem.tick(steps, &self.world) {
@@ -29596,6 +29822,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, dragon.slice(..));
                     pass.draw(0..self.dragon_count, 0..1);
+                }
+            }
+            if let Some(shulker) = &self.shulker_buf {
+                if self.shulker_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, shulker.slice(..));
+                    pass.draw(0..self.shulker_count, 0..1);
                 }
             }
             if let Some(beacon) = &self.beacon_buf {

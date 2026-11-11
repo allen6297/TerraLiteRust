@@ -5947,6 +5947,199 @@ impl Wither {
     }
 }
 
+const SHULKER_HEARTS: i32 = 8;
+const SHULKER_SHOOT_EVERY: u32 = 48;
+const SHULKER_OPEN_FOR: u32 = 18;
+const SHULKER_HOME_Y: f32 = 5.0;
+
+/// Boxy shulker clinging to the End city tower. Opens and fires levitation bullets.
+pub struct Shulker {
+    origin: [f32; 3],
+    home: [f32; 3],
+    swing: u32,
+    hearts: i32,
+    down: f32,
+    /// Lid openness 0..=1 for the mesh.
+    open: f32,
+    /// True while the shell is raised and a shot may fire.
+    peeking: bool,
+}
+
+impl Shulker {
+    pub fn new() -> Self {
+        let (x, z) = rebuild_world::END_CITY;
+        let floor = f32::from(rebuild_world::END_CITY_FLOOR);
+        // Sit on the south face looking toward the End pad.
+        let home = [
+            x as f32 + 0.5,
+            floor + SHULKER_HOME_Y,
+            z as f32 + 1.55,
+        ];
+        Self {
+            origin: home,
+            home,
+            swing: 0,
+            hearts: SHULKER_HEARTS,
+            down: 0.0,
+            open: 0.0,
+            peeking: false,
+        }
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn alive(&self) -> bool {
+        self.hearts > 0
+    }
+
+    pub fn openness(&self) -> f32 {
+        self.open
+    }
+
+    /// Place for shots and tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.origin = at;
+        self.home = at;
+        self.hearts = SHULKER_HEARTS;
+        self.down = 0.0;
+        self.swing = SHULKER_SHOOT_EVERY - 4;
+        self.open = 1.0;
+        self.peeking = true;
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let [x, y, z] = self.origin;
+        let center = [x, y + 0.45, z];
+        let to = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+        let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+        if !(0.0..=10.0).contains(&along) {
+            return false;
+        }
+        let closest = [
+            eye[0] + forward[0] * along,
+            eye[1] + forward[1] * along,
+            eye[2] + forward[2] * along,
+        ];
+        let dx = closest[0] - center[0];
+        let dy = closest[1] - center[1];
+        let dz = closest[2] - center[2];
+        dx * dx + dy * dy + dz * dz < 0.9
+    }
+
+    /// Spend hearts. True when this hit drops the shulker.
+    pub fn hurt(&mut self, amount: i32) -> bool {
+        if self.hearts <= 0 || amount <= 0 {
+            return false;
+        }
+        self.hearts -= amount;
+        if self.hearts > 0 {
+            return false;
+        }
+        self.hearts = 0;
+        self.down = 10.0;
+        self.open = 0.0;
+        self.peeking = false;
+        true
+    }
+
+    /// Return home after a knockdown. True on the frame it rises.
+    pub fn rest(&mut self, dt: f32) -> bool {
+        if self.hearts > 0 {
+            return false;
+        }
+        self.down -= dt;
+        if self.down > 0.0 {
+            return false;
+        }
+        self.hearts = SHULKER_HEARTS;
+        self.origin = self.home;
+        self.swing = 0;
+        self.down = 0.0;
+        self.open = 0.0;
+        self.peeking = false;
+        true
+    }
+
+    /// Open / close and queue a bullet. True when a shot is due.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if self.hearts <= 0 {
+            return false;
+        }
+        let mut shot = false;
+        for _ in 0..count {
+            self.swing = self.swing.wrapping_add(1);
+            let dx = player[0] - self.origin[0];
+            let dz = player[2] - self.origin[2];
+            let dist = (dx * dx + dz * dz).sqrt();
+            let in_range = (2.0..18.0).contains(&dist);
+            let phase = self.swing % SHULKER_SHOOT_EVERY;
+            if in_range && phase < SHULKER_OPEN_FOR {
+                self.peeking = true;
+                self.open = (self.open + 0.18).min(1.0);
+                if phase == SHULKER_OPEN_FOR / 2 {
+                    shot = true;
+                }
+            } else {
+                self.peeking = false;
+                self.open = (self.open - 0.14).max(0.0);
+            }
+            let _ = self.peeking;
+        }
+        shot
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        if self.hearts <= 0 {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        }
+        let [x, y, z] = self.origin;
+        let top = 0.55 + self.open * 0.55;
+        ([x - 0.45, y, z - 0.45], [x + 0.45, y + top, z + 0.45])
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        if self.hearts <= 0 {
+            return Vec::new();
+        }
+        let [x, y, z] = self.origin;
+        let shell = [0.62, 0.32, 0.78];
+        let dark = [0.28, 0.12, 0.38];
+        let eye = [0.95, 0.55, 1.0];
+        let mut out = Vec::new();
+        // Closed box body.
+        push_box(&mut out, [x, y + 0.35, z], [0.42, 0.35, 0.42], shell);
+        // Lid rises when peeking.
+        let lid_y = y + 0.72 + self.open * 0.55;
+        push_box(&mut out, [x, lid_y, z], [0.44, 0.1, 0.44], dark);
+        if self.open > 0.35 {
+            push_box(
+                &mut out,
+                [x, y + 0.55 + self.open * 0.2, z + 0.28],
+                [0.12, 0.12, 0.1],
+                dark,
+            );
+            push_box(
+                &mut out,
+                [x - 0.05, y + 0.58 + self.open * 0.2, z + 0.36],
+                [0.03, 0.03, 0.02],
+                eye,
+            );
+            push_box(
+                &mut out,
+                [x + 0.05, y + 0.58 + self.open * 0.2, z + 0.36],
+                [0.03, 0.03, 0.02],
+                eye,
+            );
+        }
+        out
+    }
+}
+
 /// Large flying ender dragon. Circles the End pad, dives at the player, drops an egg.
 pub struct EnderDragon {
     origin: [f32; 3],
@@ -6487,6 +6680,29 @@ mod tests {
         assert!(dragon.spent());
         assert!(dragon.vertices().is_empty());
         assert!(!dragon.awaken([24.5, 16.0, -39.5]), "spent dragon stays down");
+    }
+
+    #[test]
+    fn a_shulker_opens_and_queues_a_bullet() {
+        let mut shulker = Shulker::new();
+        assert!(shulker.alive());
+        assert!(!shulker.vertices().is_empty());
+        let home = shulker.origin();
+        let mut fired = false;
+        for _ in 0..(SHULKER_SHOOT_EVERY + 4) {
+            if shulker.tick_near(1, [home[0], home[1], home[2] + 6.0]) {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "open shulker should queue a bullet");
+        assert!(shulker.openness() > 0.4, "lid should rise while peeking");
+        assert!(!shulker.hurt(2));
+        assert!(shulker.hurt(8));
+        assert!(!shulker.alive());
+        assert!(shulker.vertices().is_empty());
+        assert!(shulker.rest(12.0));
+        assert!(shulker.alive());
     }
 
     #[test]
