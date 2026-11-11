@@ -1896,7 +1896,10 @@ where
                     .ok_or_else(|| "missing value for --shot-blast".to_string())?;
                 parsed.shot_blast = Some(std::path::PathBuf::from(value));
             }
-            "--shot-furnace" | "--shot-furnace-bake" => {
+            "--shot-furnace"
+            | "--shot-furnace-bake"
+            | "--shot-furnace-ui"
+            | "--shot-smelt-ui" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-furnace".to_string())?;

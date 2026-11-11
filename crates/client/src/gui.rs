@@ -690,6 +690,8 @@ pub struct Gui {
     furnace: hotbar::Bag,
     furnace_cook: u32,
     furnace_time: f32,
+    /// Set when egui asks render to pull the output into the hotbar/bag.
+    furnace_take: bool,
     /// The furnace screen is smoking food, so stone lines do not cook.
     smoker: bool,
     /// The furnace screen is blasting ore and stone, so food does not cook.
@@ -892,6 +894,7 @@ impl Gui {
                 furnace: hotbar::Bag::new(),
                 furnace_cook: 0,
                 furnace_time: 0.0,
+                furnace_take: false,
                 smoker: false,
                 blast: false,
                 anvil_open: false,
@@ -1022,6 +1025,7 @@ impl Gui {
                     furnace: hotbar::Bag::new(),
                     furnace_cook: 0,
                     furnace_time: 0.0,
+                    furnace_take: false,
                     smoker: false,
                     blast: false,
                     anvil_open: false,
@@ -1162,6 +1166,7 @@ impl Gui {
             furnace: hotbar::Bag::new(),
             furnace_cook: 0,
             furnace_time: 0.0,
+            furnace_take: false,
             smoker: false,
             blast: false,
             anvil_open: false,
@@ -2002,6 +2007,7 @@ impl Gui {
         self.furnace_selected = 0;
         self.furnace_cook = 0;
         self.furnace_time = 0.0;
+        self.furnace_take = false;
         self.smoker = false;
         self.blast = false;
         self.furnace_open = true;
@@ -2017,6 +2023,7 @@ impl Gui {
         self.furnace_selected = 0;
         self.furnace_cook = 0;
         self.furnace_time = 0.0;
+        self.furnace_take = false;
         self.smoker = true;
         self.blast = false;
         self.furnace_open = true;
@@ -2032,6 +2039,7 @@ impl Gui {
         self.furnace_selected = 0;
         self.furnace_cook = 0;
         self.furnace_time = 0.0;
+        self.furnace_take = false;
         self.smoker = false;
         self.blast = true;
         self.furnace_open = true;
@@ -2040,6 +2048,103 @@ impl Gui {
 
     pub fn furnace_open(&self) -> bool {
         self.furnace_open
+    }
+
+    /// `0` input, `1` fuel, `2` output.
+    pub fn furnace_selected(&self) -> usize {
+        self.furnace_selected
+    }
+
+    pub fn select_furnace(&mut self, index: usize) {
+        if index < 3 {
+            self.furnace_selected = index;
+        }
+    }
+
+    pub fn furnace_slot(&self, index: usize) -> Option<&str> {
+        self.furnace.slot(index)
+    }
+
+    pub fn furnace_count(&self, index: usize) -> u16 {
+        self.furnace.count(index)
+    }
+
+    pub fn furnace_cook(&self) -> u32 {
+        self.furnace_cook
+    }
+
+    /// Steps to finish one cook (10 for smoker/blast, 20 for furnace).
+    pub fn furnace_cook_goal(&self) -> u32 {
+        if self.smoker || self.blast {
+            10
+        } else {
+            20
+        }
+    }
+
+    pub fn furnace_is_smoker(&self) -> bool {
+        self.smoker
+    }
+
+    pub fn furnace_is_blast(&self) -> bool {
+        self.blast
+    }
+
+    /// Title for the Whimscape panel.
+    pub fn furnace_title(&self) -> &'static str {
+        if self.blast {
+            "BLAST FURNACE"
+        } else if self.smoker {
+            "SMOKER"
+        } else {
+            "FURNACE"
+        }
+    }
+
+    /// What the input would cook into, when a recipe matches this station.
+    pub fn furnace_preview(&self) -> Option<String> {
+        let id = self.furnace.slot(0)?;
+        if self.smoker {
+            self.book.smoke(id)
+        } else if self.blast {
+            self.book.blast(id)
+        } else {
+            self.book.smelt(id)
+        }
+    }
+
+    /// Short status line under the wells.
+    pub fn furnace_status(&self) -> String {
+        let fueled = matches!(self.furnace.slot(1), Some("oak_log" | "coal_ore"));
+        if self.furnace_cook > 0 {
+            if let Some(want) = self.furnace_preview() {
+                return format!("cooking {want}");
+            }
+            return "cooking…".to_string();
+        }
+        if self.furnace.slot(0).is_some() && !fueled {
+            return "needs oak log or coal ore".to_string();
+        }
+        if let Some(want) = self.furnace_preview() {
+            if fueled {
+                return format!("ready → {want}");
+            }
+        }
+        if self.blast {
+            "ore and stone blast faster".to_string()
+        } else if self.smoker {
+            "raw food smokes into cooked".to_string()
+        } else {
+            "input + fuel → output".to_string()
+        }
+    }
+
+    pub fn request_furnace_take(&mut self) {
+        self.furnace_take = true;
+    }
+
+    pub fn take_furnace_take(&mut self) -> bool {
+        std::mem::replace(&mut self.furnace_take, false)
     }
 
     /// One from the hotbar into the input or the fuel slot.
@@ -2072,6 +2177,7 @@ impl Gui {
     pub fn drain_furnace(&mut self) -> Vec<&'static str> {
         self.furnace_cook = 0;
         self.furnace_time = 0.0;
+        self.furnace_take = false;
         self.furnace.drain()
     }
 
@@ -3858,15 +3964,8 @@ impl Gui {
             );
         }
         if self.furnace_open {
-            return furnace_quads(
-                width,
-                height,
-                &self.furnace,
-                self.furnace_selected,
-                self.furnace_cook,
-                self.smoker,
-                self.blast,
-            );
+            // egui draws the Whimscape furnace / smoker / blast panel.
+            return Vec::new();
         }
         if self.anvil_open {
             // egui draws the Whimscape anvil panel.
@@ -9538,6 +9637,7 @@ mod tests {
             furnace: hotbar::Bag::new(),
             furnace_cook: 0,
             furnace_time: 0.0,
+            furnace_take: false,
             smoker: false,
             blast: false,
             anvil_open: false,

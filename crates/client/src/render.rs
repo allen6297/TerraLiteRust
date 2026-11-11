@@ -22915,7 +22915,7 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// Look at the shrine furnace beside clay, then quit with a PNG.
+    /// Open the shrine furnace Whimscape panel mid-cook, then quit with a PNG.
     pub fn arm_furnace_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -22939,11 +22939,7 @@ impl State {
                 break;
             }
         }
-        let _ = self.hotbar.collect("clay");
-        let _ = self.hotbar.select_digit(2);
-        let word = self.hotbar.furnace_now();
-        self.gui.push_chat(word);
-        self.hotbar_dirty = true;
+        self.chunk_bake.touch(fx, fz);
         let fire = glam::Vec3::new(fx as f32 + 0.5, fy as f32 + 0.85, fz as f32 + 0.5);
         self.drops.smoke([fire.x, fire.y + 0.2, fire.z]);
         self.drops.smoke([fire.x + 0.06, fire.y + 0.28, fire.z - 0.04]);
@@ -22964,6 +22960,22 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+
+        // Stack two clay + two logs: the first cook finishes during the shot
+        // wait, then the second leaves input/fuel/output + a mid progress bar.
+        let _ = self.gui.open_furnace();
+        let _ = self.gui.give_furnace("clay");
+        let _ = self.gui.give_furnace("clay");
+        self.gui.select_furnace(1);
+        let _ = self.gui.give_furnace("oak_log");
+        let _ = self.gui.give_furnace("oak_log");
+        self.gui.select_furnace(0);
+        self.gui.push_chat("furnace");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("clay");
+        let _ = self.hotbar.collect("oak_log");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(fx + dx * 8, fz + dz * 8);
@@ -32348,6 +32360,9 @@ impl State {
                         self.gui.push_chat("bubble");
                     }
                 }
+            }
+            if self.gui.take_furnace_take() {
+                self.take_furnace_output();
             }
             if action != gui::MenuAction::None {
                 self.hotbar_dirty = true;
