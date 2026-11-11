@@ -169,6 +169,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "composter" => [0.36, 0.42, 0.18],
         "stonecutter" => [0.55, 0.55, 0.52],
         "stone_stairs" => [0.50, 0.50, 0.48],
+        "stone_wall" => [0.48, 0.48, 0.46],
         "campfire" => [0.72, 0.32, 0.08],
         "fletching_table" => [0.55, 0.38, 0.18],
         "smoker" => [0.32, 0.24, 0.18],

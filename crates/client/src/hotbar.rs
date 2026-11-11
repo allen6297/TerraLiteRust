@@ -76,6 +76,74 @@ pub fn compost_word(next: u8) -> &'static str {
     }
 }
 
+/// One stonecutter recipe row for the held block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CutOption {
+    pub result: &'static str,
+    pub count: u16,
+    pub word: &'static str,
+    pub label: &'static str,
+}
+
+/// Stonecutter variants for `held` (stairs / slabs / walls from one block).
+pub fn cut_options(held: &str) -> Vec<CutOption> {
+    match held {
+        "stone" | "cobblestone" | "smooth_stone" => vec![
+            CutOption {
+                result: "slab",
+                count: 2,
+                word: "slab",
+                label: "Slabs",
+            },
+            CutOption {
+                result: "stone_stairs",
+                count: 1,
+                word: "stairs",
+                label: "Stairs",
+            },
+            CutOption {
+                result: "stone_wall",
+                count: 1,
+                word: "wall",
+                label: "Wall",
+            },
+        ],
+        "slab" => vec![CutOption {
+            result: "stone_stairs",
+            count: 1,
+            word: "stairs",
+            label: "Stairs",
+        }],
+        "stone_bricks" => vec![
+            CutOption {
+                result: "chiseled_stone_bricks",
+                count: 1,
+                word: "chiseled",
+                label: "Chiseled",
+            },
+            CutOption {
+                result: "slab",
+                count: 2,
+                word: "slab",
+                label: "Slabs",
+            },
+            CutOption {
+                result: "stone_stairs",
+                count: 1,
+                word: "stairs",
+                label: "Stairs",
+            },
+            CutOption {
+                result: "stone_wall",
+                count: 1,
+                word: "wall",
+                label: "Wall",
+            },
+        ],
+        _ => Vec::new(),
+    }
+}
+
 /// Blast-furnace one-step lines. Food stays on the smoker; clay stays on the furnace.
 fn blast_result(id: &str) -> Option<&'static str> {
     match id {
@@ -2074,31 +2142,53 @@ impl Hotbar {
         "cooked"
     }
 
-    /// Cut the selected stone. One stone becomes two slabs. A slab becomes
-    /// stone stairs. Stone bricks become chiseled bricks.
+    /// Stonecutter recipes for the held block. Empty when it is not cuttable.
+    pub fn cut_options(&self) -> Vec<CutOption> {
+        let Some(item) = self.item(self.selected) else {
+            return Vec::new();
+        };
+        cut_options(&item.id)
+    }
+
+    /// Cut the selected stone into the first listed recipe (Enter / legacy).
     ///
-    /// `"slab"`, `"stairs"`, and `"chiseled"` are the cuts. `"need stone"` is
-    /// anything else. `"no room"` means the bar cannot hold the pieces.
+    /// `"slab"`, `"stairs"`, `"wall"`, and `"chiseled"` are the cuts.
+    /// `"need stone"` is anything else. `"no room"` means the bar cannot hold
+    /// the pieces.
     pub fn cut_stone(&mut self) -> &'static str {
+        let Some(first) = self.cut_options().first().copied() else {
+            return "need stone";
+        };
+        self.cut_into(first.result)
+    }
+
+    /// Cut the selected block into `result` (must be a listed cut option).
+    pub fn cut_into(&mut self, result: &str) -> &'static str {
         let Some(item) = self.item(self.selected) else {
             return "need stone";
         };
-        match item.id {
-            "stone" => self.cut_slabs(),
-            "slab" => self.swap_cut("stone_stairs", "stairs"),
-            "stone_bricks" => self.swap_cut("chiseled_stone_bricks", "chiseled"),
-            _ => "need stone",
+        let Some(option) = cut_options(&item.id)
+            .into_iter()
+            .find(|option| option.result == result)
+        else {
+            return "need stone";
+        };
+        if option.count > 1 {
+            self.cut_many(option.result, option.count, option.word)
+        } else {
+            self.swap_cut(option.result, option.word)
         }
     }
 
-    fn cut_slabs(&mut self) -> &'static str {
-        if self.room_after_one_spent("slab") < 2 {
+    fn cut_many(&mut self, into: &'static str, count: u16, word: &'static str) -> &'static str {
+        if self.room_after_one_spent(into) < count {
             return "no room";
         }
         self.consume_at(self.selected);
-        let _ = self.collect("slab");
-        let _ = self.collect("slab");
-        "slab"
+        for _ in 0..count {
+            let _ = self.collect(into);
+        }
+        word
     }
 
     /// Free stack space for `id` after spending one from the selected slot.
@@ -3671,9 +3761,16 @@ mod tests {
     #[test]
     fn a_stonecutter_cuts_stone_into_slabs_stairs_and_chiseled_bricks() {
         let mut bar = Hotbar::new();
+        assert!(bar.select_digit(2));
         assert_eq!(bar.cut_stone(), "need stone");
         assert!(bar.collect("stone"));
-        assert!(bar.select_digit(2));
+        assert_eq!(
+            bar.cut_options()
+                .iter()
+                .map(|option| option.label)
+                .collect::<Vec<_>>(),
+            vec!["Slabs", "Stairs", "Wall"]
+        );
         assert_eq!(bar.cut_stone(), "slab");
         assert_eq!(bar.slot(1), Some("slab"));
         assert_eq!(bar.count(1), 2);
@@ -3683,11 +3780,15 @@ mod tests {
         assert_eq!(bar.slot(2), Some("stone_stairs"));
         assert_eq!(bar.cut_stone(), "stairs");
         assert_eq!(bar.slot(1), Some("stone_stairs"));
-        assert!(bar.collect("stone_bricks"));
+        assert!(bar.collect("stone"));
         assert!(bar.select_digit(4));
-        assert_eq!(bar.slot(3), Some("stone_bricks"));
+        assert_eq!(bar.cut_into("stone_wall"), "wall");
+        assert_eq!(bar.slot(3), Some("stone_wall"));
+        assert!(bar.collect("stone_bricks"));
+        assert!(bar.select_digit(5));
+        assert_eq!(bar.slot(4), Some("stone_bricks"));
         assert_eq!(bar.cut_stone(), "chiseled");
-        assert_eq!(bar.slot(3), Some("chiseled_stone_bricks"));
+        assert_eq!(bar.slot(4), Some("chiseled_stone_bricks"));
     }
 
     #[test]

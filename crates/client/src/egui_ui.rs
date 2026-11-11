@@ -233,6 +233,7 @@ impl EguiHost {
             || gui.craft_open()
             || gui.chest_open()
             || gui.chart_open()
+            || gui.cut_open()
             || map_open
     }
 
@@ -367,6 +368,11 @@ impl EguiHost {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
+            } else if gui.cut_open() {
+                if draw_stonecutter(ui, gui, hotbar, icons) {
+                    touched = true;
+                }
+                draw_pinned_tip(ui, gui, icons);
             } else if let Some(view) = map_view.as_ref() {
                 draw_map_overlay(ui, view, icons);
             }
@@ -383,6 +389,7 @@ impl EguiHost {
                 && !gui.craft_open()
                 && !gui.chest_open()
                 && !gui.chart_open()
+                && !gui.cut_open()
             {
                 draw_chat_plate(ui, gui, icons);
             }
@@ -3289,6 +3296,195 @@ fn draw_enchanting(
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(gui.enchant_note())
+                            .size(13.0)
+                            .color(DETAIL),
+                    );
+                    ui.add_space(8.0);
+                    if close_button(ui, icons, "Close (Esc)").clicked() {
+                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                    }
+                });
+            });
+        });
+    touched
+}
+
+fn draw_stonecutter(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+    let selected = hotbar.selected();
+    let held = hotbar.slot(selected).unwrap_or("").to_string();
+    let held_n = hotbar.count(selected);
+    let options = hotbar.cut_options();
+    if !options.is_empty() {
+        let max = options.len().saturating_sub(1);
+        if gui.cut_pick() > max {
+            *gui.cut_pick_mut() = max;
+        }
+    } else if gui.cut_pick() != 0 {
+        *gui.cut_pick_mut() = 0;
+    }
+    let pick = gui.cut_pick().min(options.len().saturating_sub(1));
+    let chosen = options.get(pick).copied();
+    let can_cut = chosen.is_some();
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(32.0);
+                show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
+                    title_label(ui, "STONECUTTER");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Pick stairs · slabs · walls from one block")
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(10.0);
+                    let slot_tex = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, slot_tex, ROW, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("Input").size(12.0).color(DETAIL));
+                                ui.add_space(2.0);
+                                if !held.is_empty() && !options.is_empty() {
+                                    let tip = gui::tip_for(&held, Some(held_n.max(1)));
+                                    let tex = icon_texture(ui.ctx(), icons, &held);
+                                    ui.horizontal(|ui| {
+                                        let _ = slot_button(
+                                            ui,
+                                            icons,
+                                            tex,
+                                            true,
+                                            if held_n > 1 { Some(held_n) } else { None },
+                                        );
+                                        ui.label(
+                                            RichText::new(&tip.name).size(13.0).color(INK),
+                                        );
+                                    });
+                                } else if !held.is_empty() {
+                                    let tip = gui::tip_for(&held, Some(held_n.max(1)));
+                                    let tex = icon_texture(ui.ctx(), icons, &held);
+                                    ui.horizontal(|ui| {
+                                        let _ = slot_button(ui, icons, tex, false, None);
+                                        ui.label(
+                                            RichText::new(format!("{} · cannot cut", tip.name))
+                                                .size(13.0)
+                                                .color(MUTED),
+                                        );
+                                    });
+                                } else {
+                                    let _ = slot_button(ui, icons, None, false, None);
+                                    ui.label(
+                                        RichText::new("hold stone")
+                                            .size(13.0)
+                                            .color(MUTED),
+                                    );
+                                }
+                            });
+                            ui.add_space(16.0);
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("Result").size(12.0).color(DETAIL));
+                                ui.add_space(2.0);
+                                if let Some(option) = chosen {
+                                    let tip = gui::tip_for(option.result, Some(option.count));
+                                    let tex = icon_texture(ui.ctx(), icons, option.result);
+                                    ui.horizontal(|ui| {
+                                        let _ = slot_button(
+                                            ui,
+                                            icons,
+                                            tex,
+                                            true,
+                                            if option.count > 1 {
+                                                Some(option.count)
+                                            } else {
+                                                None
+                                            },
+                                        );
+                                        ui.label(
+                                            RichText::new(&tip.name).size(13.0).color(INK),
+                                        );
+                                    });
+                                } else {
+                                    let _ = slot_button(ui, icons, None, false, None);
+                                    ui.label(
+                                        RichText::new("no recipe")
+                                            .size(13.0)
+                                            .color(MUTED),
+                                    );
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("Recipes").size(13.0).color(DETAIL));
+                    ui.add_space(4.0);
+                    if options.is_empty() {
+                        ui.label(
+                            RichText::new("Hold stone, cobble, smooth stone, or stone bricks.")
+                                .size(13.0)
+                                .color(MUTED),
+                        );
+                    } else {
+                        ui.horizontal(|ui| {
+                            for (index, option) in options.iter().enumerate() {
+                                let on = pick == index;
+                                let caption = if option.count > 1 {
+                                    format!("{} ×{}", option.label, option.count)
+                                } else {
+                                    option.label.to_string()
+                                };
+                                if chrome_button(
+                                    ui,
+                                    icons,
+                                    &caption,
+                                    on,
+                                    Vec2::new(100.0, 32.0),
+                                    13.0,
+                                )
+                                .clicked()
+                                {
+                                    *gui.cut_pick_mut() = index;
+                                    touched = true;
+                                }
+                                ui.add_space(6.0);
+                            }
+                        });
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(can_cut, |ui| {
+                            if chrome_button(
+                                ui,
+                                icons,
+                                if can_cut { "Cut" } else { "Need stone" },
+                                can_cut,
+                                Vec2::new(120.0, 32.0),
+                                14.0,
+                            )
+                            .clicked()
+                            {
+                                if let Some(option) = chosen {
+                                    let word = hotbar.cut_into(option.result);
+                                    gui.note_cut(word);
+                                    gui.push_chat(word);
+                                    if word == option.word {
+                                        let tip = gui::tip_for(option.result, Some(option.count));
+                                        gui.pin_tip(tip);
+                                    }
+                                    touched = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(gui.cut_note())
                             .size(13.0)
                             .color(DETAIL),
                     );

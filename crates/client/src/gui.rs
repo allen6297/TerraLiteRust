@@ -811,6 +811,8 @@ pub struct Gui {
     cut_open: bool,
     /// The line under the cut title. Enter replaces it with the cut word.
     cut_note: String,
+    /// Selected stonecutter recipe row.
+    cut_pick: usize,
     fire_open: bool,
     /// The line under the fire title. Enter replaces it with the cook word.
     fire_note: String,
@@ -983,6 +985,7 @@ impl Gui {
                 hang_at: None,
                 cut_open: false,
                 cut_note: String::new(),
+                cut_pick: 0,
                 fire_open: false,
                 fire_note: String::new(),
                 fletch_open: false,
@@ -1116,6 +1119,7 @@ impl Gui {
                     hang_at: None,
                     cut_open: false,
                     cut_note: String::new(),
+                    cut_pick: 0,
                     fire_open: false,
                     fire_note: String::new(),
                     fletch_open: false,
@@ -1259,6 +1263,7 @@ impl Gui {
             hang_at: None,
             cut_open: false,
             cut_note: String::new(),
+            cut_pick: 0,
             fire_open: false,
             fire_note: String::new(),
             fletch_open: false,
@@ -2976,18 +2981,31 @@ impl Gui {
         self.cauldron_note = note.to_string();
     }
 
-    /// A stonecutter. Enter cuts the held stone.
+    /// A stonecutter. Pick stairs / slabs / walls from one held block.
     pub fn open_cut(&mut self) -> bool {
         if self.is_open() {
             return false;
         }
-        self.cut_note = "enter cuts held stone".to_string();
+        self.cut_note = "pick stairs · slabs · walls".to_string();
+        self.cut_pick = 0;
         self.cut_open = true;
         true
     }
 
     pub fn cut_open(&self) -> bool {
         self.cut_open
+    }
+
+    pub fn cut_note(&self) -> &str {
+        &self.cut_note
+    }
+
+    pub fn cut_pick(&self) -> usize {
+        self.cut_pick
+    }
+
+    pub fn cut_pick_mut(&mut self) -> &mut usize {
+        &mut self.cut_pick
     }
 
     /// The word the last cut left on the panel.
@@ -4153,7 +4171,8 @@ impl Gui {
             return hang_quads(width, height, &self.hang_note);
         }
         if self.cut_open {
-            return cut_quads(width, height, &self.cut_note);
+            // egui draws the Whimscape stonecutter panel.
+            return Vec::new();
         }
         if self.fire_open {
             return fire_quads(width, height, &self.fire_note);
@@ -7793,6 +7812,7 @@ fn tab_of(id: &str) -> &'static str {
             | "oak_log"
             | "oak_stairs"
             | "stone_stairs"
+            | "stone_wall"
             | "stonecutter"
             | "boat"
             | "flower"
@@ -9831,6 +9851,7 @@ mod tests {
             hang_at: None,
             cut_open: false,
             cut_note: String::new(),
+            cut_pick: 0,
             fire_open: false,
             fire_note: String::new(),
             fletch_open: false,

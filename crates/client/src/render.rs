@@ -22297,6 +22297,78 @@ impl State {
     }
 
     /// Open the camp cartography table mid-widen, then quit with a PNG.
+    /// Open the stonecutter Whimscape panel (stairs / slabs / walls), then quit with a PNG.
+    pub fn arm_stonecutter_ui_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(2, -2));
+        self.clock.set_time_of_day(0.42);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (cx, cz) = rebuild_world::CAMP_CHART;
+        let mut cy = 4;
+        for y in 0..80 {
+            if self.world.block_at(cx, y, cz).id != "air" {
+                cy = y + 1;
+            }
+        }
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: cx,
+                y: cy,
+                z: cz,
+                block: Block::new("stonecutter", 0),
+            }],
+        );
+        self.chunk_bake.touch(cx, cz);
+
+        let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.55, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            cx as f32 - 2.2,
+            cy as f32 + 0.85 + body::EYE_HEIGHT,
+            cz as f32 + 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("stone");
+        for _ in 0..7 {
+            let _ = self.hotbar.collect("stone");
+        }
+        self.hotbar_dirty = true;
+        let _ = self.gui.open_cut();
+        *self.gui.cut_pick_mut() = 1;
+        self.gui.note_cut("stairs");
+        self.gui.push_chat("a stonecutter — pick stairs · slabs · walls");
+        self.gui.push_chat("stairs");
+        self.found_camp = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     pub fn arm_chart_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -26790,7 +26862,13 @@ impl State {
                     self.gui.push_chat(word);
                 }
                 if self.gui.cut_open() && code == KeyCode::Enter {
-                    let word = self.hotbar.cut_stone();
+                    let options = self.hotbar.cut_options();
+                    let pick = self.gui.cut_pick().min(options.len().saturating_sub(1));
+                    let word = if let Some(option) = options.get(pick) {
+                        self.hotbar.cut_into(option.result)
+                    } else {
+                        self.hotbar.cut_stone()
+                    };
                     self.gui.note_cut(word);
                     self.gui.push_chat(word);
                     self.hotbar_dirty = true;
