@@ -612,6 +612,7 @@ mod tests {
                 "cracked_deepslate_tiles".to_string(),
                 "cracked_nether_bricks".to_string(),
                 "cracked_stone_bricks".to_string(),
+                "crying_obsidian".to_string(),
                 "dark_prismarine".to_string(),
                 "decorated_pot".to_string(),
                 "deepslate".to_string(),
@@ -658,6 +659,9 @@ mod tests {
                 "goat_horn".to_string(),
                 "gold_block".to_string(),
                 "gold_ingot".to_string(),
+                "golden_boots".to_string(),
+                "golden_chestplate".to_string(),
+                "golden_helmet".to_string(),
                 "grass".to_string(),
                 "gravel".to_string(),
                 "grindstone".to_string(),
@@ -975,8 +979,12 @@ mod tests {
             Some("lodestone")
         );
         assert_eq!(
-            book.match_grid(&["glowstone".into(), "lodestone".into()])
-                .as_deref(),
+            book.match_grid(&[
+                "crying_obsidian".into(),
+                "crying_obsidian".into(),
+                "glowstone".into()
+            ])
+            .as_deref(),
             Some("respawn_anchor")
         );
         assert_eq!(

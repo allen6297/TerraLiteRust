@@ -337,6 +337,8 @@ struct Args {
     shot_piglin_barter: Option<std::path::PathBuf>,
     /// Nether piglin pacified by gold armor, then quit.
     shot_gold_armor_piglin: Option<std::path::PathBuf>,
+    /// Nether pocket charged respawn anchor, then quit.
+    shot_respawn_anchor: Option<std::path::PathBuf>,
     /// Bastion remnant gold stash, then quit.
     shot_bastion_remnant: Option<std::path::PathBuf>,
     /// Shipwreck chest paying a heart of the sea, then quit.
@@ -645,6 +647,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_netherite_gear: args.shot_netherite_gear,
         shot_piglin_barter: args.shot_piglin_barter,
         shot_gold_armor_piglin: args.shot_gold_armor_piglin,
+        shot_respawn_anchor: args.shot_respawn_anchor,
         shot_bastion_remnant: args.shot_bastion_remnant,
         shot_wreck_heart: args.shot_wreck_heart,
         shot_keybinds: args.shot_keybinds,
@@ -828,6 +831,7 @@ struct App {
     shot_netherite_gear: Option<std::path::PathBuf>,
     shot_piglin_barter: Option<std::path::PathBuf>,
     shot_gold_armor_piglin: Option<std::path::PathBuf>,
+    shot_respawn_anchor: Option<std::path::PathBuf>,
     shot_bastion_remnant: Option<std::path::PathBuf>,
     shot_wreck_heart: Option<std::path::PathBuf>,
     shot_keybinds: Option<std::path::PathBuf>,
@@ -1250,6 +1254,9 @@ impl ApplicationHandler for App {
                 if let Some(path) = self.shot_gold_armor_piglin.take() {
                     state.arm_gold_armor_piglin_shot(path);
                 }
+                if let Some(path) = self.shot_respawn_anchor.take() {
+                    state.arm_respawn_anchor_shot(path);
+                }
                 if let Some(path) = self.shot_bastion_remnant.take() {
                     state.arm_bastion_remnant_shot(path);
                 }
@@ -1655,6 +1662,7 @@ where
         shot_netherite_gear: None,
         shot_piglin_barter: None,
         shot_gold_armor_piglin: None,
+        shot_respawn_anchor: None,
         shot_bastion_remnant: None,
         shot_wreck_heart: None,
         shot_keybinds: None,
@@ -2384,6 +2392,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-gold-armor-piglin".to_string())?;
                 parsed.shot_gold_armor_piglin = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-respawn-anchor" | "--shot-anchor" | "--shot-nether-anchor" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-respawn-anchor".to_string())?;
+                parsed.shot_respawn_anchor = Some(std::path::PathBuf::from(value));
             }
             "--shot-bastion-remnant" | "--shot-bastion" => {
                 let value = iter

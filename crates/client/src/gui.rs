@@ -4166,6 +4166,10 @@ fn item_tip(id: &str, count: Option<u16>, keen: bool) -> ItemTip {
         } else {
             "soaks heart damage".to_string()
         }
+    } else if id == "respawn_anchor" {
+        "charge with glowstone — nether spawn".to_string()
+    } else if id == "bed" {
+        "sleep at night — explodes in the nether".to_string()
     } else if max_uses > 0 {
         match tool_tier_name(&pack, id) {
             Some(tier) => format!("{tier} tool — wears with use"),

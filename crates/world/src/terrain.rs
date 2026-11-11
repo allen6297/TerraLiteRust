@@ -439,6 +439,16 @@ pub const RUINED_PORTAL_CHEST: (i32, i32) = (RUINED_PORTAL.0 + 2, RUINED_PORTAL.
 /// Hellish sister pad south of the ruined portal — return gate for a lit nether portal.
 pub const NETHER_PAD: (i32, i32) = (RUINED_PORTAL.0, RUINED_PORTAL.1 - 16);
 
+/// True when `(x, z)` sits in the nether-pocket chunk (fortress / bastion / pad).
+///
+/// Beds explode here; charged respawn anchors may set spawn.
+pub fn in_nether_pocket(x: i32, z: i32) -> bool {
+    let (cx, cz) = NETHER_PAD;
+    let chunk_x = cx.div_euclid(16);
+    let chunk_z = cz.div_euclid(16);
+    x.div_euclid(16) == chunk_x && z.div_euclid(16) == chunk_z
+}
+
 /// Interior standing cell of the nether pocket portal (one block inside the frame).
 pub const NETHER_PORTAL_IN: (i32, i32) = (NETHER_PAD.0 + 1, NETHER_PAD.1);
 
@@ -2627,6 +2637,10 @@ mod tests {
         }
         assert_ne!(NETHER_DEBRIS, NETHER_PAD);
         assert_ne!(NETHER_DEBRIS_B, NETHER_DEBRIS);
+        assert!(in_nether_pocket(NETHER_PAD.0, NETHER_PAD.1));
+        assert!(in_nether_pocket(NETHER_PIGLIN.0, NETHER_PIGLIN.1));
+        assert!(!in_nether_pocket(0, 0));
+        assert!(!in_nether_pocket(RUINED_PORTAL.0, RUINED_PORTAL.1));
     }
 
     #[test]

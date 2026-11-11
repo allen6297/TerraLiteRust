@@ -7229,6 +7229,11 @@ impl State {
     }
 
     fn sleep_in_bed(&mut self, at: [i32; 3]) {
+        // Nether pocket: beds refuse sleep and blow — use a respawn anchor instead.
+        if rebuild_world::in_nether_pocket(at[0], at[2]) {
+            self.explode_nether_bed(at);
+            return;
+        }
         if !self.note_respawn("bed", at) {
             self.gui.push_chat("awake");
             return;
@@ -7260,6 +7265,27 @@ impl State {
         self.note_dawn();
         self.gui.push_chat("slept until morning");
         let _ = self.advancements.unlock("sleep");
+    }
+
+    /// Beds cannot claim spawn in the nether pocket — they explode instead.
+    fn explode_nether_bed(&mut self, at: [i32; 3]) {
+        self.gui.push_chat("beds explode in the nether");
+        self.gui.push_chat("use a respawn anchor");
+        if self.spawn_at == Some(at) {
+            self.spawn_at = None;
+        }
+        let center = [at[0] as f32 + 0.5, at[1] as f32 + 0.4, at[2] as f32 + 0.5];
+        self.drops.embers(center);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Gust, center);
+        self.hit_kick = self.hit_kick.max(1.0);
+        self.hurt(3);
+        if !self.pending.is_empty() {
+            return;
+        }
+        if self.world.block_at(at[0], at[1], at[2]).id == "bed" {
+            self.send_edit(encode_break(at[0], at[1], at[2]), TAG_BREAK, None);
+        }
     }
 
     /// True when a living hostile sits inside the night-spawn min ring.
@@ -10099,6 +10125,77 @@ impl State {
         for dx in -1..=1 {
             for dz in -1..=1 {
                 self.chunk_bake.touch(bx + dx * 8, bz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
+    /// Charged respawn anchor in the nether pocket, then quit with a PNG.
+    pub fn arm_respawn_anchor_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(-2, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (px, pz) = rebuild_world::NETHER_PAD;
+        let fy = i32::from(rebuild_world::NETHER_FORTRESS_FLOOR);
+        let ax = px + 2;
+        let az = pz + 1;
+        apply_changes(
+            &mut self.world,
+            &[CellChange {
+                x: ax,
+                y: fy,
+                z: az,
+                block: Block::new("respawn_anchor", 4),
+            }],
+        );
+        self.spawn_at = Some([ax, fy, az]);
+        self.found_portal = true;
+        self.found_portal_lit = true;
+        self.found_fortress = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("respawn anchor");
+        self.gui.push_chat("spawn set");
+        self.gui.open_anchor([ax, fy, az], 4);
+        self.gui.note_anchor("spawn set");
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.collect("glowstone");
+        let _ = self.hotbar.collect("crying_obsidian");
+        let _ = self.hotbar.collect("respawn_anchor");
+        let _ = self.hotbar.select_digit(1);
+        self.hotbar_dirty = true;
+
+        let focus = glam::Vec3::new(ax as f32 + 0.5, fy as f32 + 0.85, az as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            ax as f32 - 1.8,
+            fy as f32 + 1.1 + body::EYE_HEIGHT * 0.35,
+            az as f32 + 2.2,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.set_capture(false);
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(px + dx * 8, pz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -27114,6 +27211,9 @@ impl State {
     }
 
     /// Charge the open anchor with glowstone, or set spawn once it holds a charge.
+    ///
+    /// Spawn locking only works in the nether pocket. Outside, a charged click
+    /// explodes the anchor (beds already refuse there).
     fn charge_anchor(&mut self) -> &'static str {
         let Some(at) = self.gui.anchor_at() else {
             return "need glowstone";
@@ -27122,10 +27222,15 @@ impl State {
         if block.id != "respawn_anchor" || !self.pending.is_empty() {
             return "need glowstone";
         }
+        let nether = rebuild_world::in_nether_pocket(at[0], at[2]);
         let (min, max) = body::player_box_bounds(self.camera.eye);
         match self.hotbar.anchor_step(block.metadata) {
             hotbar::AnchorStep::NeedGlow => "need glowstone",
             hotbar::AnchorStep::SetSpawn => {
+                if !nether {
+                    self.explode_overworld_anchor(at);
+                    return "anchor explodes";
+                }
                 if self.note_respawn("anchor", at) {
                     self.spawn_at = Some(at);
                     "spawn set"
@@ -27146,11 +27251,31 @@ impl State {
                     TAG_PLACE,
                     Some(slot),
                 );
-                if self.note_respawn("anchor", at) {
+                if nether && self.note_respawn("anchor", at) {
                     self.spawn_at = Some(at);
                 }
                 hotbar::anchor_word(next)
             }
+        }
+    }
+
+    /// Charged anchors only claim spawn in the nether — elsewhere they blow.
+    fn explode_overworld_anchor(&mut self, at: [i32; 3]) {
+        self.gui.push_chat("only works in the nether");
+        if self.spawn_at == Some(at) {
+            self.spawn_at = None;
+        }
+        let center = [at[0] as f32 + 0.5, at[1] as f32 + 0.5, at[2] as f32 + 0.5];
+        self.drops.embers(center);
+        self.rebuild_drops();
+        self.play_world(crate::audio::Sound::Gust, center);
+        self.hit_kick = self.hit_kick.max(1.0);
+        self.hurt(4);
+        if !self.pending.is_empty() {
+            return;
+        }
+        if self.world.block_at(at[0], at[1], at[2]).id == "respawn_anchor" {
+            self.send_edit(encode_break(at[0], at[1], at[2]), TAG_BREAK, None);
         }
     }
 
