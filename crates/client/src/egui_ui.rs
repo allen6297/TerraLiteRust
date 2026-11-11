@@ -18,7 +18,7 @@ use egui::{
 };
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use egui_winit::State as WinitState;
-use rebuild_world::Pack;
+use rebuild_world::{asset_png, Pack};
 use winit::event::WindowEvent;
 use winit::window::Window;
 
@@ -140,6 +140,15 @@ const MAP_PAPER: Color32 = Color32::from_rgb(41, 33, 23);
 const MAP_INK: Color32 = Color32::from_rgb(237, 230, 209);
 const MAP_TEX_KEY: &str = "__held_map_overlay__";
 
+/// Whimscape / pack GUI chrome under `assets/terralite/textures/gui/chrome/`.
+const CHROME_SLOT: &str = "slot";
+const CHROME_SLOT_HIGHLIGHT: &str = "slot_highlight";
+const CHROME_PANEL: &str = "panel";
+const CHROME_TAB: &str = "tab";
+const CHROME_TAB_SELECTED: &str = "tab_selected";
+const CHROME_BUTTON: &str = "button";
+const CHROME_BUTTON_HOT: &str = "button_highlighted";
+
 pub struct EguiHost {
     ctx: Context,
     winit: WinitState,
@@ -259,13 +268,15 @@ impl EguiHost {
         let toast_view = toast;
         let output = self.ctx.run_ui(raw, |ui| {
             apply_theme(ui.ctx());
+            warm_chrome(ui.ctx(), icons);
             if let Some(view) = death {
-                pending = draw_death(ui, view);
+                pending = draw_death(ui, view, icons);
             } else if menu.is_open() {
                 pending = draw_menu(
                     ui,
                     menu,
                     binds,
+                    icons,
                     advancement_rows,
                     statistics_rows,
                     pack_rows,
@@ -291,7 +302,7 @@ impl EguiHost {
                 crafted = inv_crafted;
                 draw_pinned_tip(ui, gui);
             } else if gui.trade_open() {
-                if draw_trade(ui, gui, hotbar, bag) {
+                if draw_trade(ui, gui, hotbar, bag, icons) {
                     touched = true;
                 }
             } else if let Some(view) = map_view.as_ref() {
@@ -412,8 +423,13 @@ fn panel_frame() -> Frame {
         .inner_margin(Margin::symmetric(16, 14))
 }
 
-fn show_panel(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
-    // Outer lip (light strip) then dark well — matches legacy HUD panels.
+fn show_panel(
+    ui: &mut Ui,
+    width: f32,
+    panel_tex: Option<TextureId>,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    // Outer lip (light strip) then dark well — Whimscape panel tile when present.
     // Always stack contents vertically: callers nest this beside EMI inside a
     // horizontal row, and egui Frames inherit that layout unless overridden
     // (which turned creative into a full-width banner strip).
@@ -427,7 +443,26 @@ fn show_panel(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
             bottom: 1,
         })
         .show(ui, |ui| {
-            panel_frame().show(ui, |ui| {
+            let inner = if panel_tex.is_some() {
+                // Keep a near-transparent fill so the image reads; stroke stays.
+                Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(8, 9, 12, 210))
+                    .stroke(Stroke::new(1.0, SLOT_EDGE))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(16, 14))
+            } else {
+                panel_frame()
+            };
+            inner.show(ui, |ui| {
+                if let Some(tex) = panel_tex {
+                    let rect = ui.max_rect();
+                    ui.painter().image(
+                        tex,
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
                 ui.vertical(|ui| {
                     ui.set_width(width);
                     ui.set_max_width(width);
@@ -435,6 +470,13 @@ fn show_panel(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
                 });
             });
         });
+}
+
+fn panel_chrome(
+    ctx: &Context,
+    icons: &mut HashMap<String, TextureHandle>,
+) -> Option<TextureId> {
+    chrome_texture(ctx, icons, CHROME_PANEL)
 }
 
 /// Inventory / creative chrome stays inside the window (~90% wide).
@@ -474,24 +516,62 @@ fn title_label(ui: &mut Ui, text: &str) {
         });
 }
 
-fn menu_button(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
-    let fill = if selected { SELECT_SOFT } else { BUTTON };
-    let stroke = if selected {
-        Stroke::new(1.5, SELECT)
-    } else {
-        Stroke::new(1.0, SLOT_EDGE)
-    };
-    let btn = egui::Button::new(RichText::new(text).size(15.0).color(INK))
-        .fill(fill)
-        .stroke(stroke)
-        .corner_radius(CornerRadius::same(4))
-        .min_size(Vec2::new(ui.available_width().max(280.0), 34.0));
-    ui.add(btn)
+fn menu_button(
+    ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
+    text: &str,
+    selected: bool,
+) -> egui::Response {
+    let size = Vec2::new(ui.available_width().max(280.0), 34.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let name = if selected {
+            CHROME_BUTTON_HOT
+        } else {
+            CHROME_BUTTON
+        };
+        if let Some(tex) = chrome_texture(ui.ctx(), icons, name) {
+            ui.painter().image(
+                tex,
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            if selected {
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::same(4),
+                    Stroke::new(1.5, SELECT),
+                    StrokeKind::Outside,
+                );
+            }
+        } else {
+            let fill = if selected { SELECT_SOFT } else { BUTTON };
+            let stroke = if selected {
+                Stroke::new(1.5, SELECT)
+            } else {
+                Stroke::new(1.0, SLOT_EDGE)
+            };
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(4), fill);
+            ui.painter()
+                .rect_stroke(rect, CornerRadius::same(4), stroke, StrokeKind::Outside);
+        }
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(15.0),
+            INK,
+        );
+    }
+    response
 }
 
 fn draw_skins_screen(
     ui: &mut Ui,
     menu: &mut Menu,
+    icons: &mut HashMap<String, TextureHandle>,
     rows: &[SkinRow],
     note: &str,
     dirty: bool,
@@ -506,7 +586,7 @@ fn draw_skins_screen(
             let top_pad = ((avail.y - panel_h) * 0.30).clamp(6.0, avail.y * 0.1);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "PLAYER SKIN");
@@ -723,6 +803,7 @@ fn draw_skins_screen(
 fn draw_mods_screen(
     ui: &mut Ui,
     menu: &mut Menu,
+    icons: &mut HashMap<String, TextureHandle>,
     rows: &[ModRow],
     note: &str,
     dirty: bool,
@@ -737,7 +818,7 @@ fn draw_mods_screen(
             let top_pad = ((avail.y - panel_h) * 0.30).clamp(6.0, avail.y * 0.1);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "MODS");
@@ -932,6 +1013,7 @@ fn draw_mods_screen(
 fn draw_datapacks_screen(
     ui: &mut Ui,
     menu: &mut Menu,
+    icons: &mut HashMap<String, TextureHandle>,
     rows: &[DataPackRow],
     note: &str,
     dirty: bool,
@@ -946,7 +1028,7 @@ fn draw_datapacks_screen(
             let top_pad = ((avail.y - panel_h) * 0.30).clamp(6.0, avail.y * 0.1);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "DATAPACKS");
@@ -1143,6 +1225,7 @@ fn draw_datapacks_screen(
 fn draw_resource_packs_screen(
     ui: &mut Ui,
     menu: &mut Menu,
+    icons: &mut HashMap<String, TextureHandle>,
     rows: &[PackRow],
     note: &str,
     dirty: bool,
@@ -1157,7 +1240,7 @@ fn draw_resource_packs_screen(
             let top_pad = ((avail.y - panel_h) * 0.30).clamp(6.0, avail.y * 0.1);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "RESOURCE PACKS");
@@ -1357,6 +1440,7 @@ fn draw_resource_packs_screen(
 fn draw_statistics_screen(
     ui: &mut Ui,
     menu: &mut Menu,
+    icons: &mut HashMap<String, TextureHandle>,
     rows: &[StatRow],
 ) -> MenuAction {
     let mut action = MenuAction::None;
@@ -1369,7 +1453,7 @@ fn draw_statistics_screen(
                 .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
-                    show_panel(ui, panel_w, |ui| {
+                    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                         ui.horizontal(|ui| {
                             title_label(ui, "STATISTICS");
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1435,6 +1519,7 @@ fn draw_statistics_screen(
 fn draw_advancements_screen(
     ui: &mut Ui,
     menu: &mut Menu,
+    icons: &mut HashMap<String, TextureHandle>,
     rows: &[AdvancementRow],
 ) -> MenuAction {
     let mut action = MenuAction::None;
@@ -1448,7 +1533,7 @@ fn draw_advancements_screen(
             let panel_h = (avail.y * 0.82).clamp(360.0, 620.0);
             ui.vertical_centered(|ui| {
                 ui.add_space(((avail.y - panel_h) * 0.35).max(8.0));
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "ADVANCEMENTS");
@@ -1590,14 +1675,14 @@ fn draw_advancement_toast(ui: &mut Ui, toast: &ToastView) {
         });
 }
 
-fn draw_death(ui: &mut Ui, view: DeathView) -> MenuAction {
+fn draw_death(ui: &mut Ui, view: DeathView, icons: &mut HashMap<String, TextureHandle>) -> MenuAction {
     let mut action = MenuAction::None;
     egui::CentralPanel::default()
         .frame(Frame::new().fill(death_backdrop()))
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.18);
-                show_panel(ui, 380.0, |ui| {
+                show_panel(ui, 380.0, panel_chrome(ui.ctx(), icons), |ui| {
                     Frame::new()
                         .fill(TITLE_PLATE)
                         .corner_radius(CornerRadius::same(4))
@@ -1622,15 +1707,15 @@ fn draw_death(ui: &mut Ui, view: DeathView) -> MenuAction {
                             .color(MUTED),
                     );
                     ui.add_space(14.0);
-                    if menu_button(ui, "Respawn", true).clicked() {
+                    if menu_button(ui, icons, "Respawn", true).clicked() {
                         action = MenuAction::Respawn;
                     }
                     ui.add_space(4.0);
-                    if menu_button(ui, "Title", false).clicked() {
+                    if menu_button(ui, icons, "Title", false).clicked() {
                         action = MenuAction::Title;
                     }
                     ui.add_space(4.0);
-                    if menu_button(ui, "Quit", false).clicked() {
+                    if menu_button(ui, icons, "Quit", false).clicked() {
                         action = MenuAction::Quit;
                     }
                 });
@@ -1806,6 +1891,7 @@ fn draw_menu(
     ui: &mut Ui,
     menu: &mut Menu,
     binds: &mut Keybinds,
+    icons: &mut HashMap<String, TextureHandle>,
     advancement_rows: &[AdvancementRow],
     statistics_rows: &[StatRow],
     pack_rows: &[PackRow],
@@ -1822,28 +1908,28 @@ fn draw_menu(
     skin_dirty: bool,
 ) -> MenuAction {
     if menu.is_keybinds() {
-        return draw_keybinds(ui, menu, binds);
+        return draw_keybinds(ui, menu, binds, icons);
     }
     if menu.is_settings() {
-        return draw_settings(ui, menu);
+        return draw_settings(ui, menu, icons);
     }
     if menu.is_advancements() {
-        return draw_advancements_screen(ui, menu, advancement_rows);
+        return draw_advancements_screen(ui, menu, icons, advancement_rows);
     }
     if menu.is_statistics() {
-        return draw_statistics_screen(ui, menu, statistics_rows);
+        return draw_statistics_screen(ui, menu, icons, statistics_rows);
     }
     if menu.is_resource_packs() {
-        return draw_resource_packs_screen(ui, menu, pack_rows, pack_note, pack_dirty);
+        return draw_resource_packs_screen(ui, menu, icons, pack_rows, pack_note, pack_dirty);
     }
     if menu.is_datapacks() {
-        return draw_datapacks_screen(ui, menu, datapack_rows, datapack_note, datapack_dirty);
+        return draw_datapacks_screen(ui, menu, icons, datapack_rows, datapack_note, datapack_dirty);
     }
     if menu.is_mods() {
-        return draw_mods_screen(ui, menu, mod_rows, mod_note, mod_dirty);
+        return draw_mods_screen(ui, menu, icons, mod_rows, mod_note, mod_dirty);
     }
     if menu.is_skins() {
-        return draw_skins_screen(ui, menu, skin_rows, skin_note, skin_dirty);
+        return draw_skins_screen(ui, menu, icons, skin_rows, skin_note, skin_dirty);
     }
     let mut action = MenuAction::None;
     let title = menu.page_title();
@@ -1854,7 +1940,7 @@ fn draw_menu(
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.14);
-                show_panel(ui, 420.0, |ui| {
+                show_panel(ui, 420.0, panel_chrome(ui.ctx(), icons), |ui| {
                     title_label(ui, title);
                     ui.add_space(12.0);
                     for (index, label) in rows.iter().enumerate() {
@@ -1866,7 +1952,7 @@ fn draw_menu(
                             // Two-line style avoids clipping long settings blurbs.
                             format!("{heading}\n{detail}")
                         };
-                        if menu_button(ui, &text, index == selected).clicked() {
+                        if menu_button(ui, icons, &text, index == selected).clicked() {
                             action = menu.activate_row(index);
                         }
                     }
@@ -1877,7 +1963,7 @@ fn draw_menu(
 }
 
 /// Settings chrome: Godot-style left category dock + right inspector.
-fn draw_settings(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
+fn draw_settings(ui: &mut Ui, menu: &mut Menu, icons: &mut HashMap<String, TextureHandle>) -> MenuAction {
     let mut action = MenuAction::None;
     let categories = menu.settings_categories();
     if categories.is_empty() {
@@ -1892,7 +1978,7 @@ fn draw_settings(ui: &mut Ui, menu: &mut Menu) -> MenuAction {
             let top_pad = ((avail.y - panel_h) * 0.35).clamp(6.0, avail.y * 0.1);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "SETTINGS");
@@ -2222,7 +2308,7 @@ fn inspector_property_row(
 }
 
 /// Godot-adjacent keybinds editor: click a row, press a key or mouse button.
-fn draw_keybinds(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuAction {
+fn draw_keybinds(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds, icons: &mut HashMap<String, TextureHandle>) -> MenuAction {
     let mut action = MenuAction::None;
     egui::CentralPanel::default()
         .frame(Frame::new().fill(backdrop()))
@@ -2233,7 +2319,7 @@ fn draw_keybinds(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds) -> MenuActi
             let top_pad = ((avail.y - panel_h) * 0.3).clamp(6.0, avail.y * 0.1);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                show_panel(ui, panel_w, |ui| {
+                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
                         title_label(ui, "KEYBINDS");
@@ -2504,7 +2590,7 @@ fn draw_creative_panel(
     // Pin the grid band in points so parent Frames / horizontal rows cannot
     // collapse the viewport to content height (~2 rows). Always ≥8 rows.
     let grid_h = grid_h.max(CREATIVE_GRID_MIN_H);
-    show_panel(ui, panel_w, |ui| {
+    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
         // Don't force wider than the clamped panel on tiny windows.
         ui.set_min_width(grid_w.min(panel_w));
         // Parent panel must reserve chrome + grid floor up front.
@@ -2531,22 +2617,52 @@ fn draw_creative_panel(
                     }
                 };
                 let selected = gui.catalog_tab() == index;
-                let fill = if selected { SELECT } else { BUTTON };
-                let tab = egui::Button::new(RichText::new(label).size(13.0).color(
-                    if selected {
+                let size = Vec2::new(52.0, 26.0);
+                let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                if ui.is_rect_visible(rect) {
+                    let chrome = if selected {
+                        CHROME_TAB_SELECTED
+                    } else {
+                        CHROME_TAB
+                    };
+                    if let Some(tex) = chrome_texture(ui.ctx(), icons, chrome) {
+                        ui.painter().image(
+                            tex,
+                            rect,
+                            egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            ),
+                            Color32::WHITE,
+                        );
+                    } else {
+                        let fill = if selected { SELECT } else { BUTTON };
+                        ui.painter()
+                            .rect_filled(rect, CornerRadius::same(3), fill);
+                        ui.painter().rect_stroke(
+                            rect,
+                            CornerRadius::same(3),
+                            Stroke::new(
+                                if selected { 1.5 } else { 1.0 },
+                                if selected { SELECT } else { SLOT_EDGE },
+                            ),
+                            StrokeKind::Outside,
+                        );
+                    }
+                    let ink = if selected {
                         Color32::from_rgb(20, 18, 12)
                     } else {
                         INK
-                    },
-                ))
-                .fill(fill)
-                .stroke(Stroke::new(
-                    1.0,
-                    if selected { SELECT } else { SLOT_EDGE },
-                ))
-                .corner_radius(CornerRadius::same(3))
-                .min_size(Vec2::new(52.0, 26.0));
-                if ui.add(tab).clicked() {
+                    };
+                    ui.painter().text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(13.0),
+                        ink,
+                    );
+                }
+                if response.clicked() {
                     gui.set_catalog_tab(index);
                 }
             }
@@ -2604,7 +2720,7 @@ fn draw_creative_panel(
                                         let selected = gui.catalog_index() == i;
                                         let tip = gui::tip_for(id, None);
                                         let tex = icon_texture(ui.ctx(), icons, id);
-                                        let resp = slot_button(ui, tex, selected, None);
+                                        let resp = slot_button(ui, icons, tex, selected, None);
                                         resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
                                         if resp.hovered() {
                                             gui.select_emi(id);
@@ -2614,7 +2730,7 @@ fn draw_creative_panel(
                                             let _ = hotbar.give_stack(id);
                                         }
                                     } else {
-                                        let _ = slot_button(ui, None, false, None);
+                                        let _ = slot_button(ui, icons, None, false, None);
                                     }
                                     if (i + 1) % CREATIVE_COLS == 0 {
                                         ui.end_row();
@@ -2629,7 +2745,7 @@ fn draw_creative_panel(
         ui.add_space(4.0);
         draw_hotbar_row(ui, Some(gui), hotbar, icons);
         ui.add_space(8.0);
-        if close_button(ui, "Close (I)").clicked() {
+        if close_button(ui, icons, "Close (I)").clicked() {
             gui.close_bag();
         }
     });
@@ -2651,6 +2767,7 @@ fn draw_trade(
     gui: &mut Gui,
     hotbar: &mut Hotbar,
     bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
 ) -> bool {
     let mut touched = false;
     egui::CentralPanel::default()
@@ -2727,7 +2844,7 @@ fn draw_trade(
                         }
                         gui.set_trade_stock(stock);
                         ui.add_space(8.0);
-                        if close_button(ui, "Close (Esc)").clicked() {
+                        if close_button(ui, icons, "Close (Esc)").clicked() {
                             gui.close_trade();
                         }
                     });
@@ -2810,11 +2927,11 @@ fn draw_player_inventory_panel(
     let mut touched = false;
     let mut crafted = false;
     let grid_w = grid_pitch(INV_COLS);
-    show_panel(ui, panel_w, |ui| {
+    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
         ui.set_min_width(grid_w.min(panel_w));
         title_label(ui, "INVENTORY");
         ui.add_space(8.0);
-        draw_inv_tab_strip(ui, gui);
+        draw_inv_tab_strip(ui, gui, icons);
         ui.add_space(10.0);
         match gui.inv_tab() {
             PlayerInvTab::Player => {
@@ -2847,7 +2964,7 @@ fn draw_player_inventory_panel(
         ui.add_space(4.0);
         draw_hotbar_row(ui, Some(gui), hotbar, icons);
         ui.add_space(8.0);
-        if close_button(ui, "Close (E)").clicked() {
+        if close_button(ui, icons, "Close (E)").clicked() {
             if refund_inv_craft(gui, hotbar, bag) {
                 touched = true;
             }
@@ -2858,7 +2975,11 @@ fn draw_player_inventory_panel(
 }
 
 /// Segmented PLAYER | CRAFT strip under the inventory title.
-fn draw_inv_tab_strip(ui: &mut Ui, gui: &mut Gui) {
+fn draw_inv_tab_strip(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    icons: &mut HashMap<String, TextureHandle>,
+) {
     let tabs = [
         (PlayerInvTab::Player, "PLAYER"),
         (PlayerInvTab::Craft, "CRAFT"),
@@ -2875,21 +2996,52 @@ fn draw_inv_tab_strip(ui: &mut Ui, gui: &mut Gui) {
                 let each = ((avail - 4.0) / tabs.len() as f32).max(88.0);
                 for (tab, label) in tabs {
                     let selected = gui.inv_tab() == tab;
-                    let fill = if selected { SELECT } else { BUTTON };
-                    let ink = if selected {
-                        Color32::from_rgb(20, 18, 12)
-                    } else {
-                        INK
-                    };
-                    let btn = egui::Button::new(RichText::new(label).size(14.0).color(ink).strong())
-                        .fill(fill)
-                        .stroke(Stroke::new(
-                            if selected { 1.5 } else { 1.0 },
-                            if selected { SELECT } else { SLOT_EDGE },
-                        ))
-                        .corner_radius(CornerRadius::same(3))
-                        .min_size(Vec2::new(each, 30.0));
-                    if ui.add(btn).clicked() {
+                    let size = Vec2::new(each, 30.0);
+                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let chrome = if selected {
+                            CHROME_TAB_SELECTED
+                        } else {
+                            CHROME_TAB
+                        };
+                        if let Some(tex) = chrome_texture(ui.ctx(), icons, chrome) {
+                            ui.painter().image(
+                                tex,
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            let fill = if selected { SELECT } else { BUTTON };
+                            ui.painter()
+                                .rect_filled(rect, CornerRadius::same(3), fill);
+                            ui.painter().rect_stroke(
+                                rect,
+                                CornerRadius::same(3),
+                                Stroke::new(
+                                    if selected { 1.5 } else { 1.0 },
+                                    if selected { SELECT } else { SLOT_EDGE },
+                                ),
+                                StrokeKind::Outside,
+                            );
+                        }
+                        let ink = if selected {
+                            Color32::from_rgb(20, 18, 12)
+                        } else {
+                            INK
+                        };
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            label,
+                            FontId::proportional(14.0),
+                            ink,
+                        );
+                    }
+                    if response.clicked() {
                         gui.set_inv_tab(tab);
                     }
                 }
@@ -2914,7 +3066,7 @@ fn draw_emi_sidebar(
     let emi_w = EMI_SIDE_W.max(180.0).min(ui.available_width().max(160.0));
     let list_h = list_h.max(CREATIVE_GRID_MIN_H);
     let list_rows = creative_visible_rows(list_h);
-    show_panel(ui, emi_w, |ui| {
+    show_panel(ui, emi_w, panel_chrome(ui.ctx(), icons), |ui| {
         // Reserve title + list floor so the sidebar matches creative height.
         ui.set_min_height(EMI_PANEL_OVERHEAD + list_h);
         ui.label(RichText::new("EMI").size(16.0).color(INK).strong());
@@ -2948,13 +3100,13 @@ fn draw_emi_sidebar(
                                         let is_sel = selected.as_deref() == Some(id.as_str());
                                         let tip = gui::tip_for(id, None);
                                         let tex = icon_texture(ui.ctx(), icons, id);
-                                        let resp = slot_button(ui, tex, is_sel, None);
+                                        let resp = slot_button(ui, icons, tex, is_sel, None);
                                         resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
                                         if resp.clicked() {
                                             gui.select_emi(id);
                                         }
                                     } else {
-                                        let _ = slot_button(ui, None, false, None);
+                                        let _ = slot_button(ui, icons, None, false, None);
                                     }
                                     if (i + 1) % EMI_COLS == 0 {
                                         ui.end_row();
@@ -2995,7 +3147,7 @@ fn draw_emi_sidebar(
                                 for input in &inputs {
                                     let tip = gui::tip_for(input, None);
                                     let tex = icon_texture(ui.ctx(), icons, input);
-                                    let resp = slot_button(ui, tex, false, None);
+                                    let resp = slot_button(ui, icons, tex, false, None);
                                     resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
                                     if resp.clicked() {
                                         gui.select_emi(input);
@@ -3004,7 +3156,7 @@ fn draw_emi_sidebar(
                                 ui.label(RichText::new("→").size(16.0).color(DETAIL));
                                 let tip = gui::tip_for(&id, None);
                                 let tex = icon_texture(ui.ctx(), icons, &id);
-                                let resp = slot_button(ui, tex, true, None);
+                                let resp = slot_button(ui, icons, tex, true, None);
                                 resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
                                 if resp.clicked() && gui.emi_can_ghost_fill() {
                                     fill_click = true;
@@ -3025,6 +3177,7 @@ fn draw_emi_sidebar(
                                             };
                                             let resp = slot_button_sized(
                                                 ui,
+                                                icons,
                                                 tex,
                                                 false,
                                                 None,
@@ -3091,7 +3244,7 @@ fn draw_emi_sidebar(
                             for result in &uses {
                                 let tip = gui::tip_for(result, None);
                                 let tex = icon_texture(ui.ctx(), icons, result);
-                                let resp = slot_button(ui, tex, false, None);
+                                let resp = slot_button(ui, icons, tex, false, None);
                                 resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
                                 if resp.clicked() {
                                     gui.select_emi(result);
@@ -3218,6 +3371,7 @@ fn offhand_equip_slot(
     let tex = worn_id.and_then(|id| icon_texture(ui.ctx(), icons, id));
     let resp = slot_button(
         ui,
+        icons,
         tex,
         false,
         if count > 1 { Some(count) } else { None },
@@ -3252,7 +3406,7 @@ fn equip_slot(
 ) -> bool {
     let worn_id = engine_slot.and_then(|slot| armor.worn().get(slot).copied().flatten());
     let tex = worn_id.and_then(|id| icon_texture(ui.ctx(), icons, id));
-    let resp = slot_button(ui, tex, false, None);
+    let resp = slot_button(ui, icons, tex, false, None);
     if let Some(id) = worn_id {
         let tip = gui::tip_for(id, Some(1));
         resp.clone().on_hover_ui(|ui| show_tip(ui, &tip));
@@ -3340,6 +3494,7 @@ fn draw_inv_body_grid(
                 };
                 let resp = slot_button(
                     ui,
+                    icons,
                     tex,
                     false,
                     if count > 1 { Some(count) } else { None },
@@ -3389,6 +3544,7 @@ fn draw_hotbar_row(
                 };
                 let resp = slot_button(
                     ui,
+                    icons,
                     tex,
                     selected,
                     if count > 1 { Some(count) } else { None },
@@ -3506,9 +3662,9 @@ fn craft_input_slot(
         icon_texture(ui.ctx(), icons, &id)
     };
     let resp = if ghost {
-        slot_button_ghost(ui, tex, false, if count > 1 { Some(count) } else { None })
+        slot_button_ghost(ui, icons, tex, false, if count > 1 { Some(count) } else { None })
     } else {
-        slot_button(ui, tex, false, if count > 1 { Some(count) } else { None })
+        slot_button(ui, icons, tex, false, if count > 1 { Some(count) } else { None })
     };
     if !id.is_empty() {
         let tip = if ghost {
@@ -3536,9 +3692,9 @@ fn craft_out_slot(
     let ghost = gui.inv_craft_is_ghost();
     let tex = preview.and_then(|id| icon_texture(ui.ctx(), icons, id));
     let resp = if ghost {
-        slot_button_ghost(ui, tex, preview.is_some(), None)
+        slot_button_ghost(ui, icons, tex, preview.is_some(), None)
     } else {
-        slot_button(ui, tex, preview.is_some(), None)
+        slot_button(ui, icons, tex, preview.is_some(), None)
     };
     if let Some(id) = preview {
         let tip = if ghost {
@@ -3615,8 +3771,12 @@ fn refund_inv_craft(gui: &mut Gui, hotbar: &mut Hotbar, bag: &mut hotbar::Bag) -
     moved
 }
 
-fn close_button(ui: &mut Ui, label: &str) -> egui::Response {
-    menu_button(ui, label, false)
+fn close_button(
+    ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
+    label: &str,
+) -> egui::Response {
+    menu_button(ui, icons, label, false)
 }
 
 /// Cook-shot helper: park a tip in the upper-right so the plate is visible.
@@ -3698,24 +3858,27 @@ fn rarity_chip(ui: &mut Ui, rarity: gui::Rarity) {
 
 fn slot_button(
     ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
     tex: Option<TextureId>,
     selected: bool,
     count: Option<u16>,
 ) -> egui::Response {
-    slot_button_sized(ui, tex, selected, count, SLOT, false)
+    slot_button_sized(ui, icons, tex, selected, count, SLOT, false)
 }
 
 fn slot_button_ghost(
     ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
     tex: Option<TextureId>,
     selected: bool,
     count: Option<u16>,
 ) -> egui::Response {
-    slot_button_sized(ui, tex, selected, count, SLOT, true)
+    slot_button_sized(ui, icons, tex, selected, count, SLOT, true)
 }
 
 fn slot_button_sized(
     ui: &mut Ui,
+    icons: &mut HashMap<String, TextureHandle>,
     tex: Option<TextureId>,
     selected: bool,
     count: Option<u16>,
@@ -3731,17 +3894,37 @@ fn slot_button_sized(
     };
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     if ui.is_rect_visible(rect) {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(3), SLOT_WELL);
+        let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+        if let Some(well) = well {
+            ui.painter().image(
+                well,
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        } else {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(3), SLOT_WELL);
+            // Light lip along the top edge of the cell.
+            let lip = egui::Rect::from_min_max(
+                rect.left_top(),
+                egui::pos2(rect.right(), rect.top() + 2.0),
+            );
+            ui.painter()
+                .rect_filled(lip, CornerRadius::same(2), LIP.gamma_multiply(0.85));
+        }
+        if selected {
+            if let Some(hi) = chrome_texture(ui.ctx(), icons, CHROME_SLOT_HIGHLIGHT) {
+                ui.painter().image(
+                    hi,
+                    rect.expand(2.0),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+        }
         ui.painter()
             .rect_stroke(rect, CornerRadius::same(3), stroke, StrokeKind::Outside);
-        // Light lip along the top edge of the cell.
-        let lip = egui::Rect::from_min_max(
-            rect.left_top(),
-            egui::pos2(rect.right(), rect.top() + 2.0),
-        );
-        ui.painter()
-            .rect_filled(lip, CornerRadius::same(2), LIP.gamma_multiply(0.85));
         if let Some(tex) = tex {
             // Modest inset — the raster itself is already AABB-fitted.
             let pad = (size * 0.06).max(1.5);
@@ -3769,6 +3952,48 @@ fn slot_button_sized(
         }
     }
     response
+}
+
+fn chrome_path(name: &str) -> String {
+    format!("assets/terralite/textures/gui/chrome/{name}.png")
+}
+
+fn chrome_texture(
+    ctx: &Context,
+    icons: &mut HashMap<String, TextureHandle>,
+    name: &str,
+) -> Option<TextureId> {
+    let key = format!("__chrome:{name}");
+    if let Some(handle) = icons.get(&key) {
+        return Some(handle.id());
+    }
+    let bytes = asset_png(&chrome_path(name))?;
+    let image = texture::decode_png(&bytes)?;
+    if image.width == 0 || image.height == 0 {
+        return None;
+    }
+    let color = egui::ColorImage::from_rgba_unmultiplied(
+        [image.width as usize, image.height as usize],
+        &image.rgba,
+    );
+    let handle = ctx.load_texture(key.clone(), color, TextureOptions::NEAREST);
+    let tex = handle.id();
+    icons.insert(key, handle);
+    Some(tex)
+}
+
+fn warm_chrome(ctx: &Context, icons: &mut HashMap<String, TextureHandle>) {
+    for name in [
+        CHROME_SLOT,
+        CHROME_SLOT_HIGHLIGHT,
+        CHROME_PANEL,
+        CHROME_TAB,
+        CHROME_TAB_SELECTED,
+        CHROME_BUTTON,
+        CHROME_BUTTON_HOT,
+    ] {
+        let _ = chrome_texture(ctx, icons, name);
+    }
 }
 
 fn icon_texture(
@@ -4232,7 +4457,7 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let panel_w = clamped_panel_width(chrome_max_width(ui), CREATIVE_COLS, true);
-                    show_panel(ui, panel_w, |ui| {
+                    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                         ui.set_min_width(grid_pitch(CREATIVE_COLS).min(panel_w));
                         ui.set_min_height(CREATIVE_PANEL_OVERHEAD + grid_h);
                         ui.add_space(40.0); // title
@@ -4257,7 +4482,7 @@ mod tests {
                                             .min_col_width(SLOT)
                                             .show(ui, |ui| {
                                                 for i in 0..cells {
-                                                    let _ = slot_button(ui, None, false, None);
+                                                    let _ = slot_button(ui, icons, None, false, None);
                                                     if (i + 1) % CREATIVE_COLS == 0 {
                                                         ui.end_row();
                                                     }
