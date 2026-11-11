@@ -552,6 +552,20 @@ impl Hooks {
         self.scripts.smith(world, item, view)
     }
 
+    /// First approach of a named landmark.
+    ///
+    /// `events.structure_discovered` is `fn(structure: String): Bool`.
+    /// False cancels the built-in tip. Returned lines are from `chat.say`.
+    pub fn structure_discovered(
+        &self,
+        world: &mut Cluster,
+        structure: &str,
+        view: &crate::rosegold::ScriptView<'_>,
+    ) -> (bool, Vec<String>) {
+        self.scripts
+            .structure_discovered(world, structure, view)
+    }
+
     /// False when a script refuses a loom weave.
     ///
     /// `events.weave` is `fn(wool: String): Bool`. `wool` is the wool id.

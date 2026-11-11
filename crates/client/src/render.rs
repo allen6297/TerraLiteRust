@@ -7306,6 +7306,24 @@ impl State {
         }
     }
 
+    /// Fire `events.structure_discovered`, then the built-in tip unless canceled.
+    fn announce_structure(&mut self, id: &str, tips: &[&str]) {
+        let slots = hotbar_slots(&self.hotbar);
+        let view = client_view(&slots, &self.hotbar, self.camera.eye, self.clock);
+        let (allow, lines) = self
+            .hooks
+            .structure_discovered(&mut self.world, id, &view);
+        for line in &lines {
+            self.gui.push_chat(line);
+        }
+        if allow {
+            for tip in tips {
+                self.gui.push_chat(tip);
+            }
+        }
+        let _ = self.hooks.drain_writes();
+    }
+
     /// Once per landmark, when the player first walks into range.
     fn tell_landmarks(&mut self) {
         if !sky_edge_tip_open(self.playing, self.menu.is_open(), self.dead) {
@@ -7319,15 +7337,15 @@ impl State {
         };
         if !self.found_camp && near(rebuild_world::CAMP_FIRE.0, rebuild_world::CAMP_FIRE.1) {
             self.found_camp = true;
-            self.gui.push_chat("a camp");
+            self.announce_structure("camp", &["a camp"]);
         }
         if !self.found_chart && near(rebuild_world::CAMP_CHART.0, rebuild_world::CAMP_CHART.1) {
             self.found_chart = true;
-            self.gui.push_chat("a chart table — widen a map");
+            self.announce_structure("chart", &["a chart table — widen a map"]);
         }
         if !self.found_farm && near(rebuild_world::CAMP_FARM.0, rebuild_world::CAMP_FARM.1) {
             self.found_farm = true;
-            self.gui.push_chat("a farm plot");
+            self.announce_structure("farm", &["a farm plot"]);
         }
         if !self.found_scarecrow
             && near(
@@ -7336,16 +7354,15 @@ impl State {
             )
         {
             self.found_scarecrow = true;
-            self.gui.push_chat("a scarecrow");
+            self.announce_structure("scarecrow", &["a scarecrow"]);
         }
         if !self.found_shrine && near(rebuild_world::SHRINE.0, rebuild_world::SHRINE.1) {
             self.found_shrine = true;
-            self.gui.push_chat("a shrine");
-            self.gui.push_chat("brush the altar pot");
+            self.announce_structure("shrine", &["a shrine", "brush the altar pot"]);
         }
         if !self.found_mine && near(rebuild_world::SHAFT_MOUTH.0, rebuild_world::SHAFT_MOUTH.1) {
             self.found_mine = true;
-            self.gui.push_chat("a mine — ladder into the pit");
+            self.announce_structure("mine", &["a mine — ladder into the pit"]);
         }
         if !self.found_portal
             && near(
@@ -7354,8 +7371,7 @@ impl State {
             )
         {
             self.found_portal = true;
-            self.gui.push_chat("a ruined portal");
-            self.gui.push_chat("flint and steel");
+            self.announce_structure("ruined_portal", &["a ruined portal", "flint and steel"]);
         }
         if !self.found_temple
             && near(
@@ -7364,7 +7380,7 @@ impl State {
             )
         {
             self.found_temple = true;
-            self.gui.push_chat("a desert temple");
+            self.announce_structure("desert_temple", &["a desert temple"]);
         }
         if !self.found_wreck
             && near(
@@ -7373,9 +7389,10 @@ impl State {
             )
         {
             self.found_wreck = true;
-            self.gui.push_chat("a shipwreck");
             if self.guardian.alive() {
-                self.gui.push_chat("a guardian");
+                self.announce_structure("shipwreck", &["a shipwreck", "a guardian"]);
+            } else {
+                self.announce_structure("shipwreck", &["a shipwreck"]);
             }
         }
         if !self.found_monument
@@ -7385,7 +7402,7 @@ impl State {
             )
         {
             self.found_monument = true;
-            self.gui.push_chat("an ocean monument");
+            self.announce_structure("ocean_monument", &["an ocean monument"]);
         }
         if !self.found_stronghold
             && near(
@@ -7394,64 +7411,69 @@ impl State {
             )
         {
             self.found_stronghold = true;
-            self.gui.push_chat("a stronghold");
+            self.announce_structure("stronghold", &["a stronghold"]);
         }
         if !self.found_end
             && near(rebuild_world::END_PAD.0, rebuild_world::END_PAD.1)
         {
             self.found_end = true;
-            self.gui.push_chat("the end");
             let (ex, ez) = rebuild_world::END_PAD;
             let floor = i32::from(rebuild_world::END_FLOOR);
-            if self.dragon.awaken([ex as f32 + 0.5, floor as f32, ez as f32 + 0.5]) {
+            let woke = self
+                .dragon
+                .awaken([ex as f32 + 0.5, floor as f32, ez as f32 + 0.5]);
+            if woke {
                 self.rebuild_dragon();
-                self.gui.push_chat("the dragon rises");
+                self.announce_structure("end", &["the end", "the dragon rises"]);
+            } else {
+                self.announce_structure("end", &["the end"]);
             }
         }
         if !self.found_end_city
             && near(rebuild_world::END_CITY.0, rebuild_world::END_CITY.1)
         {
             self.found_end_city = true;
-            self.gui.push_chat("an end city");
             if self.shulker.alive() {
-                self.gui.push_chat("a shulker");
+                self.announce_structure("end_city", &["an end city", "a shulker"]);
+            } else {
+                self.announce_structure("end_city", &["an end city"]);
             }
         }
         if !self.found_chorus
             && near(rebuild_world::END_CHORUS.0, rebuild_world::END_CHORUS.1)
         {
             self.found_chorus = true;
-            self.gui.push_chat("chorus");
+            self.announce_structure("chorus", &["chorus"]);
         }
         if !self.found_debris
             && near(rebuild_world::NETHER_DEBRIS.0, rebuild_world::NETHER_DEBRIS.1)
         {
             self.found_debris = true;
-            self.gui.push_chat("ancient debris");
+            self.announce_structure("ancient_debris", &["ancient debris"]);
         }
         if !self.found_piglin
             && near(rebuild_world::NETHER_PIGLIN.0, rebuild_world::NETHER_PIGLIN.1)
         {
             self.found_piglin = true;
-            self.gui.push_chat("a piglin");
+            self.announce_structure("piglin", &["a piglin"]);
         }
         if !self.found_village
             && near(rebuild_world::VILLAGE.0, rebuild_world::VILLAGE.1)
         {
             self.found_village = true;
-            self.gui.push_chat("a village remnant");
+            self.announce_structure("village", &["a village remnant"]);
         }
         if !self.found_dungeon
             && near(rebuild_world::DUNGEON.0, rebuild_world::DUNGEON.1)
         {
             self.found_dungeon = true;
-            self.gui.push_chat("a dungeon under the mine");
+            self.announce_structure("dungeon", &["a dungeon under the mine"]);
         }
         if !self.found_mineshaft
             && near(rebuild_world::MINESHAFT.0, rebuild_world::MINESHAFT.1)
         {
             self.found_mineshaft = true;
-            self.gui.push_chat("an abandoned mineshaft");
+            self.announce_structure("mineshaft", &["an abandoned mineshaft"]);
         }
         if !self.found_fortress
             && near(
@@ -7460,13 +7482,14 @@ impl State {
             )
         {
             self.found_fortress = true;
-            self.gui.push_chat("a nether fortress");
+            let mut tips: Vec<&str> = vec!["a nether fortress"];
             if self.blaze.alive() {
-                self.gui.push_chat("a blaze");
+                tips.push("a blaze");
             }
             if self.wither.alive() {
-                self.gui.push_chat("a wither skeleton");
+                tips.push("a wither skeleton");
             }
+            self.announce_structure("nether_fortress", &tips);
         }
         if !self.found_bastion
             && near(
@@ -7475,7 +7498,7 @@ impl State {
             )
         {
             self.found_bastion = true;
-            self.gui.push_chat("a bastion remnant");
+            self.announce_structure("bastion", &["a bastion remnant"]);
         }
         if !self.found_lodestone
             && near(
@@ -7484,58 +7507,58 @@ impl State {
             )
         {
             self.found_lodestone = true;
-            self.gui.push_chat("a lodestone — link a compass");
+            self.announce_structure("lodestone", &["a lodestone — link a compass"]);
         }
         if !self.found_rails && near(rebuild_world::SHAFT_RAIL.0, rebuild_world::SHAFT_RAIL.1) {
             self.found_rails = true;
-            self.gui.push_chat("rails by the mine");
+            self.announce_structure("rails", &["rails by the mine"]);
         }
         if !self.found_clay && near(rebuild_world::CLAY_BANK.0, rebuild_world::CLAY_BANK.1) {
             self.found_clay = true;
-            self.gui.push_chat("clay under the water");
+            self.announce_structure("clay", &["clay under the water"]);
         }
         if !self.found_compound
             && near(rebuild_world::COMPOUND_DEMO.0, rebuild_world::COMPOUND_DEMO.1)
         {
             self.found_compound = true;
-            self.gui.push_chat("compound loop by the pad");
+            self.announce_structure("compound", &["compound loop by the pad"]);
         }
         if !self.found_wolf && near(crate::mobs::WOLF_PAD.0, crate::mobs::WOLF_PAD.1) {
             self.found_wolf = true;
-            self.gui.push_chat("a wolf");
+            self.announce_structure("wolf", &["a wolf"]);
         }
         if !self.found_cat && near(crate::mobs::CAT_PAD.0, crate::mobs::CAT_PAD.1) {
             self.found_cat = true;
-            self.gui.push_chat("a cat");
+            self.announce_structure("cat", &["a cat"]);
         }
         if !self.found_parrot && near(crate::mobs::PARROT_PAD.0, crate::mobs::PARROT_PAD.1) {
             self.found_parrot = true;
-            self.gui.push_chat("a parrot");
+            self.announce_structure("parrot", &["a parrot"]);
         }
         if !self.found_horse && near(crate::mobs::HORSE_PAD.0, crate::mobs::HORSE_PAD.1) {
             self.found_horse = true;
-            self.gui.push_chat("a horse");
+            self.announce_structure("horse", &["a horse"]);
         }
         if !self.found_hitch && near(crate::mobs::HORSE_HITCH.0, crate::mobs::HORSE_HITCH.1) {
             self.found_hitch = true;
-            self.gui.push_chat("a hitch");
+            self.announce_structure("hitch", &["a hitch"]);
         }
         let (gx, gz) = rebuild_world::HORSE_STABLE_GATE;
         if !self.found_stable && near(gx, gz) {
             self.ensure_horse_stable();
             self.found_stable = true;
-            self.gui.push_chat("a stable");
+            self.announce_structure("stable", &["a stable"]);
         }
         let (fx, fz) = crate::mobs::FROG_PAD;
         if !self.found_lily && near(fx, fz) {
             self.ensure_frog_pads();
             self.found_lily = true;
-            self.gui.push_chat("lily pads");
+            self.announce_structure("lily", &["lily pads"]);
         }
         // Pad orange lantern sits at fixture (6, 1, 14).
         if !self.found_flicker && near(6, 14) {
             self.found_flicker = true;
-            self.gui.push_chat("flicker");
+            self.announce_structure("flicker", &["flicker"]);
         }
     }
 
@@ -16554,7 +16577,8 @@ impl State {
         self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
         self.found_village = true;
         self.gui.age_chat(60.0);
-        self.gui.push_chat("a village remnant");
+        // Proof for `events.structure_discovered` (ember tip + built-in remnant line).
+        self.announce_structure("village", &["a village remnant"]);
 
         let (cx, cz) = rebuild_world::VILLAGE;
         let mut cy = 4;
@@ -16614,7 +16638,25 @@ impl State {
         };
         self.pin_village_shot_camera();
         self.village_shot_frames = self.village_shot_frames.saturating_add(1);
-        if self.village_shot_frames < 120 || !self.chunk_bake.is_idle() {
+        // Structure API shots: re-tip near the end of the bake wait so the
+        // 6-line HUD log still shows discovery when the PNG is captured.
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let structure_shot =
+            name.contains("structure-discovery") || name.contains("structure_discovered");
+        if structure_shot && self.village_shot_frames == 110 {
+            self.gui.age_chat(60.0);
+            self.announce_structure("village", &["a village remnant"]);
+        }
+        // Structure shots wait a few extra frames after pinning chat so the
+        // redraw lands in the framebuffer before PNG capture.
+        let ready_at = if structure_shot { 125 } else { 120 };
+        if structure_shot && self.village_shot_frames == 122 && self.chunk_bake.is_idle() {
+            self.gui.age_chat(60.0);
+            self.gui.push_chat("discovered village");
+            self.gui.push_chat("token village charm");
+            self.gui.push_chat("a village remnant");
+        }
+        if self.village_shot_frames < ready_at || !self.chunk_bake.is_idle() {
             if self.village_shot_frames > 600 {
                 eprintln!("village shot timed out");
                 self.village_shot_path = None;

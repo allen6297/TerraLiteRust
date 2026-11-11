@@ -1906,7 +1906,8 @@ where
                     .ok_or_else(|| "missing value for --shot-tabs".to_string())?;
                 parsed.shot_tabs = Some(std::path::PathBuf::from(value));
             }
-            "--shot-hud" | "--shot-hud-plates" | "--shot-status-plates" => {
+            "--shot-hud" | "--shot-hud-plates" | "--shot-status-plates"
+            | "--shot-hud-atlas" | "--shot-hud-textures" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-hud".to_string())?;
@@ -2206,7 +2207,9 @@ where
                     .ok_or_else(|| "missing value for --shot-wreck".to_string())?;
                 parsed.shot_wreck = Some(std::path::PathBuf::from(value));
             }
-            "--shot-village" | "--shot-village-remnant" => {
+            "--shot-village" | "--shot-village-remnant"
+            | "--shot-structure-discovery"
+            | "--shot-structure-discovered" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --shot-village".to_string())?;

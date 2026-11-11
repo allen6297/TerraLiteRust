@@ -116,6 +116,10 @@ pub enum ScriptHook {
     Weave {
         id: String,
     },
+    /// First approach of a named landmark (`village`, `ruined_portal`, …).
+    StructureDiscovered {
+        id: String,
+    },
     Tick {
         id: String,
     },
@@ -180,6 +184,7 @@ impl ScriptHook {
             | Self::Brew { id }
             | Self::Smith { id }
             | Self::Weave { id }
+            | Self::StructureDiscovered { id }
             | Self::Tick { id }
             | Self::Dawn { id }
             | Self::Dusk { id }
@@ -225,6 +230,7 @@ impl ScriptHook {
             Self::Brew { .. } => "brew",
             Self::Smith { .. } => "smith",
             Self::Weave { .. } => "weave",
+            Self::StructureDiscovered { .. } => "structure-discovered",
             Self::Tick { .. } => "tick",
             Self::Dawn { .. } => "dawn",
             Self::Dusk { .. } => "dusk",
@@ -269,6 +275,7 @@ impl ScriptHook {
             Self::Brew { .. } => "brew",
             Self::Smith { .. } => "smith",
             Self::Weave { .. } => "weave",
+            Self::StructureDiscovered { .. } => "structure_discovered",
             Self::Tick { .. } => "tick",
             Self::Dawn { .. } => "dawn",
             Self::Dusk { .. } => "dusk",
@@ -313,6 +320,7 @@ impl ScriptHook {
             "brew" => Ok(Self::Brew { id }),
             "smith" => Ok(Self::Smith { id }),
             "weave" => Ok(Self::Weave { id }),
+            "structure_discovered" => Ok(Self::StructureDiscovered { id }),
             "tick" => Ok(Self::Tick { id }),
             "dawn" => Ok(Self::Dawn { id }),
             "dusk" => Ok(Self::Dusk { id }),
@@ -389,6 +397,7 @@ pub(crate) struct ScriptTable {
     brew: Vec<ScriptSlot>,
     smith: Vec<ScriptSlot>,
     weave: Vec<ScriptSlot>,
+    structure_discovered: Vec<ScriptSlot>,
     tick: Vec<ScriptSlot>,
     dawn: Vec<ScriptSlot>,
     dusk: Vec<ScriptSlot>,
@@ -461,6 +470,7 @@ impl ScriptTable {
             brew: Vec::new(),
             smith: Vec::new(),
             weave: Vec::new(),
+            structure_discovered: Vec::new(),
             tick: Vec::new(),
             dawn: Vec::new(),
             dusk: Vec::new(),
@@ -1302,6 +1312,41 @@ impl ScriptTable {
         allow
     }
 
+    /// First approach of a named landmark.
+    ///
+    /// `events.structure_discovered` is `fn(structure: String): Bool`.
+    /// `structure` is `village`, `ruined_portal`, `desert_temple`, …
+    /// False cancels the built-in tip. `chat.say` lines are returned either way.
+    /// A hook may `world.set_block`.
+    pub(crate) fn structure_discovered(
+        &self,
+        world: &mut Cluster,
+        structure: &str,
+        view: &ScriptView<'_>,
+    ) -> (bool, Vec<String>) {
+        if self.structure_discovered.is_empty() {
+            return (true, Vec::new());
+        }
+        let mut allow = true;
+        let mut said = Vec::new();
+        let args = [Arg::Text(structure.to_string())];
+        for hook in &self.structure_discovered {
+            match invoke(self, hook, world, &args, view, ScriptWrites::Open) {
+                Ok(answer) => {
+                    if answer.returned_false {
+                        allow = false;
+                    }
+                    said.extend(answer.lines);
+                }
+                Err(err) => {
+                    eprintln!("rosegold: hook failed: {err}");
+                    allow = false;
+                }
+            }
+        }
+        (allow, said)
+    }
+
     /// The reply from command hooks whose id or short name is `id`.
     ///
     /// `None` when nothing is registered under that name. `args` is the text
@@ -1544,6 +1589,7 @@ impl ScriptTable {
             "brew" => Some(&self.brew),
             "smith" => Some(&self.smith),
             "weave" => Some(&self.weave),
+            "structure_discovered" => Some(&self.structure_discovered),
             "tick" => Some(&self.tick),
             "dawn" => Some(&self.dawn),
             "dusk" => Some(&self.dusk),
@@ -1594,6 +1640,7 @@ impl ScriptTable {
             ScriptHook::Brew { .. } => self.brew.push(item),
             ScriptHook::Smith { .. } => self.smith.push(item),
             ScriptHook::Weave { .. } => self.weave.push(item),
+            ScriptHook::StructureDiscovered { .. } => self.structure_discovered.push(item),
             ScriptHook::Tick { .. } => self.tick.push(item),
             ScriptHook::Dawn { .. } => self.dawn.push(item),
             ScriptHook::Dusk { .. } => self.dusk.push(item),
@@ -2367,6 +2414,7 @@ mod tests {
     const BREW: &str = include_str!("../testdata/hook_mods/brew.rg");
     const SMITH: &str = include_str!("../testdata/hook_mods/smith.rg");
     const WEAVE: &str = include_str!("../testdata/hook_mods/weave.rg");
+    const STRUCTURE: &str = include_str!("../testdata/hook_mods/structure-discovered.rg");
     const TICK: &str = include_str!("../testdata/hook_mods/tick.rg");
     const DAWN: &str = include_str!("../testdata/hook_mods/dawn.rg");
     const DUSK: &str = include_str!("../testdata/hook_mods/dusk.rg");
@@ -2559,6 +2607,31 @@ mod tests {
         assert!(hooks.weave(&mut world, "string", &view));
         assert!(world.block_at(1, 2, 1).is_air());
         assert!(!hooks.weave(&mut world, "wool", &view));
+        assert_eq!(world.block_at(1, 2, 1).id, "dirt");
+    }
+
+    #[test]
+    fn a_structure_discovered_event_tips_and_can_cancel() {
+        let mut hooks = Hooks::new();
+        let loaded = load_source(STRUCTURE, &mut hooks).unwrap();
+        assert!(loaded.iter().any(|hook| {
+            hook.id() == "story-find" && matches!(hook, ScriptHook::StructureDiscovered { .. })
+        }));
+        let mut world = sample();
+        let view = hand(&[]);
+        let (allow_camp, camp_lines) = hooks.structure_discovered(&mut world, "camp", &view);
+        assert!(!allow_camp);
+        assert!(camp_lines.iter().any(|line| line.contains("discovered camp")));
+        assert!(world.block_at(1, 2, 1).is_air());
+        let (allow_village, village_lines) =
+            hooks.structure_discovered(&mut world, "village", &view);
+        assert!(allow_village);
+        assert!(
+            village_lines
+                .iter()
+                .any(|line| line.contains("token village seal")),
+            "lines={village_lines:?}"
+        );
         assert_eq!(world.block_at(1, 2, 1).id, "dirt");
     }
 

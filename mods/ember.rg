@@ -43,6 +43,14 @@ fn on_ember_fill(kind: String, x: Int, y: Int, z: Int) {
     }
 }
 
+fn on_structure_found(structure: String): Bool {
+    chat.say("discovered " + structure);
+    if (structure == "ruined_portal" || structure == "village" || structure == "desert_temple") {
+        chat.say("token " + structure + " charm");
+    }
+    return true;
+}
+
 class EmberWand impl Interactable {
     fn interact(player: String, hand: String): Bool {
         return true;
@@ -166,6 +174,7 @@ fn on_init() {
     Mod.listenTick("ember-pulse", ember_tick);
     Mod.listenUseBlock("ember-wand", ember_use_block);
     Mod.listenFillPlace("ember-fill-place", on_ember_fill);
+    Mod.listenStructureDiscovered("ember-find", on_structure_found);
     Mod.log("registered " + brick.id + ", ember:ember, " + shade.id + ", ember_glow");
 }
 
