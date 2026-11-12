@@ -1049,6 +1049,14 @@ pub struct State {
     bounce_shot_eye: glam::Vec3,
     bounce_shot_yaw: f32,
     bounce_shot_pitch: f32,
+    /// Research L1–L6 lighting presence stills (directory of PNGs), then quit.
+    lighting_presence_dir: Option<std::path::PathBuf>,
+    lighting_presence_index: usize,
+    lighting_presence_frames: u32,
+    lighting_presence_eye: glam::Vec3,
+    lighting_presence_yaw: f32,
+    lighting_presence_pitch: f32,
+    lighting_presence_time: f32,
     /// One-shot open water sky reflection, then quit.
     water_shot_path: Option<std::path::PathBuf>,
     water_shot_frames: u32,
@@ -2589,6 +2597,13 @@ impl State {
             bounce_shot_eye: glam::Vec3::ZERO,
             bounce_shot_yaw: 0.0,
             bounce_shot_pitch: 0.0,
+            lighting_presence_dir: None,
+            lighting_presence_index: 0,
+            lighting_presence_frames: 0,
+            lighting_presence_eye: glam::Vec3::ZERO,
+            lighting_presence_yaw: 0.0,
+            lighting_presence_pitch: 0.0,
+            lighting_presence_time: 0.30,
             water_shot_path: None,
             water_shot_frames: 0,
             water_shot_eye: glam::Vec3::ZERO,
@@ -16707,6 +16722,345 @@ impl State {
         self.goat_count = 0;
     }
 
+    /// Research L1–L6 lighting mood stills into `dir` (same small-world seed pad).
+    pub fn arm_lighting_presence_shot(&mut self, dir: std::path::PathBuf) {
+        let _ = std::fs::create_dir_all(&dir);
+        self.lighting_presence_dir = Some(dir);
+        self.lighting_presence_index = 0;
+        self.lighting_presence_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.gui.close();
+        self.map_open = false;
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        // Creative fly so settle frames never fall into a pit / void.
+        self.menu.set_creative(true);
+        self.flying = true;
+        self.fly_kick = 0.9;
+        self.found_flight = true;
+        self.hearts = body::HEARTS;
+        self.dead = false;
+        self.hurt_flash = 0.0;
+        // Critters and dusk FX out — place mood is the subject.
+        self.zombie.rouse([2.0, 1.0, 2.0]);
+        self.zombie.hold();
+        self.night = crate::mobs::NightHorde::new();
+        self.guests.clear();
+        self.sheep = crate::sheep::Sheep::new();
+        self.fox = crate::mobs::Fox::new();
+        self.pig = crate::mobs::Pig::new();
+        self.drops = crate::drops::Drops::new();
+        self.dusk_show = 0.0;
+        self.found_fireflies = false;
+        self.rebuild_zombie();
+        self.rebuild_guests();
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.rebuild_drops();
+        self.gui.age_chat(60.0);
+        self.hotbar.install_saved(0, &[]);
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        self.setup_lighting_presence_scene(0);
+        let _ = self.window.focus_window();
+    }
+
+    fn setup_lighting_presence_scene(&mut self, index: usize) {
+        use crate::lighting_presence::LightingPresenceScene;
+        let scene = LightingPresenceScene::ALL[index];
+        // Demo-pad stamps (same seed synthetic world) — bounce/shadows pattern.
+        let mut changes = Vec::new();
+        for z in 5..=15 {
+            for x in 4..=12 {
+                changes.push(CellChange {
+                    x,
+                    y: 0,
+                    z,
+                    block: Block::new("dirt", 0),
+                });
+                for y in 2..=8 {
+                    changes.push(CellChange {
+                        x,
+                        y,
+                        z,
+                        block: Block::AIR,
+                    });
+                }
+            }
+        }
+        let grass_meta = match scene {
+            LightingPresenceScene::ForestCanopy | LightingPresenceScene::NightUnderTree => 1u8,
+            LightingPresenceScene::HillsBiome => 2u8,
+            LightingPresenceScene::MarshBiome => 0u8,
+            _ => 0u8,
+        };
+        match scene {
+            LightingPresenceScene::CaveMouthExterior | LightingPresenceScene::CaveUnderRoof => {
+                for z in 7..=11 {
+                    for x in 6..=10 {
+                        changes.push(CellChange {
+                            x,
+                            y: 1,
+                            z,
+                            block: Block::new("stone", 0),
+                        });
+                        changes.push(CellChange {
+                            x,
+                            y: 4,
+                            z,
+                            block: Block::new("deepslate", 0),
+                        });
+                    }
+                }
+                for z in 7..=11 {
+                    for y in 2..=3 {
+                        changes.push(CellChange {
+                            x: 6,
+                            y,
+                            z,
+                            block: Block::new("deepslate", 0),
+                        });
+                        changes.push(CellChange {
+                            x: 10,
+                            y,
+                            z,
+                            block: Block::new("deepslate", 0),
+                        });
+                    }
+                }
+                for x in 6..=10 {
+                    for y in 2..=3 {
+                        changes.push(CellChange {
+                            x,
+                            y,
+                            z: 7,
+                            block: Block::new("deepslate", 0),
+                        });
+                    }
+                }
+                for z in 8..=12 {
+                    for x in 7..=9 {
+                        for y in 2..=3 {
+                            changes.push(CellChange {
+                                x,
+                                y,
+                                z,
+                                block: Block::AIR,
+                            });
+                        }
+                    }
+                }
+            }
+            LightingPresenceScene::ForestCanopy | LightingPresenceScene::NightUnderTree => {
+                for z in 6..=12 {
+                    for x in 5..=11 {
+                        changes.push(CellChange {
+                            x,
+                            y: 1,
+                            z,
+                            block: Block::new("grass", grass_meta),
+                        });
+                    }
+                }
+                changes.push(CellChange {
+                    x: 8,
+                    y: 2,
+                    z: 9,
+                    block: Block::new("oak_log", 0),
+                });
+                changes.push(CellChange {
+                    x: 8,
+                    y: 3,
+                    z: 9,
+                    block: Block::new("oak_log", 0),
+                });
+                changes.push(CellChange {
+                    x: 8,
+                    y: 4,
+                    z: 9,
+                    block: Block::new("oak_log", 0),
+                });
+                for z in 7..=11 {
+                    for x in 6..=10 {
+                        changes.push(CellChange {
+                            x,
+                            y: 5,
+                            z,
+                            block: Block::new("leaves", 0),
+                        });
+                        if (x - 8).abs() <= 1 && (z - 9).abs() <= 1 {
+                            changes.push(CellChange {
+                                x,
+                                y: 6,
+                                z,
+                                block: Block::new("leaves", 0),
+                            });
+                        }
+                    }
+                }
+            }
+            LightingPresenceScene::MarshBiome => {
+                for z in 6..=12 {
+                    for x in 5..=11 {
+                        changes.push(CellChange {
+                            x,
+                            y: 1,
+                            z,
+                            block: Block::new("dirt", 1),
+                        });
+                    }
+                }
+                for z in 8..=11 {
+                    for x in 7..=10 {
+                        changes.push(CellChange {
+                            x,
+                            y: 1,
+                            z,
+                            block: Block::new("water", 0),
+                        });
+                    }
+                }
+            }
+            LightingPresenceScene::HillsBiome => {
+                for z in 6..=12 {
+                    for x in 5..=11 {
+                        changes.push(CellChange {
+                            x,
+                            y: 1,
+                            z,
+                            block: Block::new("grass", 2),
+                        });
+                    }
+                }
+                for z in 8..=10 {
+                    for y in 1..=3 {
+                        changes.push(CellChange {
+                            x: 10,
+                            y,
+                            z,
+                            block: Block::new("stone", 0),
+                        });
+                    }
+                }
+            }
+            _ => {
+                for z in 6..=12 {
+                    for x in 5..=11 {
+                        changes.push(CellChange {
+                            x,
+                            y: 1,
+                            z,
+                            block: Block::new("grass", grass_meta),
+                        });
+                    }
+                }
+            }
+        }
+        apply_changes(&mut self.world, &changes);
+        for change in &changes {
+            self.chunk_bake.touch(change.x, change.z);
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        self.menu.set_trace(scene.trace_on());
+        self.menu.set_creative(true);
+        self.flying = true;
+        self.fly_kick = 0.55;
+        self.hearts = body::HEARTS;
+        self.dead = false;
+        self.hurt_flash = 0.0;
+        self.dusk_show = 0.0;
+        self.found_fireflies = true;
+        self.lighting_presence_time = scene.time_of_day();
+        self.clock.set_time_of_day(self.lighting_presence_time);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (eye, target) = match scene {
+            LightingPresenceScene::CaveMouthExterior => (
+                glam::Vec3::new(8.0, 2.35 + body::EYE_HEIGHT, 14.4),
+                glam::Vec3::new(8.0, 2.9, 8.4),
+            ),
+            LightingPresenceScene::CaveUnderRoof => (
+                glam::Vec3::new(8.0, 2.25 + body::EYE_HEIGHT, 10.2),
+                glam::Vec3::new(8.0, 3.0, 8.0),
+            ),
+            LightingPresenceScene::ForestCanopy | LightingPresenceScene::NightUnderTree => (
+                glam::Vec3::new(8.0, 2.05 + body::EYE_HEIGHT, 12.4),
+                glam::Vec3::new(8.0, 4.8, 8.6),
+            ),
+            LightingPresenceScene::MarshBiome => (
+                glam::Vec3::new(5.6, 2.6 + body::EYE_HEIGHT, 12.8),
+                glam::Vec3::new(8.5, 1.6, 9.0),
+            ),
+            _ => (
+                glam::Vec3::new(5.4, 2.5 + body::EYE_HEIGHT, 13.2),
+                glam::Vec3::new(9.0, 1.6, 9.0),
+            ),
+        };
+        for _ in 0..96 {
+            self.trace
+                .advance(&self.world, [eye.x, eye.y, eye.z], light.direction);
+        }
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.lighting_presence_eye = eye;
+        self.lighting_presence_yaw = yaw;
+        self.lighting_presence_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.lighting_presence_frames = 0;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat(scene.chat());
+    }
+
+    fn pin_lighting_presence_camera(&mut self) {
+        if self.lighting_presence_dir.is_none() {
+            return;
+        }
+        self.clock.set_time_of_day(self.lighting_presence_time);
+        self.dusk_show = 0.0;
+        self.dead = false;
+        self.hearts = body::HEARTS;
+        self.flying = true;
+        self.menu.set_creative(true);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+        self.camera.restore(
+            self.lighting_presence_eye,
+            self.lighting_presence_yaw,
+            self.lighting_presence_pitch,
+        );
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        self.posed_eye = self.lighting_presence_eye;
+        self.posed_yaw = self.lighting_presence_yaw;
+        self.posed_pitch = self.lighting_presence_pitch;
+        self.pose_dirty = true;
+        self.sheep_buf = None;
+        self.sheep_count = 0;
+        self.fox_buf = None;
+        self.fox_count = 0;
+        self.pig_buf = None;
+        self.pig_count = 0;
+        self.goat_buf = None;
+        self.goat_count = 0;
+        self.guests.clear();
+        self.rebuild_guests();
+    }
+
     /// Night flat pad with glowstone markers — soft block-light falloff proof.
     /// Reuses the shadows-shot poller (same settle + PNG path).
     pub fn arm_block_light_soft_shot(&mut self, path: std::path::PathBuf) {
@@ -29849,6 +30203,49 @@ impl State {
         }
     }
 
+    fn poll_lighting_presence_shot(&mut self) {
+        use crate::lighting_presence::LightingPresenceScene;
+        let Some(dir) = self.lighting_presence_dir.clone() else {
+            return;
+        };
+        self.pin_lighting_presence_camera();
+        self.lighting_presence_frames = self.lighting_presence_frames.saturating_add(1);
+        if self.lighting_presence_frames < 240 || !self.chunk_bake.is_idle() {
+            if self.lighting_presence_frames > 1200 {
+                eprintln!(
+                    "lighting presence timed out on {}",
+                    LightingPresenceScene::ALL[self.lighting_presence_index].filename()
+                );
+                self.lighting_presence_dir = None;
+                self.quit = true;
+            }
+            return;
+        }
+        let scene = LightingPresenceScene::ALL[self.lighting_presence_index];
+        let path = dir.join(scene.filename());
+        let _ = self.window.focus_window();
+        match capture_window_png(&self.window, &path) {
+            Ok(()) => {
+                eprintln!("lighting presence wrote {}", path.display());
+                let next = self.lighting_presence_index + 1;
+                if next >= LightingPresenceScene::ALL.len() {
+                    self.lighting_presence_dir = None;
+                    self.quit = true;
+                } else {
+                    self.lighting_presence_index = next;
+                    self.setup_lighting_presence_scene(next);
+                }
+            }
+            Err(err) => {
+                eprintln!("lighting presence failed ({}): {err}", scene.filename());
+                if self.lighting_presence_frames > 320 {
+                    self.lighting_presence_dir = None;
+                    self.quit = true;
+                }
+            }
+        }
+    }
+
     fn poll_lava_haze_shot(&mut self) {
         let Some(path) = self.lava_haze_shot_path.clone() else {
             return;
@@ -37528,6 +37925,7 @@ impl State {
         self.poll_crouch_shot();
         self.poll_shadows_shot();
         self.poll_bounce_shot();
+        self.poll_lighting_presence_shot();
         self.poll_water_shot();
         self.poll_caustic_shot();
         self.poll_lava_haze_shot();

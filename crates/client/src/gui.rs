@@ -5161,6 +5161,11 @@ impl Menu {
         self.trace
     }
 
+    /// Force soft-sun (ray grid) on or off (CLI / lighting stills).
+    pub fn set_trace(&mut self, on: bool) {
+        self.trace = on;
+    }
+
     /// Creative mode lets the player double-tap Space to fly.
     pub fn creative(&self) -> bool {
         self.creative
