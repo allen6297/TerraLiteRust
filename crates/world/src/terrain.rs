@@ -164,6 +164,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_ocean_monument(&mut blocks, chunk_x, chunk_z);
     stamp_stronghold(&mut blocks, chunk_x, chunk_z);
     stamp_end_pocket(&mut blocks, chunk_x, chunk_z);
+    stamp_end_crystals(&mut blocks, chunk_x, chunk_z);
     stamp_end_city(&mut blocks, chunk_x, chunk_z);
     stamp_end_chorus(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
@@ -604,6 +605,19 @@ pub const END_CHORUS: (i32, i32) = (28, -44);
 
 /// Floor of the chorus islet (same height as the End pad).
 pub const END_CHORUS_FLOOR: u16 = END_FLOOR;
+
+/// Obsidian column height under each End fight crystal (crystal sits on top).
+pub const END_CRYSTAL_PILLAR_HEIGHT: u16 = 8;
+
+/// Four fight crystals around the End pad — destroy to stop the heal gate.
+///
+/// Cells are `(x, y, z)` world coords; y is the crystal block on the pillar tip.
+pub const END_CRYSTALS: [[i32; 3]; 4] = [
+    [18, (END_FLOOR + END_CRYSTAL_PILLAR_HEIGHT) as i32, -34],
+    [30, (END_FLOOR + END_CRYSTAL_PILLAR_HEIGHT) as i32, -34],
+    [18, (END_FLOOR + END_CRYSTAL_PILLAR_HEIGHT) as i32, -46],
+    [30, (END_FLOOR + END_CRYSTAL_PILLAR_HEIGHT) as i32, -46],
+];
 
 const END_CHUNK: (i32, i32) = (1, -3);
 
@@ -1687,6 +1701,28 @@ fn stamp_end_pocket(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_
     let rod_lx = (cx + 2 - chunk_x * 16) as u8;
     let rod_lz = (cz - chunk_z * 16) as u8;
     blocks.push((rod_lx, floor + 1, rod_lz, Block::new("end_rod", 0)));
+}
+
+/// Four obsidian pillars topped with end crystals that heal / gate the dragon.
+fn stamp_end_crystals(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != END_CHUNK {
+        return;
+    }
+    let floor = END_FLOOR;
+    let height = END_CRYSTAL_PILLAR_HEIGHT;
+    let obsidian = Block::new("obsidian", 0);
+    let crystal = Block::new("end_crystal", 0);
+    for &[wx, _wy, wz] in &END_CRYSTALS {
+        let lx = (wx - chunk_x * 16) as u8;
+        let lz = (wz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| {
+            !(*x == lx && *z == lz && *y >= floor && *y <= floor + height)
+        });
+        for dy in 0..height {
+            blocks.push((lx, floor + dy, lz, obsidian));
+        }
+        blocks.push((lx, floor + height, lz, crystal));
+    }
 }
 
 /// Tall purpur / end-stone tower west of the End pad. Guaranteed in [`END_CHUNK`].
@@ -3076,6 +3112,37 @@ mod tests {
         assert_ne!(END_CHUNK, STRONGHOLD_CHUNK);
         assert_ne!(END_CHUNK, NETHER_CHUNK);
         assert_ne!(END_CHUNK, PORTAL_CHUNK);
+    }
+
+    #[test]
+    fn end_crystal_pillars_ring_the_pad() {
+        let pocket = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+        let floor = END_FLOOR;
+        let tip = floor + END_CRYSTAL_PILLAR_HEIGHT;
+        assert_eq!(END_CRYSTALS.len(), 4);
+        for &[wx, wy, wz] in &END_CRYSTALS {
+            assert_eq!(wy, tip as i32, "crystal sits on the pillar tip");
+            let lx = (wx - END_CHUNK.0 * 16) as u8;
+            let lz = (wz - END_CHUNK.1 * 16) as u8;
+            assert_eq!(
+                pocket.block(lx, tip, lz).id,
+                "end_crystal",
+                "crystal at ({wx},{wz})"
+            );
+            assert_eq!(
+                pocket.block(lx, floor, lz).id,
+                "obsidian",
+                "pillar base at ({wx},{wz})"
+            );
+            assert_eq!(
+                pocket.block(lx, tip - 1, lz).id,
+                "obsidian",
+                "pillar under crystal at ({wx},{wz})"
+            );
+            assert_ne!((wx, wz), END_PAD, "crystal offset from pad");
+            assert_ne!((wx, wz), END_CITY, "crystal clear of city");
+            assert_ne!((wx, wz), END_CHORUS, "crystal clear of chorus");
+        }
     }
 
     #[test]

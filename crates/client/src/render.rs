@@ -5677,6 +5677,30 @@ impl State {
         self.dragon_count = vertices.len() as u32;
     }
 
+    /// Living fight crystals still on the End pillars.
+    fn end_fight_crystals_alive(&self) -> usize {
+        rebuild_world::END_CRYSTALS
+            .iter()
+            .filter(|&&[x, y, z]| self.world.block_at(x, y, z).id == "end_crystal")
+            .count()
+    }
+
+    /// Damage the dragon; crystals gate the killing blow and tip `crystal shield`.
+    fn hurt_dragon(&mut self, amount: i32, origin: [f32; 3]) -> bool {
+        let shielded = self.end_fight_crystals_alive() > 0;
+        if shielded {
+            let before = self.dragon.hearts();
+            let _ = self.hurt_mob("ender_dragon", amount, origin, |s, n| {
+                s.dragon.hurt_shielded(n)
+            });
+            if before > 1 && self.dragon.hearts() <= 1 {
+                self.gui.push_chat("crystal shield");
+            }
+            return false;
+        }
+        self.hurt_mob("ender_dragon", amount, origin, |s, n| s.dragon.hurt(n))
+    }
+
     fn rebuild_shulker(&mut self) {
         let vertices = self.shulker.vertices();
         if vertices.is_empty() {
@@ -6307,7 +6331,7 @@ impl State {
         };
         let dropped_dragon = dragon_aimed && {
             let origin = self.dragon.origin();
-            let dropped = self.hurt_mob("ender_dragon", amount, origin, |s, n| s.dragon.hurt(n));
+            let dropped = self.hurt_dragon(amount, origin);
             if dropped {
                 xp_at = Some(origin);
             }
@@ -7143,8 +7167,7 @@ impl State {
                 if !self.arrows.take_near(tip, 0.5) {
                     continue;
                 }
-                let dropped =
-                    self.hurt_mob("ender_dragon", amount, dragon, |s, n| s.dragon.hurt(n));
+                let dropped = self.hurt_dragon(amount, dragon);
                 if dropped {
                     self.grant_xp_at(dragon, true);
                     self.drop_dragon_egg();
@@ -9655,9 +9678,7 @@ impl State {
                     }
                     let dragon = self.dragon.origin();
                     if crate::splash::in_radius(burst.center, dragon) {
-                        let dropped = self.hurt_mob("ender_dragon", amount, dragon, |s, n| {
-                            s.dragon.hurt(n)
-                        });
+                        let dropped = self.hurt_dragon(amount, dragon);
                         if dropped {
                             self.grant_xp_at(dragon, true);
                             self.drop_dragon_egg();
@@ -12117,6 +12138,77 @@ impl State {
                 self.chunk_bake.touch(ex + dx * 8, ez + dz * 8);
             }
         }
+        let _ = self.window.focus_window();
+    }
+
+    /// End crystal pillars gating the dragon fight, then quit with a PNG.
+    pub fn arm_end_crystals_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (ex, ez) = rebuild_world::END_PAD;
+        let floor = i32::from(rebuild_world::END_FLOOR);
+        // Pin above the pad so south-pillar crystals frame the wings.
+        self.dragon.place_at([
+            ex as f32 + 0.5,
+            floor as f32 + 4.6,
+            ez as f32 + 0.5,
+        ]);
+        // Face the camera south of the pad (same still language as the dragon shot).
+        self.dragon.face_yaw(std::f32::consts::PI);
+        let origin = self.dragon.origin();
+        self.rebuild_dragon();
+        self.found_end = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("the end");
+        self.gui.push_chat("end crystals");
+        self.gui.push_chat("the dragon rises");
+
+        // South rim: south-pair pillars + crystals in midground, dragon beyond.
+        let focus = glam::Vec3::new(origin[0], origin[1] + 1.2, origin[2]);
+        let eye = glam::Vec3::new(
+            ex as f32 + 0.5,
+            floor as f32 + 3.4,
+            ez as f32 + 12.0,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        // Drop the spawn-ring bake backlog — only mesh the End pocket for the still.
+        self.terrain_dirty = false;
+        self.chunk_bake =
+            mesh::ChunkBake::new(&self.world, self.wanted_sun, self.wanted_focus);
+        self.shadow_lookups = self.wanted_lookups.clone();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(ex + dx * 8, ez + dz * 8);
+            }
+        }
+        self.dispatch_meshes();
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("bow");
+        let _ = self.hotbar.give_stack("arrow");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
         let _ = self.window.focus_window();
     }
 
@@ -15187,6 +15279,16 @@ impl State {
                 self.gui.push_chat("boom");
                 if body::crystal_reaches(self.camera.eye, [cell.x, cell.y, cell.z]) {
                     self.hurt(1);
+                }
+                let fight = rebuild_world::END_CRYSTALS
+                    .iter()
+                    .any(|at| *at == [cell.x, cell.y, cell.z]);
+                if fight {
+                    if self.end_fight_crystals_alive() == 0 {
+                        self.gui.push_chat("the dragon falters");
+                    } else {
+                        self.gui.push_chat("crystal shattered");
+                    }
                 }
             }
             if !scooped && !eaten && hop_dest.is_none() && !blasted && !loot.is_empty() {
@@ -27744,6 +27846,8 @@ impl State {
             } else if self.found_snow_prints {
                 // Footprints last long enough for the PNG; just tick the fade.
                 let _ = self.drops.tick_motes(0.04);
+            } else if self.found_end {
+                // End void still — keep camp smoke off the pad.
             } else {
                 self.drops.smoke([8.5, 2.95, 10.5]);
                 if self.found_embers {
@@ -27753,7 +27857,8 @@ impl State {
             self.rebuild_drops();
         }
         if self.cook_shot_frames < 100 || !self.chunk_bake.is_idle() {
-            if self.cook_shot_frames > 500 {
+            // Soft-path meshing of far pockets needs more settle time than camp stills.
+            if self.cook_shot_frames > 1200 {
                 eprintln!("cook shot timed out");
                 self.cook_shot_path = None;
                 self.note_shot_at = None;
@@ -36392,6 +36497,12 @@ impl State {
                     self.gui.push_chat(if blocked { "block" } else { "swoop" });
                     let from = self.dragon.origin();
                     self.play_world(crate::audio::Sound::Gust, from);
+                }
+                if self.end_fight_crystals_alive() > 0 && self.dragon.crystal_beam_heal(steps) {
+                    let from = self.dragon.origin();
+                    self.drops.puff(from, [0.72, 0.35, 0.95]);
+                    self.rebuild_drops();
+                    self.play_world(crate::audio::Sound::Pop, from);
                 }
                 self.rebuild_dragon();
             }

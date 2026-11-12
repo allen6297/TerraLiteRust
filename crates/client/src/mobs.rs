@@ -7074,6 +7074,8 @@ const DRAGON_CIRCLE_STEP: f32 = 0.035;
 const DRAGON_DIVE_EVERY: u32 = 90;
 const DRAGON_DIVE_SPEED: f32 = 0.22;
 const DRAGON_HIT_RANGE: f32 = 2.4;
+/// Crystal beam restores one heart on this swing cadence while pillars stand.
+const DRAGON_CRYSTAL_HEAL_EVERY: u32 = 40;
 
 /// Three skull cells that complete a soul-sand summon row, when the last skull
 /// sits at `at`. Soul sand must sit under each skull. Row runs along X or Z.
@@ -7778,6 +7780,10 @@ impl EnderDragon {
         self.spent
     }
 
+    pub fn hearts(&self) -> i32 {
+        self.hearts
+    }
+
     /// Rise over the End pad once per session.
     pub fn awaken(&mut self, pad: [f32; 3]) -> bool {
         if self.awakened || self.spent {
@@ -7854,6 +7860,43 @@ impl EnderDragon {
         self.diving = false;
         self.dive_left = 0;
         true
+    }
+
+    /// Crystal gate: take damage but never drop while pillars still heal.
+    /// True when the hit changed hearts.
+    pub fn hurt_shielded(&mut self, amount: i32) -> bool {
+        if !self.alive() || amount <= 0 || self.hearts <= 1 {
+            return false;
+        }
+        let next = (self.hearts - amount).max(1);
+        if next == self.hearts {
+            return false;
+        }
+        self.hearts = next;
+        true
+    }
+
+    /// Restore hearts from living End crystals. Caps at full.
+    pub fn heal(&mut self, amount: i32) -> bool {
+        if !self.alive() || amount <= 0 || self.hearts >= DRAGON_HEARTS {
+            return false;
+        }
+        self.hearts = (self.hearts + amount).min(DRAGON_HEARTS);
+        true
+    }
+
+    /// After [`Self::tick_near`], beam-heal when a heal cadence crossed.
+    pub fn crystal_beam_heal(&mut self, steps: u32) -> bool {
+        if !self.alive() || self.hearts >= DRAGON_HEARTS || steps == 0 {
+            return false;
+        }
+        let before = self.swing.wrapping_sub(steps);
+        let crossed =
+            before / DRAGON_CRYSTAL_HEAL_EVERY != self.swing / DRAGON_CRYSTAL_HEAL_EVERY;
+        if !crossed {
+            return false;
+        }
+        self.heal(1)
     }
 
     /// Circle / dive. True when a dive scrapes the player.
@@ -8375,6 +8418,35 @@ mod tests {
         assert!(dragon.spent());
         assert!(dragon.vertices().is_empty());
         assert!(!dragon.awaken([24.5, 16.0, -39.5]), "spent dragon stays down");
+    }
+
+    #[test]
+    fn end_crystals_heal_and_gate_the_dragon() {
+        let mut dragon = EnderDragon::new();
+        dragon.place_at([24.5, 22.0, -39.5]);
+        assert_eq!(dragon.hearts(), DRAGON_HEARTS);
+        assert!(dragon.hurt_shielded(8));
+        assert_eq!(dragon.hearts(), DRAGON_HEARTS - 8);
+        assert!(dragon.hurt_shielded(100), "gate clamps instead of killing");
+        assert_eq!(dragon.hearts(), 1);
+        assert!(!dragon.hurt_shielded(5), "already at one heart");
+        assert!(dragon.alive());
+        assert!(!dragon.spent());
+        assert!(dragon.heal(3));
+        assert_eq!(dragon.hearts(), 4);
+        // Advance swing across a heal cadence while damaged.
+        dragon.hurt_shielded(2);
+        let mut beamed = false;
+        for _ in 0..(DRAGON_CRYSTAL_HEAL_EVERY + 4) {
+            let _ = dragon.tick_near(1, [24.5, 16.0, -39.5]);
+            if dragon.crystal_beam_heal(1) {
+                beamed = true;
+                break;
+            }
+        }
+        assert!(beamed, "living crystals restore a heart on cadence");
+        assert!(dragon.hurt(20), "ungated kill still drops");
+        assert!(!dragon.alive());
     }
 
     #[test]

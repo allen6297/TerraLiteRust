@@ -348,6 +348,8 @@ struct Args {
     shot_end_portal: Option<std::path::PathBuf>,
     /// Ender dragon circling the End pad, then quit.
     shot_ender_dragon: Option<std::path::PathBuf>,
+    /// End crystal pillars gating the dragon fight, then quit.
+    shot_end_crystals: Option<std::path::PathBuf>,
     /// End city remnant tower by the End pad, then quit.
     shot_end_city: Option<std::path::PathBuf>,
     /// Open shulker on the End city tower, then quit.
@@ -718,6 +720,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_stronghold: args.shot_stronghold,
         shot_end_portal: args.shot_end_portal,
         shot_ender_dragon: args.shot_ender_dragon,
+        shot_end_crystals: args.shot_end_crystals,
         shot_end_city: args.shot_end_city,
         shot_shulker: args.shot_shulker,
         shot_shulker_box: args.shot_shulker_box,
@@ -932,6 +935,7 @@ struct App {
     shot_stronghold: Option<std::path::PathBuf>,
     shot_end_portal: Option<std::path::PathBuf>,
     shot_ender_dragon: Option<std::path::PathBuf>,
+    shot_end_crystals: Option<std::path::PathBuf>,
     shot_end_city: Option<std::path::PathBuf>,
     shot_shulker: Option<std::path::PathBuf>,
     shot_shulker_box: Option<std::path::PathBuf>,
@@ -1379,6 +1383,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_ender_dragon.take() {
                     state.arm_ender_dragon_shot(path);
+                }
+                if let Some(path) = self.shot_end_crystals.take() {
+                    state.arm_end_crystals_shot(path);
                 }
                 if let Some(path) = self.shot_end_city.take() {
                     state.arm_end_city_shot(path);
@@ -1879,6 +1886,7 @@ where
         shot_stronghold: None,
         shot_end_portal: None,
         shot_ender_dragon: None,
+        shot_end_crystals: None,
         shot_end_city: None,
         shot_shulker: None,
         shot_shulker_box: None,
@@ -2634,6 +2642,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-ender-dragon".to_string())?;
                 parsed.shot_ender_dragon = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-end-crystals" | "--shot-ender-crystals" | "--shot-crystals" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-end-crystals".to_string())?;
+                parsed.shot_end_crystals = Some(std::path::PathBuf::from(value));
             }
             "--shot-end-city" | "--shot-city" => {
                 let value = iter
@@ -3586,6 +3600,17 @@ mod tests {
         assert_eq!(
             args.shot_ender_dragon.as_deref(),
             Some(std::path::Path::new("ender-dragon.png"))
+        );
+        let Parsed::Run(args) = parse_args([
+            "--shot-end-crystals".into(),
+            "end-crystals.png".into(),
+        ])
+        .unwrap() else {
+            panic!("expected run args");
+        };
+        assert_eq!(
+            args.shot_end_crystals.as_deref(),
+            Some(std::path::Path::new("end-crystals.png"))
         );
         let Parsed::Run(args) = parse_args([
             "--shot-end-city".into(),
