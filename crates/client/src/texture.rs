@@ -75,6 +75,13 @@ pub const HUD_HOTBAR_WELL: &str = "assets/terralite/textures/gui/hud/hotbar_well
 pub const HUD_HOTBAR_SELECTION: &str = "assets/terralite/textures/gui/hud/hotbar_selection.png";
 pub const HUD_XP_BG: &str = "assets/terralite/textures/gui/hud/xp_bg.png";
 pub const HUD_XP_FG: &str = "assets/terralite/textures/gui/hud/xp_fg.png";
+/// Whimscape crosshair + shared chrome plates for hybrid HUD / GUIAPI quads.
+pub const HUD_CROSSHAIR: &str = "assets/terralite/textures/gui/hud/crosshair.png";
+pub const HUD_CROSSHAIR_READY: &str = "assets/terralite/textures/gui/hud/crosshair_ready.png";
+pub const HUD_BUFF_PLATE: &str = "assets/terralite/textures/gui/hud/buff_plate.png";
+pub const HUD_CHROME_PANEL: &str = "assets/terralite/textures/gui/hud/chrome_panel.png";
+pub const HUD_CHROME_BUTTON: &str = "assets/terralite/textures/gui/hud/chrome_button.png";
+pub const HUD_CHROME_TIP: &str = "assets/terralite/textures/gui/hud/chrome_tip.png";
 
 const HUD_ATLAS_PATHS: &[&str] = &[
     HUD_HEART_FULL,
@@ -87,6 +94,12 @@ const HUD_ATLAS_PATHS: &[&str] = &[
     HUD_HOTBAR_SELECTION,
     HUD_XP_BG,
     HUD_XP_FG,
+    HUD_CROSSHAIR,
+    HUD_CROSSHAIR_READY,
+    HUD_BUFF_PLATE,
+    HUD_CHROME_PANEL,
+    HUD_CHROME_BUTTON,
+    HUD_CHROME_TIP,
 ];
 
 /// Atlas column for a HUD GUI PNG (`slot + 1`), or `0` when missing.

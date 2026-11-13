@@ -454,8 +454,9 @@ impl Screen {
             bottom + panel_h + 2.0,
             FRAME,
         ));
-        quads.push(
-            pixel_quad(
+        {
+            let (tex, span) = panel_tex_or_face(&self.panel, panel_w / 16.0, panel_h / 16.0);
+            let mut panel = pixel_quad(
                 width,
                 height,
                 left,
@@ -463,13 +464,17 @@ impl Screen {
                 left + panel_w,
                 bottom + panel_h,
                 PANEL,
-            )
-            .face(&self.panel, panel_w / 16.0, panel_h / 16.0),
-        );
+            );
+            if tex > 0.0 {
+                panel = panel.with_tex(tex, span[0], span[1]);
+            }
+            quads.push(panel);
+        }
         let title_base = bottom + panel_h - PAD - BRAND_H;
         let header_h = PAD + BRAND_H + 8.0;
-        quads.push(
-            pixel_quad(
+        {
+            let (tex, span) = panel_tex_or_face(&self.header, panel_w / 16.0, header_h / 16.0);
+            let mut header = pixel_quad(
                 width,
                 height,
                 left,
@@ -477,9 +482,12 @@ impl Screen {
                 left + panel_w,
                 bottom + panel_h,
                 HEADER,
-            )
-            .face(&self.header, panel_w / 16.0, header_h / 16.0),
-        );
+            );
+            if tex > 0.0 {
+                header = header.with_tex(tex, span[0], span[1]);
+            }
+            quads.push(header);
+        }
         push_lip(&mut quads, width, height, left, bottom + panel_h, panel_w);
         let title_w = measure(&title, BRAND_SCALE);
         let title_x = left + (panel_w - title_w) * 0.5;
@@ -523,6 +531,7 @@ impl Screen {
             let chosen = index == selected;
             if menu {
                 let frame_w = inner_right - inner_left + 4.0;
+                let btn = button_tex_or_face(&self.button);
                 quads.push(
                     pixel_quad(
                         width,
@@ -533,7 +542,7 @@ impl Screen {
                         row_y + row_h + 2.0,
                         if chosen { FRAME } else { [0.28, 0.30, 0.36] },
                     )
-                    .face(&self.button, frame_w / 16.0, (row_h + 4.0) / 16.0),
+                    .with_tex(btn, frame_w / 16.0, (row_h + 4.0) / 16.0),
                 );
                 let button_w = inner_right - inner_left;
                 quads.push(
@@ -546,7 +555,7 @@ impl Screen {
                         row_y + row_h,
                         if chosen { SELECT } else { BUTTON },
                     )
-                    .face(&self.button, button_w / 16.0, row_h / 16.0)
+                    .with_tex(btn, button_w / 16.0, row_h / 16.0)
                     .tag(1 + index as u16),
                 );
                 if chosen {
@@ -562,6 +571,8 @@ impl Screen {
                 }
             } else {
                 let row_w = inner_right - inner_left + 12.0;
+                let (tex, span) =
+                    panel_tex_or_face(&self.panel, row_w / 16.0, (row_h + 4.0) / 16.0);
                 quads.push(
                     pixel_quad(
                         width,
@@ -572,7 +583,7 @@ impl Screen {
                         row_y + row_h + 2.0,
                         if chosen { SELECT } else { ROW },
                     )
-                    .face(&self.panel, row_w / 16.0, (row_h + 4.0) / 16.0)
+                    .with_tex(tex, span[0], span[1])
                     .tag(1 + index as u16),
                 );
             }
@@ -6796,26 +6807,42 @@ fn status_plate(width: f32, height: f32, amount: f32, label: &str) -> Vec<Quad> 
     let left = (width - plate_w) * 0.5;
     // Sit just above the hotbar lip; status plates are bottom-left, so this stays clear.
     let bottom = hotbar::bar_chrome_top() + 8.0;
-    let mut quads = vec![
-        pixel_quad(
+    let buff = hud_chrome(crate::texture::HUD_BUFF_PLATE);
+    let tip = hud_chrome(crate::texture::HUD_CHROME_TIP);
+    let plate_tex = if buff > 0.0 { buff } else { tip };
+    let mut quads = if plate_tex > 0.0 {
+        vec![pixel_quad(
             width,
             height,
             left,
             bottom,
             left + plate_w,
             bottom + plate_h,
-            WELL,
-        ),
-        pixel_quad(
-            width,
-            height,
-            left,
-            bottom + plate_h - 3.0,
-            left + plate_w,
-            bottom + plate_h,
-            LIP,
-        ),
-    ];
+            [1.0, 1.0, 1.0],
+        )
+        .with_tex(plate_tex, plate_w / 16.0, plate_h / 16.0)]
+    } else {
+        vec![
+            pixel_quad(
+                width,
+                height,
+                left,
+                bottom,
+                left + plate_w,
+                bottom + plate_h,
+                WELL,
+            ),
+            pixel_quad(
+                width,
+                height,
+                left,
+                bottom + plate_h - 3.0,
+                left + plate_w,
+                bottom + plate_h,
+                LIP,
+            ),
+        ]
+    };
     draw_text(
         &mut quads,
         width,
@@ -6855,10 +6882,37 @@ pub fn look_tip_or_label(id: &str) -> Option<String> {
     }
 }
 
+/// Atlas column for a Whimscape HUD chrome tile, or `0` when missing.
+fn hud_chrome(path: &str) -> f32 {
+    crate::texture::hud_face(path)
+}
+
+/// Prefer a Whimscape chrome panel tile; fall back to a pack block face.
+fn panel_tex_or_face(block_id: &str, tiles_x: f32, tiles_y: f32) -> (f32, [f32; 2]) {
+    let chrome = hud_chrome(crate::texture::HUD_CHROME_PANEL);
+    if chrome > 0.0 {
+        (chrome, [tiles_x.max(1.0), tiles_y.max(1.0)])
+    } else {
+        let tex = crate::texture::block_face(block_id);
+        (tex, [tiles_x.max(1.0), tiles_y.max(1.0)])
+    }
+}
+
+/// Prefer a Whimscape chrome button tile; fall back to a pack block face.
+fn button_tex_or_face(block_id: &str) -> f32 {
+    let chrome = hud_chrome(crate::texture::HUD_CHROME_BUTTON);
+    if chrome > 0.0 {
+        chrome
+    } else {
+        crate::texture::block_face(block_id)
+    }
+}
+
 /// Center crosshair. `ready` is `0` just swung through `1` fully charged.
 ///
 /// Cooling shrinks the arms so the wait reads like a Minecraft attack meter
-/// without a separate HUD ring.
+/// without a separate HUD ring. When Whimscape HUD crosshair tiles are present,
+/// prefer those over the flat line arms.
 pub fn cross_quads(width: f32, height: f32, ready: f32) -> Vec<Quad> {
     if width <= 0.0 || height <= 0.0 {
         return Vec::new();
@@ -6866,6 +6920,30 @@ pub fn cross_quads(width: f32, height: f32, ready: f32) -> Vec<Quad> {
     let ready = ready.clamp(0.0, 1.0);
     let cx = width * 0.5;
     let cy = height * 0.5;
+    let tex = if ready >= 0.98 {
+        let ready_tex = hud_chrome(crate::texture::HUD_CROSSHAIR_READY);
+        if ready_tex > 0.0 {
+            ready_tex
+        } else {
+            hud_chrome(crate::texture::HUD_CROSSHAIR)
+        }
+    } else {
+        hud_chrome(crate::texture::HUD_CROSSHAIR)
+    };
+    if tex > 0.0 {
+        // Cooling shrinks the sprite the same way the line arms used to.
+        let half = 4.0 + 4.0 * ready;
+        return vec![pixel_quad(
+            width,
+            height,
+            cx - half,
+            cy - half,
+            cx + half,
+            cy + half,
+            [1.0, 1.0, 1.0],
+        )
+        .with_tex(tex, 1.0, 1.0)];
+    }
     let arm = 2.0 + 4.0 * ready;
     let edge = 1.0 + arm;
     let ink = if ready >= 0.98 { INK } else { EDGE };
@@ -7185,11 +7263,17 @@ fn status_armor_bottom() -> f32 {
 }
 
 /// Dark well + light top lip + thin rim — same language as inventory chrome.
+/// Prefers Whimscape tip/buff plate tiles when the HUD atlas has them.
 fn status_plate_chrome(width: f32, height: f32, left: f32, bottom: f32, span: f32) -> Vec<Quad> {
     let x0 = left;
     let y0 = bottom - HUD_STATUS_PAD_Y;
     let x1 = left + HUD_STATUS_PAD_X + span + HUD_STATUS_PAD_X;
     let y1 = bottom + HUD_STATUS_PIP + HUD_STATUS_PAD_Y;
+    let tip = hud_chrome(crate::texture::HUD_CHROME_TIP);
+    if tip > 0.0 {
+        return vec![pixel_quad(width, height, x0, y0, x1, y1, [1.0, 1.0, 1.0])
+            .with_tex(tip, (x1 - x0) / 16.0, (y1 - y0) / 16.0)];
+    }
     vec![
         pixel_quad(width, height, x0, y0, x1, y1, TRAY),
         // Outer rim.
@@ -8989,8 +9073,9 @@ fn station_chrome(
         bottom + panel_h + 2.0,
         FRAME,
     ));
-    quads.push(
-        pixel_quad(
+    {
+        let (tex, span) = panel_tex_or_face(&screen.panel, panel_w / 16.0, panel_h / 16.0);
+        let mut panel = pixel_quad(
             width,
             height,
             left,
@@ -8998,13 +9083,17 @@ fn station_chrome(
             left + panel_w,
             bottom + panel_h,
             PANEL,
-        )
-        .face(&screen.panel, panel_w / 16.0, panel_h / 16.0),
-    );
+        );
+        if tex > 0.0 {
+            panel = panel.with_tex(tex, span[0], span[1]);
+        }
+        quads.push(panel);
+    }
     let title_base = bottom + panel_h - PAD - BRAND_H;
     let header_h = PAD + BRAND_H + 8.0;
-    quads.push(
-        pixel_quad(
+    {
+        let (tex, span) = panel_tex_or_face(&screen.header, panel_w / 16.0, header_h / 16.0);
+        let mut header = pixel_quad(
             width,
             height,
             left,
@@ -9012,9 +9101,12 @@ fn station_chrome(
             left + panel_w,
             bottom + panel_h,
             HEADER,
-        )
-        .face(&screen.header, panel_w / 16.0, header_h / 16.0),
-    );
+        );
+        if tex > 0.0 {
+            header = header.with_tex(tex, span[0], span[1]);
+        }
+        quads.push(header);
+    }
     push_lip(&mut quads, width, height, left, bottom + panel_h, panel_w);
     let title_w = measure(title, BRAND_SCALE);
     let title_x = left + (panel_w - title_w) * 0.5;
@@ -9052,15 +9144,21 @@ fn push_title_plate(
     title_base: f32,
     title_w: f32,
 ) {
-    quads.push(pixel_quad(
-        width,
-        height,
-        title_x - 8.0,
-        title_base - 4.0,
-        title_x + title_w + 8.0,
-        title_base + BRAND_H,
-        TITLE_PLATE,
-    ));
+    let x0 = title_x - 8.0;
+    let y0 = title_base - 4.0;
+    let x1 = title_x + title_w + 8.0;
+    let y1 = title_base + BRAND_H;
+    let tip = hud_chrome(crate::texture::HUD_CHROME_TIP);
+    let panel = hud_chrome(crate::texture::HUD_CHROME_PANEL);
+    let tex = if tip > 0.0 { tip } else { panel };
+    if tex > 0.0 {
+        quads.push(
+            pixel_quad(width, height, x0, y0, x1, y1, [1.0, 1.0, 1.0])
+                .with_tex(tex, (x1 - x0) / 16.0, (y1 - y0) / 16.0),
+        );
+    } else {
+        quads.push(pixel_quad(width, height, x0, y0, x1, y1, TITLE_PLATE));
+    }
 }
 
 fn paint_slot(
@@ -9075,6 +9173,7 @@ fn paint_slot(
     button: &str,
     hit: u16,
 ) {
+    let btn = button_tex_or_face(button);
     quads.push(
         pixel_quad(
             width,
@@ -9085,7 +9184,7 @@ fn paint_slot(
             y + cell + 2.0,
             if chosen { SELECT } else { ROW },
         )
-        .face(button, 1.0, 1.0)
+        .with_tex(btn, 1.0, 1.0)
         .tag(hit),
     );
     let Some(id) = id else {
@@ -9192,8 +9291,9 @@ fn built_quads(
     let mut quads = Vec::new();
     let left = screen.x;
     let bottom = height - screen.y - screen.h;
-    quads.push(
-        pixel_quad(
+    {
+        let (tex, span) = panel_tex_or_face("stone", screen.w / 16.0, screen.h / 16.0);
+        let mut panel = pixel_quad(
             width,
             height,
             left,
@@ -9201,9 +9301,12 @@ fn built_quads(
             left + screen.w,
             bottom + screen.h,
             PANEL,
-        )
-        .face("stone", 1.0, 1.0),
-    );
+        );
+        if tex > 0.0 {
+            panel = panel.with_tex(tex, span[0], span[1]);
+        }
+        quads.push(panel);
+    }
     draw_text(
         &mut quads,
         width,
@@ -9298,7 +9401,17 @@ fn built_quads(
             let lip = [fill[0] * 0.55, fill[1] * 0.55, fill[2] * 0.55];
             quads.push(pixel_quad(width, height, x, y - 4.0, x + row.w, y, lip));
         }
-        quads.push(pixel_quad(width, height, x, y, x + row.w, y + row.h, fill).tag(hit));
+        let btn = button_tex_or_face("cobblestone");
+        let mut row_quad = pixel_quad(width, height, x, y, x + row.w, y + row.h, fill).tag(hit);
+        if row.font == "button" && btn > 0.0 {
+            row_quad = row_quad.with_tex(btn, row.w / 16.0, row.h / 16.0);
+        } else if row.font != "button" {
+            let panel = hud_chrome(crate::texture::HUD_CHROME_PANEL);
+            if panel > 0.0 {
+                row_quad = row_quad.with_tex(panel, row.w / 16.0, row.h / 16.0);
+            }
+        }
+        quads.push(row_quad);
         if row.font == "button" {
             let top = [
                 fill[0] + (1.0 - fill[0]) * 0.28,
@@ -10078,10 +10191,14 @@ mod tests {
             Some("Stone Stairs · stairs"),
             1.0,
         );
-        assert!(cross_quads(200.0, 100.0, 0.0).len() == 4);
-        assert!(cross_quads(200.0, 100.0, 1.0)
-            .iter()
-            .any(|quad| quad.color == INK));
+        let cooling = cross_quads(200.0, 100.0, 0.0);
+        let charged = cross_quads(200.0, 100.0, 1.0);
+        // Whimscape HUD crosshair is one textured quad; flat fallback keeps 4 arms.
+        assert!(cooling.len() == 1 || cooling.len() == 4);
+        assert!(charged.len() == 1 || charged.iter().any(|quad| quad.color == INK));
+        if cooling.len() == 1 {
+            assert!(cooling[0].tex > 0.0, "pack crosshair samples HUD atlas");
+        }
         assert!(shaped.iter().any(|quad| quad.color == WELL));
         let picker = shape_picker_quads(400.0, 300.0, &["block", "slab", "stairs"], 1);
         assert!(picker.iter().any(|quad| quad.color == SELECT));
@@ -10310,10 +10427,14 @@ mod tests {
             [None; 3],
         );
         let look = look_quads(gw, gh, Some("oak_log"), Some("cobblestone"), None, 1.0);
-        // First four quads are the center cross; later INK/EDGE are tip glyphs.
-        assert!(look.len() >= 4);
-        let cross = &look[..4];
-        assert!(cross.iter().all(|quad| quad.color == INK || quad.color == EDGE));
+        // Center cross: Whimscape HUD tile (1 textured quad) or flat 4-arm fallback.
+        let cross_count = cross_quads(gw, gh, 1.0).len();
+        assert!(cross_count == 1 || cross_count == 4);
+        assert!(look.len() >= cross_count);
+        let cross = &look[..cross_count];
+        assert!(cross.iter().all(|quad| {
+            quad.tex > 0.0 || quad.color == INK || quad.color == EDGE || quad.color == [1.0, 1.0, 1.0]
+        }));
         let cross_mid_x: f32 = cross
             .iter()
             .map(|quad| (quad.min[0] + quad.max[0]) * 0.5)
@@ -10328,21 +10449,37 @@ mod tests {
         assert!(cross_mid_y.abs() < 0.05, "crosshair is centered on y");
 
         let bar_quads = hotbar::bar_quads(gw, gh, &bar);
-        let bar_mid = {
-            let first = bar_quads.first().expect("hotbar chrome");
-            (first.min[0] + first.max[0]) * 0.5
-        };
-        assert!(bar_mid.abs() < 0.05, "hotbar is bottom-center");
-        let bar_span = bar_quads[0].max[0] - bar_quads[0].min[0];
+        // Offhand well is drawn first (left); pick the widest bottom chrome as the ×10 bar.
+        let chrome = bar_quads
+            .iter()
+            .max_by(|a, b| {
+                (a.max[0] - a.min[0])
+                    .partial_cmp(&(b.max[0] - b.min[0]))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .expect("hotbar chrome");
+        let bar_mid = (chrome.min[0] + chrome.max[0]) * 0.5;
+        assert!(
+            bar_mid.abs() < 0.08,
+            "hotbar is bottom-center, mid={bar_mid}"
+        );
+        let bar_span = chrome.max[0] - chrome.min[0];
         assert!(
             bar_span > 0.8 && bar_span < 1.4,
             "×10 hotbar spans the bottom center"
         );
-        let bar_left = bar_quads[0].min[0];
-        let bar_right = bar_quads[0].max[0];
+        let bar_left = chrome.min[0];
+        let bar_right = chrome.max[0];
 
-        let trays: Vec<_> = hud.iter().filter(|quad| quad.color == TRAY).collect();
-        assert!(trays.len() >= 2);
+        // Status trays: flat TRAY fill, or Whimscape tip chrome tile.
+        let tip_tex = hud_chrome(crate::texture::HUD_CHROME_TIP);
+        let trays: Vec<_> = hud
+            .iter()
+            .filter(|quad| {
+                quad.color == TRAY || (tip_tex > 0.0 && (quad.tex - tip_tex).abs() < 0.1)
+            })
+            .collect();
+        assert!(trays.len() >= 2, "expected status trays, got {}", trays.len());
         for tray in &trays {
             let mid = (tray.min[0] + tray.max[0]) * 0.5;
             assert!(mid < -0.2, "status tray stays left, mid={mid}");

@@ -587,19 +587,18 @@ fn clamped_panel_width(max_chrome: f32, cols: usize, with_emi: bool) -> f32 {
     desired.min((max_chrome - emi).max(grid_w.min(max_chrome)))
 }
 
-fn title_label(ui: &mut Ui, text: &str) {
-    Frame::new()
-        .fill(TITLE_PLATE)
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(text)
-                    .font(FontId::proportional(26.0))
-                    .color(INK)
-                    .strong(),
-            );
-        });
+fn title_label(ui: &mut Ui, icons: &mut HashMap<String, TextureHandle>, text: &str) {
+    // Whimscape tip/panel chrome behind the brand title (title + worlds pages).
+    let plate = chrome_texture(ui.ctx(), icons, CHROME_TIP_BG)
+        .or_else(|| chrome_texture(ui.ctx(), icons, CHROME_PANEL));
+    chrome_well(ui, plate, TITLE_PLATE, |ui| {
+        ui.label(
+            RichText::new(text)
+                .font(FontId::proportional(26.0))
+                .color(INK)
+                .strong(),
+        );
+    });
 }
 
 fn menu_button(
@@ -731,7 +730,7 @@ fn draw_skins_screen(
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "PLAYER SKIN");
+                        title_label(ui, icons, "PLAYER SKIN");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let back =
                                 egui::Button::new(RichText::new("Back").size(14.0).color(INK))
@@ -963,7 +962,7 @@ fn draw_mods_screen(
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "MODS");
+                        title_label(ui, icons, "MODS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let back =
                                 egui::Button::new(RichText::new("Back").size(14.0).color(INK))
@@ -1173,7 +1172,7 @@ fn draw_datapacks_screen(
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "DATAPACKS");
+                        title_label(ui, icons, "DATAPACKS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let back =
                                 egui::Button::new(RichText::new("Back").size(14.0).color(INK))
@@ -1385,7 +1384,7 @@ fn draw_resource_packs_screen(
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "RESOURCE PACKS");
+                        title_label(ui, icons, "RESOURCE PACKS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let back =
                                 egui::Button::new(RichText::new("Back").size(14.0).color(INK))
@@ -1597,7 +1596,7 @@ fn draw_statistics_screen(
                 .show(ui.ctx(), |ui| {
                     show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                         ui.horizontal(|ui| {
-                            title_label(ui, "STATISTICS");
+                            title_label(ui, icons, "STATISTICS");
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if chrome_button(
                                     ui,
@@ -1676,7 +1675,7 @@ fn draw_advancements_screen(
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "ADVANCEMENTS");
+                        title_label(ui, icons, "ADVANCEMENTS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if chrome_button(
                                 ui,
@@ -2111,7 +2110,7 @@ fn draw_menu(
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.14);
                 show_panel(ui, 420.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, title);
+                    title_label(ui, icons, title);
                     ui.add_space(12.0);
                     for (index, label) in rows.iter().enumerate() {
                         let detail = menu.row_detail(label);
@@ -2151,7 +2150,7 @@ fn draw_settings(ui: &mut Ui, menu: &mut Menu, icons: &mut HashMap<String, Textu
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "SETTINGS");
+                        title_label(ui, icons, "SETTINGS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             // Compact Back — full-width menu_button would stretch the header.
                             if chrome_button(
@@ -2490,7 +2489,7 @@ fn draw_keybinds(ui: &mut Ui, menu: &mut Menu, binds: &mut Keybinds, icons: &mut
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
                     ui.set_min_height(panel_h);
                     ui.horizontal(|ui| {
-                        title_label(ui, "KEYBINDS");
+                        title_label(ui, icons, "KEYBINDS");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let back =
                                 egui::Button::new(RichText::new("Back").size(14.0).color(INK))
@@ -2763,7 +2762,7 @@ fn draw_creative_panel(
         ui.set_min_width(grid_w.min(panel_w));
         // Parent panel must reserve chrome + grid floor up front.
         ui.set_min_height(CREATIVE_PANEL_OVERHEAD + grid_h);
-        title_label(ui, "CREATIVE");
+        title_label(ui, icons, "CREATIVE");
         ui.add_space(8.0);
         // Category tabs with flanking arrows (GUI plan L7).
         ui.horizontal_wrapped(|ui| {
@@ -2968,7 +2967,7 @@ fn draw_anvil(
             ui.vertical_centered(|ui| {
                 ui.add_space(40.0);
                 show_panel(ui, 440.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "ANVIL");
+                    title_label(ui, icons, "ANVIL");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Rename costs XP. Repair / combine spend material + XP.")
@@ -3170,7 +3169,7 @@ fn draw_enchanting(
             ui.vertical_centered(|ui| {
                 ui.add_space(36.0);
                 show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "ENCHANTING");
+                    title_label(ui, icons, "ENCHANTING");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!(
@@ -3342,7 +3341,7 @@ fn draw_stonecutter(
             ui.vertical_centered(|ui| {
                 ui.add_space(32.0);
                 show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "STONECUTTER");
+                    title_label(ui, icons, "STONECUTTER");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Pick stairs · slabs · walls from one block")
@@ -3525,7 +3524,7 @@ fn draw_cartography(
             ui.vertical_centered(|ui| {
                 ui.add_space(32.0);
                 show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "CARTOGRAPHY");
+                    title_label(ui, icons, "CARTOGRAPHY");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!(
@@ -3703,7 +3702,7 @@ fn draw_chest(
                     .min(ui.available_width() - 24.0)
                     .max(420.0);
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, &title);
+                    title_label(ui, icons, &title);
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Click to take or stash · digit keys put from the hotbar")
@@ -3951,7 +3950,7 @@ fn draw_crafting_table(
                 ui.add_space(20.0);
                 let panel_w = (grid_pitch(INV_COLS) + 48.0).min(ui.available_width() - 24.0).max(420.0);
                 show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "CRAFTING");
+                    title_label(ui, icons, "CRAFTING");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("3×3 table · shaped recipes welcome · digit keys stash")
@@ -4193,7 +4192,7 @@ fn draw_furnace(
             ui.vertical_centered(|ui| {
                 ui.add_space(32.0);
                 show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, title);
+                    title_label(ui, icons, title);
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Input · fuel · output — digit keys stash from the hotbar")
@@ -4349,7 +4348,7 @@ fn draw_brewing(
             ui.vertical_centered(|ui| {
                 ui.add_space(32.0);
                 show_panel(ui, 480.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "BREWING");
+                    title_label(ui, icons, "BREWING");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!("Blaze powder fuel · {fuel}"))
@@ -4543,7 +4542,7 @@ fn draw_grindstone(
             ui.vertical_centered(|ui| {
                 ui.add_space(36.0);
                 show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "GRINDSTONE");
+                    title_label(ui, icons, "GRINDSTONE");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!(
@@ -4736,7 +4735,7 @@ fn draw_smithing(
             ui.vertical_centered(|ui| {
                 ui.add_space(36.0);
                 show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "SMITHING");
+                    title_label(ui, icons, "SMITHING");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!(
@@ -4930,7 +4929,7 @@ fn draw_trade(
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
                 show_panel(ui, 420.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, "VILLAGE TRADER");
+                    title_label(ui, icons, "VILLAGE TRADER");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Emeralds for stock goods. Esc closes.")
@@ -5129,7 +5128,7 @@ fn draw_player_inventory_panel(
     let grid_w = grid_pitch(INV_COLS);
     show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
         ui.set_min_width(grid_w.min(panel_w));
-        title_label(ui, "INVENTORY");
+        title_label(ui, icons, "INVENTORY");
         ui.add_space(8.0);
         draw_inv_tab_strip(ui, gui, icons);
         ui.add_space(10.0);
@@ -5511,12 +5510,25 @@ fn draw_entity_preview(
     width: f32,
     height: f32,
 ) {
+    // Whimscape slot/panel well behind the soft-rendered player body.
+    let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT)
+        .or_else(|| chrome_texture(ui.ctx(), icons, CHROME_PANEL));
+    let preview = player_preview_texture(ui.ctx(), icons);
     let (rect, _response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(4), SLOT_WELL);
+    if let Some(tex) = well {
+        ui.painter().image(
+            tex,
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    } else {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(4), SLOT_WELL);
+    }
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(4),
@@ -5529,10 +5541,9 @@ fn draw_entity_preview(
     );
     ui.painter()
         .rect_filled(lip, CornerRadius::same(2), LIP.gamma_multiply(0.85));
-    let tex = player_preview_texture(ui.ctx(), icons);
     let pad = 4.0;
     ui.painter().image(
-        tex,
+        preview,
         rect.shrink(pad),
         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
         Color32::WHITE,
