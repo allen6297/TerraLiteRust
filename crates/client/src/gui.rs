@@ -7897,6 +7897,7 @@ fn tab_of(id: &str) -> &'static str {
         || id == "torch"
         || id == "end_rod"
         || id == "end_crystal"
+        || id == "end_gateway"
         || id == "glowstone"
         || id == "sea_lantern"
         || id.contains("light")

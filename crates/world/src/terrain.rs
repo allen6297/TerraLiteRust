@@ -166,6 +166,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_stronghold_library(&mut blocks, chunk_x, chunk_z);
     stamp_end_pocket(&mut blocks, chunk_x, chunk_z);
     stamp_end_crystals(&mut blocks, chunk_x, chunk_z);
+    stamp_end_outer_island(&mut blocks, chunk_x, chunk_z);
     stamp_end_city(&mut blocks, chunk_x, chunk_z);
     stamp_end_chorus(&mut blocks, chunk_x, chunk_z);
     stamp_village_remnant(&mut blocks, chunk_x, chunk_z);
@@ -601,11 +602,26 @@ pub const END_RETURN: (i32, i32) = END_PAD;
 /// Obsidian platform floor in the End pocket.
 pub const END_FLOOR: u16 = 16;
 
-/// End city remnant tower just west of the End pad (same chunk).
+/// Outer-island landing pad east of the fight pocket (gateway exit).
 ///
-/// Tall purpur / end-stone ruin with a chest near the top. Reach it by stepping
-/// stones off the pad, or flying after the dragon drops an elytra.
-pub const END_CITY: (i32, i32) = (20, -36);
+/// The chunk is `(3, -3)`. Reach it by walking into the pad end gateway after
+/// the dragon falls — city + chorus sit on this islet.
+pub const END_OUTER: (i32, i32) = (56, -40);
+
+/// Standing cell beside the outer-island gateway.
+pub const END_OUTER_IN: (i32, i32) = (END_OUTER.0, END_OUTER.1 + 1);
+
+/// Return end-gateway on the outer island (walk back to the fight pad).
+pub const END_GATEWAY_OUTER: (i32, i32) = END_OUTER;
+
+/// Pad exit end-gateway — placed when the dragon falls (not stamped at gen).
+pub const END_GATEWAY_PAD: (i32, i32) = (24, -38);
+
+/// End city remnant tower on the outer island (west of the landing).
+///
+/// Tall purpur / end-stone ruin with a chest near the top. Reach it through the
+/// pad gateway after the dragon, or from the outer landing stones.
+pub const END_CITY: (i32, i32) = (52, -36);
 
 /// Loot chest inside the End city tower.
 pub const END_CITY_CHEST: (i32, i32) = END_CITY;
@@ -613,11 +629,11 @@ pub const END_CITY_CHEST: (i32, i32) = END_CITY;
 /// Standing floor of the End city tower base.
 pub const END_CITY_FLOOR: u16 = END_FLOOR;
 
-/// Chorus grove on a small end-stone islet east of the End pad (same chunk).
+/// Chorus grove on a small end-stone islet east of the outer landing.
 ///
 /// Stalks of `chorus_plant` topped with `chorus_flower`. Break either for
 /// `chorus_fruit` — End food that blinks you a short hop.
-pub const END_CHORUS: (i32, i32) = (28, -44);
+pub const END_CHORUS: (i32, i32) = (60, -44);
 
 /// Floor of the chorus islet (same height as the End pad).
 pub const END_CHORUS_FLOOR: u16 = END_FLOOR;
@@ -636,6 +652,16 @@ pub const END_CRYSTALS: [[i32; 3]; 4] = [
 ];
 
 const END_CHUNK: (i32, i32) = (1, -3);
+
+/// Outer islands east of the fight pad — city / chorus / return gateway.
+pub const END_OUTER_CHUNK: (i32, i32) = (3, -3);
+
+/// True when `(x, z)` sits in the End fight pad or outer-island chunks.
+pub fn in_end_pocket(x: i32, z: i32) -> bool {
+    let cx = x.div_euclid(16);
+    let cz = z.div_euclid(16);
+    (cx, cz) == END_CHUNK || (cx, cz) == END_OUTER_CHUNK
+}
 
 /// Ruined village plaza north of the demo pad.
 ///
@@ -1178,6 +1204,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | STRONGHOLD_CHUNK
             | STRONGHOLD_LIBRARY_CHUNK
             | END_CHUNK
+            | END_OUTER_CHUNK
             | VILLAGE_CHUNK
             | NETHER_CHUNK
             | ANCIENT_CITY_CHUNK
@@ -1290,6 +1317,8 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
             | STRONGHOLD_LIBRARY_CHUNK
+            | END_CHUNK
+            | END_OUTER_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1400,6 +1429,8 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
             | STRONGHOLD_LIBRARY_CHUNK
+            | END_CHUNK
+            | END_OUTER_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1509,6 +1540,8 @@ fn stamp_ocean_monument(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, ch
             | WRECK_CHUNK
             | STRONGHOLD_CHUNK
             | STRONGHOLD_LIBRARY_CHUNK
+            | END_CHUNK
+            | END_OUTER_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1911,9 +1944,42 @@ fn stamp_end_crystals(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chun
     }
 }
 
-/// Tall purpur / end-stone tower west of the End pad. Guaranteed in [`END_CHUNK`].
+/// Outer-island void pad + return gateway. Guaranteed in [`END_OUTER_CHUNK`].
+fn stamp_end_outer_island(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != END_OUTER_CHUNK {
+        return;
+    }
+    let (cx, cz) = END_OUTER;
+    let floor = END_FLOOR;
+    let end_stone = Block::new("end_stone", 0);
+    let gateway = Block::new("end_gateway", 0);
+    // Clear the whole column so the outer pocket reads as void around the islet.
+    for lz in 0..16u8 {
+        for lx in 0..16u8 {
+            blocks.retain(|(x, _y, z, _)| !(*x == lx && *z == lz));
+        }
+    }
+    // 5×5 end-stone landing with a return gateway in the center.
+    for dz in -2i32..=2 {
+        for dx in -2i32..=2 {
+            let lx = (cx + dx - chunk_x * 16) as u8;
+            let lz = (cz + dz - chunk_z * 16) as u8;
+            blocks.push((lx, floor, lz, end_stone));
+        }
+    }
+    let gate_lx = (END_GATEWAY_OUTER.0 - chunk_x * 16) as u8;
+    let gate_lz = (END_GATEWAY_OUTER.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == gate_lx && *z == gate_lz && *y == floor + 1));
+    blocks.push((gate_lx, floor + 1, gate_lz, gateway));
+    // End rod so the outer landing has a light anchor in the void.
+    let rod_lx = (cx + 2 - chunk_x * 16) as u8;
+    let rod_lz = (cz - chunk_z * 16) as u8;
+    blocks.push((rod_lx, floor + 1, rod_lz, Block::new("end_rod", 0)));
+}
+
+/// Tall purpur / end-stone tower on the outer island. Guaranteed in [`END_OUTER_CHUNK`].
 fn stamp_end_city(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
-    if (chunk_x, chunk_z) != END_CHUNK {
+    if (chunk_x, chunk_z) != END_OUTER_CHUNK {
         return;
     }
     let (cx, cz) = END_CITY;
@@ -1922,8 +1988,8 @@ fn stamp_end_city(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z:
     let purpur = Block::new("purpur", 0);
     let pillar = Block::new("purpur_pillar", 0);
     let rod = Block::new("end_rod", 0);
-    // Stepping stones from the pad rim toward the tower base.
-    for &(wx, wz) in &[(22i32, -38), (21, -37)] {
+    // Stepping stones from the outer landing toward the tower base.
+    for &(wx, wz) in &[(54i32, -38), (53, -37)] {
         let lx = (wx - chunk_x * 16) as u8;
         let lz = (wz - chunk_z * 16) as u8;
         blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor));
@@ -1980,9 +2046,9 @@ fn stamp_end_city(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z:
     blocks.push((chest_lx, floor + 7, chest_lz, purpur));
 }
 
-/// Small end-stone islet with chorus stalks east of the End pad.
+/// Small end-stone islet with chorus stalks east of the outer landing.
 fn stamp_end_chorus(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
-    if (chunk_x, chunk_z) != END_CHUNK {
+    if (chunk_x, chunk_z) != END_OUTER_CHUNK {
         return;
     }
     let (cx, cz) = END_CHORUS;
@@ -2036,6 +2102,7 @@ fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, c
             | STRONGHOLD_CHUNK
             | STRONGHOLD_LIBRARY_CHUNK
             | END_CHUNK
+            | END_OUTER_CHUNK
             | (0, 0)
     );
     if !guaranteed {
@@ -3385,11 +3452,50 @@ mod tests {
     }
 
     #[test]
-    fn an_end_city_tower_stands_west_of_the_pad() {
-        let pocket = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+    fn an_outer_island_holds_a_return_gateway_east_of_the_pad() {
+        let outer = generate_chunk(END_OUTER_CHUNK.0, END_OUTER_CHUNK.1);
+        let (cx, cz) = END_OUTER;
+        let lx = (cx - END_OUTER_CHUNK.0 * 16) as u8;
+        let lz = (cz - END_OUTER_CHUNK.1 * 16) as u8;
+        let floor = END_FLOOR;
+        assert_eq!(
+            outer.block(lx, floor, lz).id,
+            "end_stone",
+            "outer landing floor"
+        );
+        assert_eq!(
+            outer.block(lx, floor + 1, lz).id,
+            "end_gateway",
+            "return gateway on the outer pad"
+        );
+        assert_eq!((cx, cz + 1), END_OUTER_IN, "standing cell beside outer gateway");
+        assert_eq!((cx, cz), END_GATEWAY_OUTER, "outer gateway cell");
+        assert_eq!(
+            outer.block(lx + 2, floor + 1, lz).id,
+            "end_rod",
+            "rod lights the outer void pad"
+        );
+        assert_ne!(END_OUTER_CHUNK, END_CHUNK);
+        assert!(in_end_pocket(END_PAD.0, END_PAD.1));
+        assert!(in_end_pocket(END_OUTER.0, END_OUTER.1));
+        assert!(!in_end_pocket(0, 0));
+        // Pad gateway is placed after the dragon — not stamped at gen.
+        let pad = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+        let glx = (END_GATEWAY_PAD.0 - END_CHUNK.0 * 16) as u8;
+        let glz = (END_GATEWAY_PAD.1 - END_CHUNK.1 * 16) as u8;
+        assert_ne!(
+            pad.block(glx, floor + 1, glz).id,
+            "end_gateway",
+            "pad gateway waits for the dragon"
+        );
+    }
+
+    #[test]
+    fn an_end_city_tower_stands_on_the_outer_island() {
+        let pocket = generate_chunk(END_OUTER_CHUNK.0, END_OUTER_CHUNK.1);
         let (cx, cz) = END_CITY;
-        let lx = (cx - END_CHUNK.0 * 16) as u8;
-        let lz = (cz - END_CHUNK.1 * 16) as u8;
+        let lx = (cx - END_OUTER_CHUNK.0 * 16) as u8;
+        let lz = (cz - END_OUTER_CHUNK.1 * 16) as u8;
         let floor = END_CITY_FLOOR;
         assert_eq!(
             pocket.block(lx, floor, lz).id,
@@ -3403,8 +3509,8 @@ mod tests {
             ),
             "purpur shell"
         );
-        let chest_lx = (END_CITY_CHEST.0 - END_CHUNK.0 * 16) as u8;
-        let chest_lz = (END_CITY_CHEST.1 - END_CHUNK.1 * 16) as u8;
+        let chest_lx = (END_CITY_CHEST.0 - END_OUTER_CHUNK.0 * 16) as u8;
+        let chest_lz = (END_CITY_CHEST.1 - END_OUTER_CHUNK.1 * 16) as u8;
         assert_eq!(
             pocket.block(chest_lx, floor + 8, chest_lz).id,
             "chest",
@@ -3417,14 +3523,16 @@ mod tests {
         );
         assert_eq!(END_CITY_FLOOR, END_FLOOR);
         assert_ne!((cx, cz), END_PAD);
+        assert_ne!((cx, cz), END_OUTER);
+        assert!(in_end_pocket(cx, cz));
     }
 
     #[test]
-    fn a_chorus_grove_stands_east_of_the_pad() {
-        let pocket = generate_chunk(END_CHUNK.0, END_CHUNK.1);
+    fn a_chorus_grove_stands_on_the_outer_island() {
+        let pocket = generate_chunk(END_OUTER_CHUNK.0, END_OUTER_CHUNK.1);
         let (cx, cz) = END_CHORUS;
-        let lx = (cx - END_CHUNK.0 * 16) as u8;
-        let lz = (cz - END_CHUNK.1 * 16) as u8;
+        let lx = (cx - END_OUTER_CHUNK.0 * 16) as u8;
+        let lz = (cz - END_OUTER_CHUNK.1 * 16) as u8;
         let floor = END_CHORUS_FLOOR;
         assert_eq!(
             pocket.block(lx, floor, lz).id,
@@ -3449,6 +3557,8 @@ mod tests {
         assert_eq!(END_CHORUS_FLOOR, END_FLOOR);
         assert_ne!((cx, cz), END_PAD);
         assert_ne!((cx, cz), END_CITY);
+        assert_ne!((cx, cz), END_OUTER);
+        assert!(in_end_pocket(cx, cz));
     }
 
     #[test]

@@ -5614,7 +5614,7 @@ pub fn for_each_collider(block: Block, mut visit: impl FnMut([f32; 3], [f32; 3])
         return;
     }
     // Portal planes are walk-through — travel detects the cell instead.
-    if block.id == "nether_portal" || block.id == "end_portal" {
+    if block.id == "nether_portal" || block.id == "end_portal" || block.id == "end_gateway" {
         return;
     }
     shape_of(block).for_each_solid(visit);
@@ -7881,6 +7881,7 @@ mod tests {
         );
         assert_eq!(pack.hardness_of(Block::new("dragon_egg", 0)), Some(3.0));
         assert_eq!(pack.hardness_of(Block::new("end_crystal", 0)), Some(0.3));
+        assert_eq!(pack.hardness_of(Block::new("end_gateway", 0)), Some(0.1));
         assert_eq!(pack.hardness_of(Block::new("chest", 0)), Some(2.5));
         assert_eq!(pack.hardness_of(Block::new("copper_chest", 0)), Some(3.0));
         assert!(pack.shape_of(Block::new("copper_chest", 0)).is_full_cube());

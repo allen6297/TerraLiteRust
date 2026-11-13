@@ -139,7 +139,11 @@ fn blocked(world: &Cluster, at: [f32; 3]) -> bool {
         return true;
     }
     let block = world.block_at(x, y, z);
-    block.id != "air" && block.id != "nether_portal" && !block.id.is_empty()
+    block.id != "air"
+        && block.id != "nether_portal"
+        && block.id != "end_portal"
+        && block.id != "end_gateway"
+        && !block.id.is_empty()
 }
 
 fn push_box(

@@ -145,6 +145,7 @@ fn blocked(world: &Cluster, at: [f32; 3]) -> bool {
     block.id != "air"
         && block.id != "nether_portal"
         && block.id != "end_portal"
+        && block.id != "end_gateway"
         && !block.id.is_empty()
 }
 

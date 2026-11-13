@@ -238,6 +238,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "crying_obsidian" => [0.28, 0.08, 0.42],
         "nether_portal" => [0.55, 0.18, 0.85],
         "end_portal" => [0.05, 0.02, 0.12],
+        "end_gateway" => [0.12, 0.04, 0.28],
         "flint_and_steel" => [0.62, 0.62, 0.68],
         "fire_charge" => [0.92, 0.42, 0.18],
         "blaze_rod" => [0.95, 0.62, 0.12],

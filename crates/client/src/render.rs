@@ -1850,9 +1850,11 @@ pub struct State {
     /// Seconds of upward float left after a shulker bullet.
     levitation_left: f32,
     found_end: bool,
-    /// Once: walked up to the End city remnant tower by the pad.
+    /// Once: stepped through the pad gateway onto the outer islands.
+    found_outer: bool,
+    /// Once: walked up to the End city remnant tower on the outer island.
     found_end_city: bool,
-    /// Once: walked up to the End chorus grove east of the pad.
+    /// Once: walked up to the End chorus grove on the outer island.
     found_chorus: bool,
     /// Once: found ancient debris in the nether pocket floor.
     found_debris: bool,
@@ -3130,6 +3132,7 @@ impl State {
             shulker_due: false,
             levitation_left: 0.0,
             found_end: false,
+            found_outer: false,
             found_end_city: false,
             found_chorus: false,
             found_debris: false,
@@ -5781,6 +5784,11 @@ impl State {
             floor + 1,
             rebuild_world::END_RETURN.1,
         ];
+        let gateway = [
+            rebuild_world::END_GATEWAY_PAD.0,
+            floor + 1,
+            rebuild_world::END_GATEWAY_PAD.1,
+        ];
         apply_changes(
             &mut self.world,
             &[
@@ -5796,16 +5804,30 @@ impl State {
                     z: portal[2],
                     block: Block::new("end_portal", 0),
                 },
+                CellChange {
+                    x: gateway[0],
+                    y: gateway[1],
+                    z: gateway[2],
+                    block: Block::new("end_gateway", 0),
+                },
             ],
         );
         self.chunk_bake.touch(egg[0], egg[2]);
         self.chunk_bake.touch(portal[0], portal[2]);
+        self.chunk_bake.touch(gateway[0], gateway[2]);
         let source = [egg[0] as f32 + 0.5, egg[1] as f32 + 0.4, egg[2] as f32 + 0.5];
         self.play_world(crate::audio::Sound::Place, source);
         self.drops.puff(source, [0.35, 0.12, 0.45]);
+        let gate_src = [
+            gateway[0] as f32 + 0.5,
+            gateway[1] as f32 + 0.6,
+            gateway[2] as f32 + 0.5,
+        ];
+        self.drops.puff(gate_src, [0.45, 0.18, 0.75]);
         self.rebuild_drops();
         self.gui.push_chat("dragon egg");
         self.gui.push_chat("return portal");
+        self.gui.push_chat("end gateway");
     }
 
     fn rebuild_beacon_beam(&mut self) {
@@ -6712,11 +6734,11 @@ impl State {
         if self.portal_shot_path.is_some() || self.cook_shot_path.is_some() {
             return;
         }
-        // Void below the End platform dumps you back to the overworld stairs.
-        let (ex, ez) = rebuild_world::END_PAD;
+        // Void below the End fight pad or outer island dumps you back to stairs.
         let end_floor = i32::from(rebuild_world::END_FLOOR);
-        if (self.camera.eye.x.floor() as i32 - ex).abs() <= 8
-            && (self.camera.eye.z.floor() as i32 - ez).abs() <= 8
+        let feet_x = self.camera.eye.x.floor() as i32;
+        let feet_z = self.camera.eye.z.floor() as i32;
+        if rebuild_world::in_end_pocket(feet_x, feet_z)
             && self.camera.eye.y < end_floor as f32 - 2.5
         {
             let eye = crate::camera::Camera::drop_by_the_stairs().eye;
@@ -6730,15 +6752,16 @@ impl State {
             return;
         }
         let feet = [
-            self.camera.eye.x.floor() as i32,
+            feet_x,
             (self.camera.eye.y - body::EYE_HEIGHT + 0.1).floor() as i32,
-            self.camera.eye.z.floor() as i32,
+            feet_z,
         ];
         let id = self.world.block_at(feet[0], feet[1], feet[2]).id;
         let id_up = self.world.block_at(feet[0], feet[1] + 1, feet[2]).id;
         let in_nether = id == "nether_portal" || id_up == "nether_portal";
         let in_end = id == "end_portal" || id_up == "end_portal";
-        if !in_nether && !in_end {
+        let in_gateway = id == "end_gateway" || id_up == "end_gateway";
+        if !in_nether && !in_end && !in_gateway {
             return;
         }
         let (ox, oz) = rebuild_world::RUINED_PORTAL_IN;
@@ -6746,13 +6769,20 @@ impl State {
         let (sx, sz) = rebuild_world::STRONGHOLD_PORTAL_IN;
         let (ex_in, ez_in) = rebuild_world::END_PORTAL_IN;
         let (erx, erz) = rebuild_world::END_RETURN;
+        let (gpx, gpz) = rebuild_world::END_GATEWAY_PAD;
+        let (gox, goz) = rebuild_world::END_GATEWAY_OUTER;
+        let (oux, ouz) = rebuild_world::END_OUTER_IN;
         let to_nether = in_nether && (feet[0] - ox).abs() <= 2 && (feet[2] - oz).abs() <= 2;
         let to_over_nether = in_nether && (feet[0] - nx).abs() <= 2 && (feet[2] - nz).abs() <= 2;
         let to_end = in_end && (feet[0] - sx).abs() <= 2 && (feet[2] - sz).abs() <= 2;
         let to_over_end = in_end
             && ((feet[0] - erx).abs() <= 1 && (feet[2] - erz).abs() <= 1
                 || (feet[0] - ex_in).abs() <= 1 && (feet[2] - ez_in).abs() <= 1);
-        if !to_nether && !to_over_nether && !to_end && !to_over_end {
+        let to_outer = in_gateway && (feet[0] - gpx).abs() <= 1 && (feet[2] - gpz).abs() <= 1;
+        let to_pad_gateway =
+            in_gateway && (feet[0] - gox).abs() <= 1 && (feet[2] - goz).abs() <= 1;
+        if !to_nether && !to_over_nether && !to_end && !to_over_end && !to_outer && !to_pad_gateway
+        {
             return;
         }
         let (tx, tz, tip, stand_south) = if to_nether {
@@ -6765,6 +6795,29 @@ impl State {
         } else if to_end {
             let _ = self.world.replace_chunk(rebuild_world::generate_chunk(1, -3));
             (ex_in, ez_in, "the end", false)
+        } else if to_outer {
+            let (ocx, ocz) = rebuild_world::END_OUTER_CHUNK;
+            let _ = self
+                .world
+                .replace_chunk(rebuild_world::generate_chunk(ocx, ocz));
+            (oux, ouz, "outer islands", false)
+        } else if to_pad_gateway {
+            let _ = self.world.replace_chunk(rebuild_world::generate_chunk(1, -3));
+            // Keep the pad exit gateway if the fight chunk regenerated empty.
+            let floor = i32::from(rebuild_world::END_FLOOR);
+            if self.world.block_at(gpx, floor + 1, gpz).id != "end_gateway" {
+                apply_changes(
+                    &mut self.world,
+                    &[CellChange {
+                        x: gpx,
+                        y: floor + 1,
+                        z: gpz,
+                        block: Block::new("end_gateway", 0),
+                    }],
+                );
+                self.chunk_bake.touch(gpx, gpz);
+            }
+            (gpx, gpz - 1, "the end", false)
         } else {
             let _ = self
                 .world
@@ -6784,8 +6837,12 @@ impl State {
             if under != "air"
                 && under != "nether_portal"
                 && under != "end_portal"
+                && under != "end_gateway"
                 && under != "lava"
-                && (here == "air" || here == "nether_portal" || here == "end_portal")
+                && (here == "air"
+                    || here == "nether_portal"
+                    || here == "end_portal"
+                    || here == "end_gateway")
             {
                 ty = y + 1;
                 break;
@@ -8048,6 +8105,10 @@ impl State {
             } else {
                 self.announce_structure("end", &["the end"]);
             }
+        }
+        if !self.found_outer && near(rebuild_world::END_OUTER.0, rebuild_world::END_OUTER.1) {
+            self.found_outer = true;
+            self.announce_structure("outer_islands", &["outer islands"]);
         }
         if !self.found_end_city
             && near(rebuild_world::END_CITY.0, rebuild_world::END_CITY.1)
@@ -11285,9 +11346,10 @@ impl State {
         self.menu.close_menu();
         self.apply_chosen_size();
         rebuild_world::seed_terrain_ring(&mut self.world);
+        let (ocx, ocz) = rebuild_world::END_OUTER_CHUNK;
         let _ = self
             .world
-            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+            .replace_chunk(rebuild_world::generate_chunk(ocx, ocz));
         self.clock.set_time_of_day(0.18);
         let light = self.sun_light();
         self.wanted_sun = light.direction;
@@ -11308,6 +11370,7 @@ impl State {
         self.rebuild_shulker();
         self.rebuild_drops();
         self.found_end = true;
+        self.found_outer = true;
         self.found_end_city = true;
         self.gui.age_chat(60.0);
         self.gui.push_chat("an end city");
@@ -11954,9 +12017,10 @@ impl State {
         self.menu.close_menu();
         self.apply_chosen_size();
         rebuild_world::seed_terrain_ring(&mut self.world);
+        let (ocx, ocz) = rebuild_world::END_OUTER_CHUNK;
         let _ = self
             .world
-            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+            .replace_chunk(rebuild_world::generate_chunk(ocx, ocz));
         self.clock.set_time_of_day(0.18);
         let light = self.sun_light();
         self.wanted_sun = light.direction;
@@ -11965,6 +12029,7 @@ impl State {
         let (cx, cz) = rebuild_world::END_CHORUS;
         let floor = i32::from(rebuild_world::END_CHORUS_FLOOR);
         self.found_end = true;
+        self.found_outer = true;
         self.found_end_city = true;
         self.found_chorus = true;
         // Keep the void quiet for the still — no pad dragon / city shulker.
@@ -12102,7 +12167,7 @@ impl State {
         let _ = self.window.focus_window();
     }
 
-    /// End city remnant tower by the End pad, then quit with a PNG.
+    /// End city remnant tower on the outer island, then quit with a PNG.
     pub fn arm_end_city_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
         self.cook_shot_frames = 0;
@@ -12110,9 +12175,10 @@ impl State {
         self.menu.close_menu();
         self.apply_chosen_size();
         rebuild_world::seed_terrain_ring(&mut self.world);
+        let (ocx, ocz) = rebuild_world::END_OUTER_CHUNK;
         let _ = self
             .world
-            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+            .replace_chunk(rebuild_world::generate_chunk(ocx, ocz));
         self.clock.set_time_of_day(0.18);
         let light = self.sun_light();
         self.wanted_sun = light.direction;
@@ -12121,13 +12187,14 @@ impl State {
         let (cx, cz) = rebuild_world::END_CITY;
         let floor = i32::from(rebuild_world::END_CITY_FLOOR);
         self.found_end = true;
+        self.found_outer = true;
         self.found_end_city = true;
         self.gui.age_chat(60.0);
-        self.gui.push_chat("the end");
+        self.gui.push_chat("outer islands");
         self.gui.push_chat("an end city");
 
-        // Stand on the pad rim looking at the full purpur tower silhouette.
-        let (px, pz) = rebuild_world::END_PAD;
+        // Stand on the outer landing looking at the full purpur tower silhouette.
+        let (px, pz) = rebuild_world::END_OUTER;
         let focus = glam::Vec3::new(cx as f32 + 0.5, floor as f32 + 5.2, cz as f32 + 0.5);
         let eye = glam::Vec3::new(
             px as f32 + 2.2,
@@ -12286,6 +12353,81 @@ impl State {
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.give_stack("bow");
         let _ = self.hotbar.give_stack("arrow");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        let _ = self.window.focus_window();
+    }
+
+    /// Outer-island gateway landing with city + chorus, then quit with a PNG.
+    pub fn arm_end_gateway_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        // Fight pad keeps the exit gateway the dragon opens; outer holds city / chorus.
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(1, -3));
+        let (ocx, ocz) = rebuild_world::END_OUTER_CHUNK;
+        let _ = self
+            .world
+            .replace_chunk(rebuild_world::generate_chunk(ocx, ocz));
+        self.clock.set_time_of_day(0.18);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let (ex, ez) = rebuild_world::END_PAD;
+        let floor = i32::from(rebuild_world::END_FLOOR);
+        // Quiet the fight — dragon spent, pad exit gateway open.
+        self.dragon.place_at([0.0, -24.0, 0.0]);
+        let _ = self.dragon.hurt(100);
+        self.rebuild_dragon();
+        self.drop_dragon_egg();
+        let _ = self.shulker.hurt(100);
+        self.rebuild_shulker();
+        self.found_end = true;
+        self.found_outer = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("end gateway");
+        self.gui.push_chat("outer islands");
+        self.gui.push_chat("an end city");
+
+        let (ox, oz) = rebuild_world::END_OUTER;
+        let (cx, cz) = rebuild_world::END_CITY;
+        // From the outer landing looking at the purpur tower (gateway on the pad underfoot).
+        let focus = glam::Vec3::new(cx as f32 + 0.5, floor as f32 + 5.2, cz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            ox as f32 + 2.2,
+            floor as f32 + 2.0,
+            oz as f32 + 2.4,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.terrain_dirty = false;
+        self.chunk_bake =
+            mesh::ChunkBake::new(&self.world, self.wanted_sun, self.wanted_focus);
+        self.shadow_lookups = self.wanted_lookups.clone();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.chunk_bake.touch(ex + dx * 8, ez + dz * 8);
+                self.chunk_bake.touch(ox + dx * 8, oz + dz * 8);
+            }
+        }
+        self.dispatch_meshes();
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("ender_pearl");
         self.hotbar_dirty = true;
         self.set_capture(false);
         let _ = self.window.focus_window();

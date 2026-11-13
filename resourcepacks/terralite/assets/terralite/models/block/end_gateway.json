@@ -1,0 +1,10 @@
+{
+  "elements": [
+    {"from": [4, 0, 4], "to": [12, 16, 12]}
+  ],
+  "texture": "assets/terralite/textures/end_portal.png",
+  "light": {
+    "color": [0.55, 0.2, 0.85],
+    "level": 12
+  }
+}
