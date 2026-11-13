@@ -95,7 +95,8 @@ pub use net::{
 };
 pub use pack::{
     BlockEntry, HeatStation, ItemDisplay, Light, Pack, ScriptEntityDef, ShapeEntry, asset_png,
-    asset_text, block_definitions_file, break_loot_of, data_pack_root, for_each_collider,
+    asset_text, block_definitions_file, break_loot_at, break_loot_of, data_pack_root,
+    for_each_collider,
     harvest_of, held_light_of, light_of, load_data_pack, resource_pack_root, shape_of,
     shelf_facing, shelf_filled, shelf_meta,
 };

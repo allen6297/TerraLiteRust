@@ -4662,19 +4662,75 @@ pub fn harvest_of(id: &str) -> (&str, u8) {
 
 /// Every item a break should spawn. Script `loot.block` wins, then a datapack
 /// `loot/blocks/<id>.json` `drops` list, else [`harvest_of`].
+/// Plain string arrays still drop every id once. Object entries (or a top-level
+/// `rolls`) opt into weighted picks seeded by the break cell.
 pub fn break_loot_of(id: &str) -> Vec<(String, u8)> {
+    break_loot_at(id, 0, 0, 0)
+}
+
+/// Like [`break_loot_of`], but weighted datapack picks use the break cell seed.
+pub fn break_loot_at(id: &str, x: i32, y: i32, z: i32) -> Vec<(String, u8)> {
     let pack = Pack::builtin();
     if let Some(drops) = pack.script_block_loot(id) {
         return drops.into_iter().map(|drop| (drop, 1)).collect();
     }
     if let Some(drops) = load_block_loot_file(id) {
-        return drops.into_iter().map(|drop| (drop, 1)).collect();
+        return resolve_block_drops(drops, x, y, z);
     }
     let (drop, count) = harvest_of(id);
     vec![(drop.to_string(), count)]
 }
 
-fn load_block_loot_file(id: &str) -> Option<Vec<String>> {
+enum BlockDrops {
+    /// Legacy: every listed id drops once.
+    All(Vec<String>),
+    /// One weighted pick per roll.
+    Weighted {
+        entries: Vec<(String, u32)>,
+        rolls: u32,
+    },
+}
+
+fn resolve_block_drops(drops: BlockDrops, x: i32, y: i32, z: i32) -> Vec<(String, u8)> {
+    match drops {
+        BlockDrops::All(ids) => ids.into_iter().map(|id| (id, 1)).collect(),
+        BlockDrops::Weighted { entries, rolls } => {
+            let seed0 = x
+                .unsigned_abs()
+                .wrapping_add(y.unsigned_abs().wrapping_mul(5))
+                .wrapping_add(z.unsigned_abs().wrapping_mul(17));
+            let rolls = rolls.max(1).min(16);
+            let mut out = Vec::with_capacity(rolls as usize);
+            for i in 0..rolls {
+                let seed = seed0.wrapping_add(i.wrapping_mul(31));
+                out.push((pick_block_weighted(&entries, seed).to_string(), 1));
+            }
+            out
+        }
+    }
+}
+
+fn pick_block_weighted(entries: &[(String, u32)], seed: u32) -> &str {
+    let total: u64 = entries
+        .iter()
+        .map(|(_, weight)| u64::from((*weight).max(1)))
+        .sum::<u64>()
+        .max(1);
+    let mut slot = u64::from(seed) % total;
+    for (id, weight) in entries {
+        let weight = u64::from((*weight).max(1));
+        if slot < weight {
+            return id.as_str();
+        }
+        slot -= weight;
+    }
+    entries
+        .last()
+        .map(|(id, _)| id.as_str())
+        .unwrap_or("air")
+}
+
+fn load_block_loot_file(id: &str) -> Option<BlockDrops> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return None;
     }
@@ -4683,20 +4739,71 @@ fn load_block_loot_file(id: &str) -> Option<Vec<String>> {
     ))?;
     let text = fs::read_to_string(path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let list = root.get("drops")?.as_array()?;
+    let obj = root.as_object()?;
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "drops" | "rolls") {
+            return None;
+        }
+    }
+    let list = obj.get("drops")?.as_array()?;
     if list.is_empty() || list.len() > 16 {
         return None;
     }
+    let rolls = match obj.get("rolls") {
+        None => None,
+        Some(value) => {
+            let n = value.as_u64()?;
+            if n == 0 || n > 16 {
+                return None;
+            }
+            Some(n as u32)
+        }
+    };
     let pack = Pack::builtin();
-    let mut drops = Vec::with_capacity(list.len());
+    let mut plain = Vec::with_capacity(list.len());
+    let mut weighted = Vec::with_capacity(list.len());
+    let mut any_object = false;
     for entry in list {
-        let id = entry.as_str()?;
-        if !pack.contains_item(id) && pack.tool_icon(id).is_none() {
+        if let Some(drop) = entry.as_str() {
+            if !pack.contains_item(drop) && pack.tool_icon(drop).is_none() {
+                return None;
+            }
+            plain.push(drop.to_string());
+            weighted.push((drop.to_string(), 1));
+            continue;
+        }
+        let obj = entry.as_object()?;
+        for key in obj.keys() {
+            if !matches!(key.as_str(), "id" | "weight") {
+                return None;
+            }
+        }
+        let drop = obj.get("id")?.as_str()?;
+        if !pack.contains_item(drop) && pack.tool_icon(drop).is_none() {
             return None;
         }
-        drops.push(id.to_string());
+        let weight = match obj.get("weight") {
+            None => 1u32,
+            Some(value) => {
+                let n = value.as_u64()?;
+                if n == 0 || n > 256 {
+                    return None;
+                }
+                n as u32
+            }
+        };
+        any_object = true;
+        plain.push(drop.to_string());
+        weighted.push((drop.to_string(), weight));
     }
-    Some(drops)
+    if any_object || rolls.is_some() {
+        Some(BlockDrops::Weighted {
+            entries: weighted,
+            rolls: rolls.unwrap_or(1),
+        })
+    } else {
+        Some(BlockDrops::All(plain))
+    }
 }
 
 /// A bitten cake, one sixteenth pair narrower per slice already eaten.
@@ -7953,6 +8060,25 @@ mod tests {
         assert_eq!(
             break_loot_of("dirt"),
             vec![("torch".to_string(), 1), ("apple".to_string(), 1)]
+        );
+        // Weighted picks: seed 0..8 → gravel, seed 9 → cobblestone.
+        let weighted = [
+            ("gravel".to_string(), 9u32),
+            ("cobblestone".to_string(), 1u32),
+        ];
+        assert_eq!(pick_block_weighted(&weighted, 0), "gravel");
+        assert_eq!(pick_block_weighted(&weighted, 9), "cobblestone");
+        assert_eq!(
+            resolve_block_drops(
+                BlockDrops::Weighted {
+                    entries: weighted.to_vec(),
+                    rolls: 1,
+                },
+                9,
+                0,
+                0
+            ),
+            vec![("cobblestone".to_string(), 1)]
         );
         assert_eq!(pack.tool_icon("melon_slice"), Some("melon"));
         assert_eq!(pack.food_of("stone"), None);

@@ -1,4 +1,14 @@
 {
-  "drops": ["raw", "apple", "wool", "torch"],
-  "omen": ["healing_potion", "iron_pickaxe", "compass", "map"]
+  "drops": [
+    { "id": "raw", "weight": 3 },
+    { "id": "apple", "weight": 2 },
+    { "id": "wool", "weight": 1 },
+    { "id": "torch", "weight": 2 }
+  ],
+  "omen": [
+    { "id": "healing_potion", "weight": 2 },
+    { "id": "iron_pickaxe", "weight": 1 },
+    { "id": "compass", "weight": 1 },
+    { "id": "map", "weight": 1 }
+  ]
 }

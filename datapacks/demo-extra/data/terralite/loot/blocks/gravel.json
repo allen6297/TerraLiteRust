@@ -1,3 +1,6 @@
 {
-  "drops": ["cobblestone", "gravel"]
+  "drops": [
+    { "id": "gravel", "weight": 9 },
+    { "id": "cobblestone", "weight": 1 }
+  ]
 }

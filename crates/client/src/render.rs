@@ -15170,7 +15170,8 @@ impl State {
             }
             self.rebuild_drops();
             let remains = shape_of(cell.block).is_full_cube();
-            let mut loot = rebuild_world::break_loot_of(before.id);
+            let mut loot =
+                rebuild_world::break_loot_at(before.id, cell.x, cell.y, cell.z);
             // Fortune: chance at a second copy of the first ore drop.
             if crate::xp::Xp::is_ore(before.id)
                 && self.hotbar.is_lucky(self.hotbar.selected())
@@ -15688,9 +15689,9 @@ impl State {
                 .drops
                 .iter()
                 .enumerate()
-                .map(|(index, id)| rebuild_world::CarriedSlot {
+                .map(|(index, entry)| rebuild_world::CarriedSlot {
                     slot: index as u8,
-                    id: id.clone(),
+                    id: entry.id.clone(),
                     count: 1,
                 })
                 .collect(),
@@ -40131,8 +40132,8 @@ mod tests {
         let paid = super::trial_loot(0, 0, false).unwrap();
         let rich = super::trial_loot(0, 0, true).unwrap();
         let table = crate::loot::load_copper_chest().unwrap();
-        assert_eq!(paid, table.drops[0]);
-        assert_eq!(rich, table.omen[0]);
+        assert_eq!(paid, table.drops[0].id);
+        assert_eq!(rich, table.omen[0].id);
         assert_eq!(
             super::trial_loot(1, 2, false).as_deref(),
             super::trial_loot(1, 2, false).as_deref()
@@ -40143,8 +40144,8 @@ mod tests {
         );
         let ordinary = super::trial_loot(3, 5, false).unwrap();
         let ominous = super::trial_loot(3, 5, true).unwrap();
-        assert!(table.drops.iter().any(|id| id == &ordinary));
-        assert!(table.omen.iter().any(|id| id == &ominous));
+        assert!(table.drops.iter().any(|entry| entry.id == ordinary));
+        assert!(table.omen.iter().any(|entry| entry.id == ominous));
     }
 
     #[test]
@@ -40315,12 +40316,12 @@ mod tests {
         assert!(super::fresh_end_city(true, x, z, false).is_none());
         assert!(super::fresh_end_city(false, 0, 0, false).is_none());
         assert!(
-            table.drops.iter().any(|id| id == "elytra")
-                || table.omen.iter().any(|id| id == "elytra"),
+            table.drops.iter().any(|entry| entry.id == "elytra")
+                || table.omen.iter().any(|entry| entry.id == "elytra"),
             "elytra in the table"
         );
         assert!(
-            table.drops.iter().any(|id| id == "shulker_box"),
+            table.drops.iter().any(|entry| entry.id == "shulker_box"),
             "shulker stub in the table"
         );
     }
