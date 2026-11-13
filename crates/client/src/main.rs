@@ -47,6 +47,7 @@ mod map;
 mod mesh;
 mod minecart;
 mod mobs;
+mod lighting_freewalk;
 mod lighting_presence;
 mod net;
 mod outline;
@@ -216,6 +217,7 @@ struct Args {
     shot_bounce_interior: Option<std::path::PathBuf>,
     /// Research L1–L6 lighting presence stills into a directory, then quit.
     shot_lighting_presence: Option<std::path::PathBuf>,
+    shot_lighting_freewalk: Option<std::path::PathBuf>,
     /// Open water sky reflection, then quit.
     shot_water_reflection: Option<std::path::PathBuf>,
     /// Underwater caustic shimmer on floors/walls, then quit.
@@ -658,6 +660,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_bounce_day: args.shot_bounce_day,
         shot_bounce_interior: args.shot_bounce_interior,
         shot_lighting_presence: args.shot_lighting_presence,
+        shot_lighting_freewalk: args.shot_lighting_freewalk,
         shot_water_reflection: args.shot_water_reflection,
         shot_underwater_caustics: args.shot_underwater_caustics,
         shot_lava_heat_haze: args.shot_lava_heat_haze,
@@ -874,6 +877,7 @@ struct App {
     shot_bounce_day: Option<std::path::PathBuf>,
     shot_bounce_interior: Option<std::path::PathBuf>,
     shot_lighting_presence: Option<std::path::PathBuf>,
+    shot_lighting_freewalk: Option<std::path::PathBuf>,
     shot_water_reflection: Option<std::path::PathBuf>,
     /// Underwater caustic shimmer on floors/walls, then quit.
     shot_underwater_caustics: Option<std::path::PathBuf>,
@@ -1192,6 +1196,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_lighting_presence.take() {
                     state.arm_lighting_presence_shot(path);
+                }
+                if let Some(path) = self.shot_lighting_freewalk.take() {
+                    state.arm_lighting_freewalk_shot(path);
                 }
                 if let Some(path) = self.shot_water_reflection.take() {
                     state.arm_water_reflection_shot(path);
@@ -1834,6 +1841,7 @@ where
         shot_bounce_day: None,
         shot_bounce_interior: None,
         shot_lighting_presence: None,
+        shot_lighting_freewalk: None,
         shot_water_reflection: None,
         shot_underwater_caustics: None,
         shot_lava_heat_haze: None,
@@ -2248,6 +2256,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-lighting-presence".to_string())?;
                 parsed.shot_lighting_presence = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-lighting-freewalk" | "--shot-l2-l3-l6-freewalk" | "--shot-vg693" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-lighting-freewalk".to_string())?;
+                parsed.shot_lighting_freewalk = Some(std::path::PathBuf::from(value));
             }
             "--shot-water-reflection" | "--shot-water-sky" | "--shot-water" => {
                 let value = iter

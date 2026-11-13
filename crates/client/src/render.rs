@@ -1057,6 +1057,8 @@ pub struct State {
     lighting_presence_yaw: f32,
     lighting_presence_pitch: f32,
     lighting_presence_time: f32,
+    /// When true, `lighting_presence_dir` runs VG-693 free-walk scenes (no pad stamps).
+    lighting_freewalk: bool,
     /// One-shot open water sky reflection, then quit.
     water_shot_path: Option<std::path::PathBuf>,
     water_shot_frames: u32,
@@ -2614,6 +2616,7 @@ impl State {
             lighting_presence_yaw: 0.0,
             lighting_presence_pitch: 0.0,
             lighting_presence_time: 0.30,
+            lighting_freewalk: false,
             water_shot_path: None,
             water_shot_frames: 0,
             water_shot_eye: glam::Vec3::ZERO,
@@ -17184,10 +17187,24 @@ impl State {
 
     /// Research L1–L6 lighting mood stills into `dir` (same small-world seed pad).
     pub fn arm_lighting_presence_shot(&mut self, dir: std::path::PathBuf) {
+        self.arm_lighting_presence_common(dir, false);
+        self.setup_lighting_presence_scene(0);
+        let _ = self.window.focus_window();
+    }
+
+    /// VG-693 free-walk L2/L3/L6 stills on real terrain (no demo-pad stamps).
+    pub fn arm_lighting_freewalk_shot(&mut self, dir: std::path::PathBuf) {
+        self.arm_lighting_presence_common(dir, true);
+        self.setup_lighting_freewalk_scene(0);
+        let _ = self.window.focus_window();
+    }
+
+    fn arm_lighting_presence_common(&mut self, dir: std::path::PathBuf, freewalk: bool) {
         let _ = std::fs::create_dir_all(&dir);
         self.lighting_presence_dir = Some(dir);
         self.lighting_presence_index = 0;
         self.lighting_presence_frames = 0;
+        self.lighting_freewalk = freewalk;
         self.playing = true;
         self.menu.close_menu();
         self.gui.close();
@@ -17226,8 +17243,6 @@ impl State {
         self.hotbar.install_saved(0, &[]);
         self.hotbar_dirty = true;
         self.set_capture(false);
-        self.setup_lighting_presence_scene(0);
-        let _ = self.window.focus_window();
     }
 
     fn setup_lighting_presence_scene(&mut self, index: usize) {
@@ -17464,6 +17479,175 @@ impl State {
                 glam::Vec3::new(9.0, 1.6, 9.0),
             ),
         };
+        for _ in 0..96 {
+            self.trace
+                .advance(&self.world, [eye.x, eye.y, eye.z], light.direction);
+        }
+        self.camera = Camera::looking_at(eye, target);
+        self.camera.on_ground = true;
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.lighting_presence_eye = eye;
+        self.lighting_presence_yaw = yaw;
+        self.lighting_presence_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.lighting_presence_frames = 0;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat(scene.chat());
+    }
+
+    fn setup_lighting_freewalk_scene(&mut self, index: usize) {
+        use crate::lighting_freewalk::LightingFreewalkScene;
+        let scene = LightingFreewalkScene::ALL[index];
+        // Stands stay outside the End-pad void-fog radius (~28). Camp / (26,-26)
+        // sit inside that pocket and would fake a purple "biome fog" fail.
+        let touch = match scene {
+            LightingFreewalkScene::ForestCanopy | LightingFreewalkScene::ForestBiome => (-21, 21),
+            LightingFreewalkScene::CaveMouthExterior | LightingFreewalkScene::CaveUnderRoof => {
+                rebuild_world::SHAFT_MOUTH
+            }
+            LightingFreewalkScene::PlainsBiome => (-16, 16),
+            LightingFreewalkScene::HillsBiome => (-26, 26),
+            LightingFreewalkScene::MarshBiome => (8, 33),
+        };
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                let cx = (touch.0 + dx * 8).div_euclid(16);
+                let cz = (touch.1 + dz * 8).div_euclid(16);
+                let _ = self.world.replace_chunk(rebuild_world::generate_chunk(cx, cz));
+                self.chunk_bake.touch(touch.0 + dx * 8, touch.1 + dz * 8);
+            }
+        }
+        self.chunk_bake.queue_unmeshed(&self.world);
+
+        self.menu.set_trace(true);
+        self.menu.set_creative(true);
+        self.flying = true;
+        self.fly_kick = 0.55;
+        self.hearts = body::HEARTS;
+        self.dead = false;
+        self.hurt_flash = 0.0;
+        self.dusk_show = 0.0;
+        self.found_fireflies = true;
+        // Noon so Soft wrap + biome fog read without dusk tip noise.
+        self.lighting_presence_time = 0.50;
+        self.clock.set_time_of_day(self.lighting_presence_time);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let stand_y = |world: &Cluster, x: i32, z: i32| -> i32 {
+            for y in (0..48).rev() {
+                let id = world.block_at(x, y, z).id;
+                if id != "air" && id != "water" && id != "ladder" && id != "rail" {
+                    return y + 1;
+                }
+            }
+            4
+        };
+        // Prefer a forest column that still has leaves overhead.
+        let under_leaves = |world: &Cluster, cx: i32, cz: i32| -> Option<(i32, i32, i32)> {
+            for r in 0i32..18 {
+                for dx in -r..=r {
+                    for dz in -r..=r {
+                        if dx.abs() != r && dz.abs() != r && r > 0 {
+                            continue;
+                        }
+                        let x = cx + dx;
+                        let z = cz + dz;
+                        if rebuild_world::biome_at(x, z) != rebuild_world::Biome::Forest {
+                            continue;
+                        }
+                        let mut leaf_y = None;
+                        for y in (2..20).rev() {
+                            if world.block_at(x, y, z).id == "leaves" {
+                                leaf_y = Some(y);
+                                break;
+                            }
+                        }
+                        let Some(ly) = leaf_y else { continue };
+                        let sy = stand_y(world, x, z);
+                        if sy < ly {
+                            return Some((x, sy, z));
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let (eye, target) = match scene {
+            LightingFreewalkScene::ForestCanopy => {
+                let (x, sy, z) = under_leaves(&self.world, -21, 21).unwrap_or((-21, 5, 21));
+                let eye = glam::Vec3::new(x as f32 + 0.5, sy as f32 + body::EYE_HEIGHT, z as f32 + 0.5);
+                // Level look across shaded forest floor with canopy in upper frame.
+                let target = glam::Vec3::new(x as f32 + 3.5, sy as f32 + 1.6, z as f32 + 1.5);
+                (eye, target)
+            }
+            LightingFreewalkScene::CaveMouthExterior => {
+                // East apron looking west into the timbered mine mouth.
+                let (mx, mz) = rebuild_world::SHAFT_MOUTH;
+                let apron_x = mx + 7;
+                let sy = stand_y(&self.world, apron_x, mz);
+                let eye = glam::Vec3::new(
+                    apron_x as f32 + 0.5,
+                    sy as f32 + body::EYE_HEIGHT + 0.15,
+                    mz as f32 + 0.5,
+                );
+                let target = glam::Vec3::new(
+                    mx as f32 + 0.5,
+                    (sy as f32).max(2.0) - 0.8,
+                    mz as f32 + 0.5,
+                );
+                (eye, target)
+            }
+            LightingFreewalkScene::CaveUnderRoof => {
+                // Inside the pit, look horizontally toward the west wall (not up).
+                let (mx, mz) = rebuild_world::SHAFT_MOUTH;
+                let eye = glam::Vec3::new(
+                    mx as f32 + 0.8,
+                    1.05 + body::EYE_HEIGHT,
+                    mz as f32 + 0.5,
+                );
+                let target = glam::Vec3::new(mx as f32 - 2.5, 1.6, mz as f32 + 0.5);
+                (eye, target)
+            }
+            LightingFreewalkScene::PlainsBiome => {
+                // Outside End void fog; look over open grass (not into marsh water).
+                let (x, z) = (-16, 16);
+                let sy = stand_y(&self.world, x, z);
+                let eye = glam::Vec3::new(x as f32 + 0.5, sy as f32 + body::EYE_HEIGHT, z as f32 + 0.5);
+                let target = glam::Vec3::new(x as f32 - 4.0, sy as f32 + 1.0, z as f32 - 2.0);
+                (eye, target)
+            }
+            LightingFreewalkScene::ForestBiome => {
+                let (x, z) = (-20, 22);
+                let sy = stand_y(&self.world, x, z);
+                let eye = glam::Vec3::new(x as f32 + 0.5, sy as f32 + body::EYE_HEIGHT, z as f32 + 0.5);
+                let target = glam::Vec3::new(x as f32 + 3.0, sy as f32 + 1.4, z as f32 - 2.0);
+                (eye, target)
+            }
+            LightingFreewalkScene::HillsBiome => {
+                let (x, z) = (-26, 26);
+                let sy = stand_y(&self.world, x, z);
+                let eye = glam::Vec3::new(x as f32 + 0.5, sy as f32 + body::EYE_HEIGHT, z as f32 + 0.5);
+                let target = glam::Vec3::new(x as f32 + 3.0, sy as f32 + 1.6, z as f32 - 3.0);
+                (eye, target)
+            }
+            LightingFreewalkScene::MarshBiome => {
+                // Frog lily square — marsh dirt/water underfoot + marsh fog tint.
+                let (x, z) = (7, 32);
+                let sy = stand_y(&self.world, x, z);
+                let eye = glam::Vec3::new(x as f32 + 0.5, sy as f32 + body::EYE_HEIGHT, z as f32 + 0.5);
+                let target = glam::Vec3::new(9.0, sy as f32 + 0.8, 33.5);
+                (eye, target)
+            }
+        };
+
         for _ in 0..96 {
             self.trace
                 .advance(&self.world, [eye.x, eye.y, eye.z], light.direction);
@@ -30685,6 +30869,7 @@ impl State {
     }
 
     fn poll_lighting_presence_shot(&mut self) {
+        use crate::lighting_freewalk::LightingFreewalkScene;
         use crate::lighting_presence::LightingPresenceScene;
         let Some(dir) = self.lighting_presence_dir.clone() else {
             return;
@@ -30693,40 +30878,53 @@ impl State {
         self.lighting_presence_frames = self.lighting_presence_frames.saturating_add(1);
         // Soft remesh under landmark + mod density can stay non-idle; after a
         // settle floor, still write the Soft mood still (VG-690). Per-scene
-        // frame count resets in setup_lighting_presence_scene after each write.
+        // frame count resets in setup_* after each write.
         let scene_frames = self.lighting_presence_frames;
         let settled = scene_frames >= 240
             && (self.chunk_bake.is_idle() || scene_frames >= 900);
+        let filename = if self.lighting_freewalk {
+            LightingFreewalkScene::ALL[self.lighting_presence_index].filename()
+        } else {
+            LightingPresenceScene::ALL[self.lighting_presence_index].filename()
+        };
+        let scene_count = if self.lighting_freewalk {
+            LightingFreewalkScene::ALL.len()
+        } else {
+            LightingPresenceScene::ALL.len()
+        };
         if !settled {
             if scene_frames > 2400 {
-                eprintln!(
-                    "lighting presence timed out on {}",
-                    LightingPresenceScene::ALL[self.lighting_presence_index].filename()
-                );
+                eprintln!("lighting presence timed out on {filename}");
                 self.lighting_presence_dir = None;
+                self.lighting_freewalk = false;
                 self.quit = true;
             }
             return;
         }
-        let scene = LightingPresenceScene::ALL[self.lighting_presence_index];
-        let path = dir.join(scene.filename());
+        let path = dir.join(filename);
         let _ = self.window.focus_window();
         match capture_window_png(&self.window, &path) {
             Ok(()) => {
                 eprintln!("lighting presence wrote {}", path.display());
                 let next = self.lighting_presence_index + 1;
-                if next >= LightingPresenceScene::ALL.len() {
+                if next >= scene_count {
                     self.lighting_presence_dir = None;
+                    self.lighting_freewalk = false;
                     self.quit = true;
                 } else {
                     self.lighting_presence_index = next;
-                    self.setup_lighting_presence_scene(next);
+                    if self.lighting_freewalk {
+                        self.setup_lighting_freewalk_scene(next);
+                    } else {
+                        self.setup_lighting_presence_scene(next);
+                    }
                 }
             }
             Err(err) => {
-                eprintln!("lighting presence failed ({}): {err}", scene.filename());
+                eprintln!("lighting presence failed ({filename}): {err}");
                 if self.lighting_presence_frames > 320 {
                     self.lighting_presence_dir = None;
+                    self.lighting_freewalk = false;
                     self.quit = true;
                 }
             }
@@ -38656,6 +38854,9 @@ fn capture_window_rgba_impl(window: &Window) -> Result<CapturedRgba, String> {
         fn ReleaseDC(hwnd: *mut core::ffi::c_void, hdc: *mut core::ffi::c_void) -> i32;
         fn SetForegroundWindow(hwnd: *mut core::ffi::c_void) -> i32;
         fn ShowWindow(hwnd: *mut core::ffi::c_void, cmd: i32) -> i32;
+        // PW_RENDERFULLCONTENT (2) can still pull a wgpu window when the
+        // workstation is locked and screen BitBlt only sees LogonUI.
+        fn PrintWindow(hwnd: *mut core::ffi::c_void, hdc: *mut core::ffi::c_void, flags: u32) -> i32;
     }
     #[link(name = "gdi32")]
     unsafe extern "system" {
@@ -38763,13 +38964,22 @@ fn capture_window_rgba_impl(window: &Window) -> Result<CapturedRgba, String> {
     }
     unsafe { SelectObject(mem, bmp) };
     const SRCCOPY: u32 = 0x00CC_0020;
-    if unsafe { BitBlt(mem, 0, 0, width, height, screen, origin[0], origin[1], SRCCOPY) } == 0 {
+    const PW_RENDERFULLCONTENT: u32 = 0x0000_0002;
+    // Prefer PrintWindow so Soft stills work when LogonUI covers the screen.
+    let ok = unsafe {
+        if PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT) != 0 {
+            true
+        } else {
+            BitBlt(mem, 0, 0, width, height, screen, origin[0], origin[1], SRCCOPY) != 0
+        }
+    };
+    if !ok {
         unsafe {
             DeleteObject(bmp);
             DeleteDC(mem);
             ReleaseDC(ptr::null_mut(), screen);
         }
-        return Err("BitBlt failed".into());
+        return Err("PrintWindow/BitBlt failed".into());
     }
     let mut info = BITMAPINFO {
         header: BITMAPINFOHEADER {
