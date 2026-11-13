@@ -34,10 +34,11 @@
 //! chunks that share its face, not the square. A sun step rebakes the full
 //! detail ring, because a coarse mesh does not store the sun.
 //! `mesh_chunk` has no neighbors outside the chunk, so outer faces stay visible.
-//! The frame thread does not bake. It copies the chunk, its neighbors, and the
-//! light field, and a worker runs the remesh, including bounce rays, on that
-//! copy. An edit made while the worker runs bumps the epoch so the stale mesh
-//! is dropped.
+//! The frame thread does not bake. It copies the chunk and its neighbors, and a
+//! worker solves local block light then remeshes — including bounce rays — on
+//! that snapshot. A full-world light solve never runs on the frame thread, so
+//! landmark and redstone remesh stay interactive on mega radii. An edit made
+//! while the worker runs bumps the epoch so the stale mesh is dropped.
 
 use std::collections::{HashMap, HashSet};
 
@@ -299,9 +300,7 @@ pub struct ChunkBake {
     sun: [f32; 3],
     focus: [i32; 2],
     previous: Option<[i32; 2]>,
-    light: LightField,
-    light_dirty: bool,
-    /// Held torch / lantern / glow brick — same field as placed block light.
+    /// Held torch / lantern / glow brick — solved on the worker with the chunk.
     held: Option<Emitter>,
     baked: HashSet<(i32, i32)>,
     pending: Vec<(i32, i32)>,
@@ -315,13 +314,11 @@ pub struct ChunkBake {
 }
 
 impl ChunkBake {
-    pub fn new(cluster: &Cluster, sun: [f32; 3], focus: [i32; 2]) -> Self {
+    pub fn new(_cluster: &Cluster, sun: [f32; 3], focus: [i32; 2]) -> Self {
         Self {
             sun,
             focus,
             previous: None,
-            light: LightField::solve(cluster),
-            light_dirty: false,
             held: None,
             baked: HashSet::new(),
             pending: Vec::new(),
@@ -330,13 +327,6 @@ impl ChunkBake {
             inflight: HashSet::new(),
             epochs: HashMap::new(),
             ready: Vec::new(),
-        }
-    }
-
-    fn resolve_light(&self, cluster: &Cluster) -> LightField {
-        match self.held {
-            Some(extra) => LightField::solve_with(cluster, &[extra]),
-            None => LightField::solve(cluster),
         }
     }
 
@@ -349,7 +339,6 @@ impl ChunkBake {
             self.touch_light_reach(old.x, old.z);
         }
         self.held = held;
-        self.light_dirty = true;
         if let Some(next) = held {
             self.touch_light_reach(next.x, next.z);
         }
@@ -357,7 +346,6 @@ impl ChunkBake {
 
     /// Chunks a level-15 emitter can still touch from `(x, z)`.
     fn touch_light_reach(&mut self, x: i32, z: i32) {
-        self.light_dirty = true;
         let cx = x.div_euclid(16);
         let cz = z.div_euclid(16);
         let span = (LIGHT_REACH + 15) / 16;
@@ -384,12 +372,11 @@ impl ChunkBake {
 
     /// True when nothing is waiting on a worker or the frame queue.
     pub fn is_idle(&self) -> bool {
-        self.pending.is_empty() && self.inflight.is_empty() && !self.light_dirty
+        self.pending.is_empty() && self.inflight.is_empty()
     }
 
     /// The edited cell, plus a neighbor chunk when the cell is on that shared face.
     pub fn touch(&mut self, x: i32, z: i32) {
-        self.light_dirty = true;
         let cx = x.div_euclid(16);
         let cz = z.div_euclid(16);
         self.enqueue(cx, cz, true);
@@ -426,11 +413,8 @@ impl ChunkBake {
 
     /// The next chunk for a worker, or `None` when the queue is empty.
     /// Empty slots are returned from [`Self::drain_ready`] instead.
+    /// Frame thread only snapshots chunks — light is solved on the worker.
     pub fn take_work(&mut self, cluster: &Cluster) -> Option<MeshWork> {
-        if self.light_dirty {
-            self.light = self.resolve_light(cluster);
-            self.light_dirty = false;
-        }
         while let Some((x, z)) = self.take_next() {
             let Some(chunk) = cluster.get(x, z).filter(|chunk| chunk.non_air_count() > 0) else {
                 if self.baked.remove(&(x, z)) {
@@ -475,7 +459,7 @@ impl ChunkBake {
                 z,
                 chunk: chunk.clone(),
                 neighbors,
-                light: self.light.clone(),
+                held: self.held,
                 sun: self.sun,
                 step,
                 borders,
@@ -550,10 +534,6 @@ impl ChunkBake {
         if max_chunks == 0 || self.pending.is_empty() {
             return Vec::new();
         }
-        if self.light_dirty {
-            self.light = self.resolve_light(cluster);
-            self.light_dirty = false;
-        }
         let started = std::time::Instant::now();
         let mut baked = 0usize;
         let mut out = Vec::new();
@@ -579,6 +559,7 @@ impl ChunkBake {
                 continue;
             };
             let sample = |sx, sy, sz| cluster.block_at(sx, sy, sz);
+            let light = light_around(chunk.x(), chunk.z(), self.held, &sample);
             let mesh = if let Some(step) = chunk_lod_step(chunk, Some(self.focus), self.previous) {
                 let borders = borders_of(
                     chunk.x(),
@@ -592,9 +573,9 @@ impl ChunkBake {
                             .is_some_and(|neighbor| neighbor.non_air_count() > 0)
                     },
                 );
-                mesh_chunk_lod(chunk, &sample, &self.light, step, borders)
+                mesh_chunk_lod(chunk, &sample, &light, step, borders)
             } else {
-                mesh_chunk_with(chunk, sample, &self.light, self.sun)
+                mesh_chunk_with(chunk, sample, &light, self.sun)
             };
             self.baked.insert((x, z));
             out.push(BakedChunk { x, z, mesh });
@@ -645,7 +626,7 @@ pub struct MeshWork {
     z: i32,
     chunk: Chunk,
     neighbors: Vec<Chunk>,
-    light: LightField,
+    held: Option<Emitter>,
     sun: [f32; 3],
     step: Option<i32>,
     /// Neighbor LOD step on -X, +X, -Z, +Z. `1` is full detail.
@@ -661,6 +642,7 @@ pub struct MeshDone {
 
 impl MeshWork {
     /// Remesh this snapshot, including bounce rays on a full-detail chunk.
+    /// Block light is solved here from the 3×3 neighbor copy — not on the frame thread.
     pub fn bake(self) -> MeshDone {
         let MeshWork {
             job_epoch,
@@ -669,12 +651,13 @@ impl MeshWork {
             z,
             chunk,
             neighbors,
-            light,
+            held,
             sun,
             step,
             borders,
         } = self;
         let sample = |sx, sy, sz| copied_block(&neighbors, sx, sy, sz);
+        let light = light_around(chunk.x(), chunk.z(), held, &sample);
         let mesh = if let Some(step) = step {
             mesh_chunk_lod(&chunk, &sample, &light, step, borders)
         } else {
@@ -685,6 +668,25 @@ impl MeshWork {
             epoch,
             baked: BakedChunk { x, z, mesh },
         }
+    }
+}
+
+/// Block light for one chunk: emitter reach (±[`LIGHT_REACH`]) from the snapshot.
+fn light_around(
+    cx: i32,
+    cz: i32,
+    held: Option<Emitter>,
+    sample: &impl Fn(i32, i32, i32) -> Block,
+) -> LightField {
+    let min_x = cx * 16 - LIGHT_REACH;
+    let max_x = cx * 16 + 16 + LIGHT_REACH;
+    let min_z = cz * 16 - LIGHT_REACH;
+    let max_z = cz * 16 + 16 + LIGHT_REACH;
+    match held {
+        Some(extra) => {
+            LightField::solve_bounds_with(min_x, max_x, min_z, max_z, &[extra], sample)
+        }
+        None => LightField::solve_bounds(min_x, max_x, min_z, max_z, sample),
     }
 }
 
@@ -5468,5 +5470,203 @@ mod tests {
             .map(|vertex| vertex.uv[0])
             .fold(f32::MIN, f32::max);
         assert!(max_u - min_u > 0.5, "grass face has no texture span");
+    }
+
+    /// VG-691: remesh / light-resolve cost under landmark + redstone density.
+    /// Release profile — Soft probe path is out of scope (VG-690).
+    #[test]
+    fn remesh_bake_budget_under_landmark_and_redstone_density() {
+        // Same dense ring as VG-690 Soft remesure: village + stronghold/library
+        // + ancient city + demo pad after the content flood.
+        let mut chunks = Vec::new();
+        for z in -3..=4 {
+            for x in -3..=3 {
+                chunks.push(rebuild_world::generate_chunk(x, z));
+            }
+        }
+        let mut world = Cluster::try_from_chunks(0, 0, chunks).unwrap();
+        let focus = [0, 0];
+
+        let light_start = std::time::Instant::now();
+        let light = LightField::solve(&world);
+        let light_ms = light_start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("vg691 light-solve dense: {light_ms:.3} ms");
+        drop(light);
+
+        let mut bake = ChunkBake::new(&world, daylight::NOON_SUN, focus);
+        bake.queue_unmeshed(&world);
+        let queued = bake.pending();
+        eprintln!("vg691 initial unmeshed queue: {queued}");
+
+        // Frame-thread take_work cost: light resolve + neighbor clone + enqueue pick.
+        let frame_start = std::time::Instant::now();
+        let mut take_ms_max = 0.0_f64;
+        let mut works = Vec::new();
+        for _ in 0..8 {
+            let step = std::time::Instant::now();
+            let Some(work) = bake.take_work(&world) else {
+                break;
+            };
+            take_ms_max = take_ms_max.max(step.elapsed().as_secs_f64() * 1000.0);
+            works.push(work);
+        }
+        let frame_take_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "vg691 take_work x{}: total {frame_take_ms:.3} ms, max {take_ms_max:.3} ms",
+            works.len()
+        );
+
+        let bake_start = std::time::Instant::now();
+        let mut bake_ms_max = 0.0_f64;
+        for work in works {
+            let step = std::time::Instant::now();
+            let _ = work.bake();
+            bake_ms_max = bake_ms_max.max(step.elapsed().as_secs_f64() * 1000.0);
+        }
+        let worker_ms = bake_start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("vg691 worker bake batch: {worker_ms:.3} ms, max chunk {bake_ms_max:.3} ms");
+
+        // Landmark stamp touch pattern (half-chunk grid over dense stamps).
+        let landmarks = [
+            [8, -22],  // village
+            [24, -8],  // stronghold
+            [24, -22], // library
+            [8, 49],   // ancient city
+            [8, 14],   // demo pad
+        ];
+        let mut stamp = ChunkBake::new(&world, daylight::NOON_SUN, focus);
+        stamp.queue_unmeshed(&world);
+        // Drain the initial square so stamp remesh is edit-only (urgent touches).
+        let mut guard = 0;
+        while let Some(work) = stamp.take_work(&world) {
+            let epoch = work.epoch;
+            let done = work.bake();
+            let _ = stamp.accept(epoch, done.baked);
+            guard += 1;
+            assert!(guard < 512, "initial dense bake did not drain");
+        }
+        let stamp_start = std::time::Instant::now();
+        for [lx, lz] in landmarks {
+            for dx in -2..=2 {
+                for dz in -2..=2 {
+                    stamp.touch(lx + dx * 8, lz + dz * 8);
+                }
+            }
+        }
+        let stamp_touch_ms = stamp_start.elapsed().as_secs_f64() * 1000.0;
+        let stamp_pending = stamp.pending();
+        eprintln!(
+            "vg691 landmark stamp touch: {stamp_touch_ms:.3} ms → pending {stamp_pending}"
+        );
+        let stamp_take = std::time::Instant::now();
+        let mut stamp_take_max = 0.0_f64;
+        for _ in 0..4 {
+            let step = std::time::Instant::now();
+            if stamp.take_work(&world).is_none() {
+                break;
+            }
+            stamp_take_max = stamp_take_max.max(step.elapsed().as_secs_f64() * 1000.0);
+        }
+        let stamp_take_ms = stamp_take.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "vg691 stamp remesh take_work: {stamp_take_ms:.3} ms, max {stamp_take_max:.3} ms"
+        );
+
+        // Redstone density: dust line + lamps near the demo pad, then pulse-like
+        // remesh (metadata / lamp flips) — the common post-flood hitch path.
+        let y = 2i32;
+        let mut place = Vec::new();
+        for x in 0..16 {
+            place.push(rebuild_world::CellChange {
+                x,
+                y,
+                z: 4,
+                block: Block::new("redstone_dust", if x < 8 { 15 } else { 0 }),
+            });
+        }
+        for (i, lx) in [2i32, 6, 10, 14].into_iter().enumerate() {
+            place.push(rebuild_world::CellChange {
+                x: lx,
+                y,
+                z: 5,
+                block: Block::new("lamp", if i % 2 == 0 { 1 } else { 0 }),
+            });
+        }
+        rebuild_world::apply_changes(&mut world, &place);
+        let mut rs = ChunkBake::new(&world, daylight::NOON_SUN, focus);
+        for chunk in world.chunks() {
+            if chunk.non_air_count() > 0 {
+                rs.baked.insert((chunk.x(), chunk.z()));
+            }
+        }
+        let rs_touch_start = std::time::Instant::now();
+        for change in &place {
+            rs.touch(change.x, change.z);
+        }
+        // Second pulse: flip dust + lamps (same cells, light emitters change).
+        let flip: Vec<_> = place
+            .iter()
+            .map(|change| {
+                let block = if change.block.id == "lamp" {
+                    Block::new("lamp", if change.block.metadata == 0 { 1 } else { 0 })
+                } else if change.block.id == "redstone_dust" {
+                    Block::new(
+                        "redstone_dust",
+                        if change.block.metadata > 0 { 0 } else { 15 },
+                    )
+                } else {
+                    change.block
+                };
+                rebuild_world::CellChange {
+                    x: change.x,
+                    y: change.y,
+                    z: change.z,
+                    block,
+                }
+            })
+            .collect();
+        rebuild_world::apply_changes(&mut world, &flip);
+        for change in &flip {
+            rs.touch(change.x, change.z);
+        }
+        let rs_touch_ms = rs_touch_start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "vg691 redstone touch+flip: {rs_touch_ms:.3} ms → pending {}",
+            rs.pending()
+        );
+        let rs_take = std::time::Instant::now();
+        let mut rs_take_max = 0.0_f64;
+        let mut rs_works = 0usize;
+        for _ in 0..4 {
+            let step = std::time::Instant::now();
+            let Some(work) = rs.take_work(&world) else {
+                break;
+            };
+            rs_take_max = rs_take_max.max(step.elapsed().as_secs_f64() * 1000.0);
+            let _ = work.bake();
+            rs_works += 1;
+        }
+        let rs_take_ms = rs_take.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "vg691 redstone remesh take+bake x{rs_works}: {rs_take_ms:.3} ms, max take {rs_take_max:.3} ms"
+        );
+
+        // Full-world solve is reference-only (no longer on the frame remesh path).
+        // Frame-thread take_work must stay interactive under landmark/redstone floods
+        // so mega radii remain viable — light runs on the worker instead.
+        eprintln!("vg691 note: full-world light-solve is off the remesh frame path");
+        assert!(
+            take_ms_max < 8.0,
+            "take_work frame spike: {take_ms_max:.3} ms"
+        );
+        assert!(
+            stamp_take_max < 8.0,
+            "stamp remesh take_work spike: {stamp_take_max:.3} ms"
+        );
+        assert!(
+            rs_take_max < 8.0,
+            "redstone remesh take_work spike: {rs_take_max:.3} ms"
+        );
+        let _ = light_ms;
     }
 }

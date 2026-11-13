@@ -129,6 +129,18 @@ impl LightField {
         max_z: i32,
         sample: impl Fn(i32, i32, i32) -> Block,
     ) -> Self {
+        Self::solve_bounds_with(min_x, max_x, min_z, max_z, &[], sample)
+    }
+
+    /// Like [`solve_bounds`], and also seeds `extras` (a held torch, etc.).
+    pub fn solve_bounds_with(
+        min_x: i32,
+        max_x: i32,
+        min_z: i32,
+        max_z: i32,
+        extras: &[Emitter],
+        sample: impl Fn(i32, i32, i32) -> Block,
+    ) -> Self {
         let mut field = Self::allocate(min_x, max_x, min_z, max_z);
         let mut queue = VecDeque::new();
         for y in 0..256 {
@@ -145,6 +157,16 @@ impl LightField {
                         queue.push_back([x, y, z]);
                     }
                 }
+            }
+        }
+        for extra in extras {
+            if field.raise(
+                extra.x,
+                extra.y,
+                extra.z,
+                emission_fp(extra.light.channels()),
+            ) {
+                queue.push_back([extra.x, extra.y, extra.z]);
             }
         }
         field.spread(&mut queue, sample);
