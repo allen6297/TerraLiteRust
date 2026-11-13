@@ -1471,6 +1471,8 @@ pub struct State {
     found_monument: bool,
     /// Once: walked into the stronghold end-portal room.
     found_stronghold: bool,
+    /// Once: walked into the stronghold library / silverfish wing.
+    found_stronghold_library: bool,
     /// Once: walked up to the north village remnant.
     found_village: bool,
     /// Once: walked into the ancient city remnant south of the marsh.
@@ -1791,6 +1793,10 @@ pub struct State {
     magma_cube_count: u32,
     /// Hand over magma cream once inventory has room.
     magma_cream_due: bool,
+    /// Silverfish nest from the stronghold infested hall.
+    silverfish: crate::mobs::Silverfish,
+    silverfish_buf: Option<wgpu::Buffer>,
+    silverfish_count: u32,
     /// In-flight blaze / ghast fireballs.
     fireballs: crate::fireballs::Fireballs,
     /// Hand over a blaze rod once inventory has room.
@@ -2871,6 +2877,7 @@ impl State {
             found_wreck: false,
             found_monument: false,
             found_stronghold: false,
+            found_stronghold_library: false,
             found_village: false,
             found_ancient_city: false,
             last_death: None,
@@ -3080,6 +3087,9 @@ impl State {
             magma_cube_buf: None,
             magma_cube_count: 0,
             magma_cream_due: false,
+            silverfish: crate::mobs::Silverfish::new(),
+            silverfish_buf: None,
+            silverfish_count: 0,
             fireballs: crate::fireballs::Fireballs::new(),
             blaze_due: false,
             ghast_due: false,
@@ -5464,6 +5474,23 @@ impl State {
         self.magma_cube_count = vertices.len() as u32;
     }
 
+    fn rebuild_silverfish(&mut self) {
+        let vertices = self.silverfish.vertices();
+        if vertices.is_empty() {
+            self.silverfish_buf = None;
+            self.silverfish_count = 0;
+            return;
+        }
+        self.silverfish_buf = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("silverfish"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.silverfish_count = vertices.len() as u32;
+    }
+
     fn rebuild_piglin(&mut self) {
         let vertices = self.piglin.vertices();
         if vertices.is_empty() {
@@ -6186,6 +6213,20 @@ impl State {
             && !warden_aimed
             && !dragon_aimed
             && self.shulker.aimed(eye, forward);
+        let silverfish_aimed = !zombie_aimed
+            && night_index.is_none()
+            && !breeze_aimed
+            && !blaze_aimed
+            && !ghast_aimed
+            && !magma_aimed
+            && !piglin_aimed
+            && !guardian_aimed
+            && !wither_aimed
+            && !wither_boss_aimed
+            && !warden_aimed
+            && !dragon_aimed
+            && !shulker_aimed
+            && self.silverfish.aimed(eye, forward);
         let guest_index = if zombie_aimed
             || night_index.is_some()
             || breeze_aimed
@@ -6199,6 +6240,7 @@ impl State {
             || warden_aimed
             || dragon_aimed
             || shulker_aimed
+            || silverfish_aimed
         {
             None
         } else {
@@ -6345,6 +6387,15 @@ impl State {
             }
             dropped
         };
+        let dropped_silverfish = silverfish_aimed && {
+            let origin = self.silverfish.origin();
+            let dropped = self.silverfish.hurt_aimed(eye, forward, amount);
+            if dropped {
+                xp_at = Some(origin);
+            }
+            self.rebuild_silverfish();
+            dropped
+        };
         let dropped_guest = if let Some(index) = guest_index {
             let origin = self.guests[index].origin();
             let dropped = self.hurt_guest(index, amount);
@@ -6369,6 +6420,7 @@ impl State {
             || warden_aimed
             || dragon_aimed
             || shulker_aimed
+            || silverfish_aimed
             || guest_index.is_some();
         let dropped = dropped_zombie
             || dropped_night
@@ -6383,6 +6435,7 @@ impl State {
             || dropped_warden
             || dropped_dragon
             || dropped_shulker
+            || dropped_silverfish
             || dropped_guest;
         let word = if !aimed {
             "swing"
@@ -7957,6 +8010,21 @@ impl State {
             self.found_stronghold = true;
             self.announce_structure("stronghold", &["a stronghold"]);
         }
+        if !self.found_stronghold_library
+            && (near(
+                rebuild_world::STRONGHOLD_LIBRARY.0,
+                rebuild_world::STRONGHOLD_LIBRARY.1,
+            ) || near(
+                rebuild_world::STRONGHOLD_SILVERFISH.0,
+                rebuild_world::STRONGHOLD_SILVERFISH.1,
+            ))
+        {
+            self.found_stronghold_library = true;
+            self.announce_structure(
+                "stronghold_library",
+                &["a stronghold library", "silverfish stir"],
+            );
+        }
         if !self.found_end
             && near(rebuild_world::END_PAD.0, rebuild_world::END_PAD.1)
         {
@@ -8646,6 +8714,7 @@ impl State {
             .or_else(|| fresh_wreck(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_monument(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_stronghold(has_record, hit.block[0], hit.block[2], self.omen))
+            .or_else(|| fresh_stronghold_library(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_end_city(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_village(has_record, hit.block[0], hit.block[2], self.omen))
             .or_else(|| fresh_dungeon(has_record, hit.block[0], hit.block[2], self.omen))
@@ -12322,6 +12391,70 @@ impl State {
         let _ = self.window.focus_window();
     }
 
+    /// Stronghold library book room + silverfish hall, then quit with a PNG.
+    pub fn arm_stronghold_library_shot(&mut self, path: std::path::PathBuf) {
+        self.cook_shot_path = Some(path);
+        self.cook_shot_frames = 0;
+        self.playing = true;
+        self.menu.close_menu();
+        self.apply_chosen_size();
+        rebuild_world::seed_terrain_ring(&mut self.world);
+        let (lx, lz) = rebuild_world::STRONGHOLD_LIBRARY;
+        let (sx, sz) = rebuild_world::STRONGHOLD_SILVERFISH;
+        for &(cx, cz) in &[
+            (lx.div_euclid(16), lz.div_euclid(16)),
+            (rebuild_world::STRONGHOLD.0.div_euclid(16), rebuild_world::STRONGHOLD.1.div_euclid(16)),
+        ] {
+            let _ = self.world.replace_chunk(rebuild_world::generate_chunk(cx, cz));
+        }
+        self.clock.set_time_of_day(0.2);
+        let light = self.sun_light();
+        self.wanted_sun = light.direction;
+        self.wanted_lookups = crate::daylight::shadow_lookups(light.direction);
+
+        let floor = i32::from(rebuild_world::STRONGHOLD_LIBRARY_FLOOR);
+        self.found_stronghold = true;
+        self.found_stronghold_library = true;
+        self.gui.age_chat(60.0);
+        self.gui.push_chat("a stronghold library");
+        self.gui.push_chat("silverfish stir");
+
+        // One bug already out so the still shows the breakout threat.
+        self.silverfish.place_at([sx as f32 + 0.5, floor as f32, sz as f32 + 0.5]);
+        self.silverfish.hold_pose();
+        self.rebuild_silverfish();
+
+        // Stand at the east library doorway looking into the silverfish hall.
+        let focus = glam::Vec3::new(sx as f32 + 0.5, floor as f32 + 0.55, sz as f32 + 0.5);
+        let eye = glam::Vec3::new(
+            lx as f32 + 2.2,
+            floor as f32 + 1.45,
+            lz as f32 + 0.5,
+        );
+        self.camera = Camera::looking_at(eye, focus);
+        self.camera.velocity_y = 0.0;
+        let (yaw, pitch) = self.camera.yaw_pitch();
+        self.cook_shot_eye = eye;
+        self.cook_shot_yaw = yaw;
+        self.cook_shot_pitch = pitch;
+        self.posed_eye = eye;
+        self.posed_yaw = yaw;
+        self.posed_pitch = pitch;
+        self.pose_dirty = true;
+        self.wanted_focus = chunk_of(self.camera.eye);
+        self.hotbar.install_saved(0, &[]);
+        let _ = self.hotbar.give_stack("iron_pickaxe");
+        let _ = self.hotbar.give_stack("book");
+        self.hotbar_dirty = true;
+        self.set_capture(false);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.chunk_bake.touch(lx + dx * 8, lz + dz * 8);
+            }
+        }
+        let _ = self.window.focus_window();
+    }
+
     /// Ocean monument remnant south of the shipwreck, then quit with a PNG.
     pub fn arm_ocean_monument_shot(&mut self, path: std::path::PathBuf) {
         self.cook_shot_path = Some(path);
@@ -14563,6 +14696,7 @@ impl State {
             ("warden", self.warden.bounds()),
             ("ender_dragon", self.dragon.bounds()),
             ("shulker", self.shulker.bounds()),
+            ("silverfish", self.silverfish.bounds()),
             ("copper_golem", self.golem.bounds()),
 
 
@@ -14687,6 +14821,9 @@ impl State {
         }
         if self.shulker.aimed(eye, forward) {
             return Some("shulker");
+        }
+        if self.silverfish.aimed(eye, forward) {
+            return Some("silverfish");
         }
         if self.fox.aimed(eye, forward) {
             return Some("fox");
@@ -15290,6 +15427,35 @@ impl State {
                     } else {
                         self.gui.push_chat("crystal shattered");
                     }
+                }
+            }
+            if before.id == "infested_stone_bricks" {
+                let at = [
+                    cell.x as f32 + 0.5,
+                    cell.y as f32,
+                    cell.z as f32 + 0.5,
+                ];
+                self.silverfish.emerge(at);
+                self.rebuild_silverfish();
+                self.gui.push_chat("silverfish!");
+                // Nearby infested bricks panic-break (classic callout).
+                if self.scaffold_cascade == 0 {
+                    self.scaffold_cascade = 1;
+                    let neighbors = [
+                        [cell.x + 1, cell.y, cell.z],
+                        [cell.x - 1, cell.y, cell.z],
+                        [cell.x, cell.y + 1, cell.z],
+                        [cell.x, cell.y - 1, cell.z],
+                        [cell.x, cell.y, cell.z + 1],
+                        [cell.x, cell.y, cell.z - 1],
+                    ];
+                    for n in neighbors {
+                        if self.world.block_at(n[0], n[1], n[2]).id == "infested_stone_bricks"
+                        {
+                            self.send_edit(encode_break(n[0], n[1], n[2]), TAG_BREAK, None);
+                        }
+                    }
+                    self.scaffold_cascade = 0;
                 }
             }
             if !scooped && !eaten && hop_dest.is_none() && !blasted && !loot.is_empty() {
@@ -36343,8 +36509,15 @@ impl State {
                 if self.magma_cubes.rest(dt) {
                     self.rebuild_magma_cubes();
                 }
+                if self.silverfish.tick_near(steps, eye3) {
+                    let blocked = self.try_shield_block();
+                    let amount = body::bite_hearts(blocked, 1, self.armor_soak());
+                    self.apply_damage(amount);
+                    self.gui.push_chat(if blocked { "block" } else { "bite" });
+                }
             }
             self.rebuild_magma_cubes();
+            self.rebuild_silverfish();
             if self.magma_cream_due {
                 self.grant_magma_cream();
             }
@@ -37436,6 +37609,14 @@ impl State {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_vertex_buffer(0, magma.slice(..));
                     pass.draw(0..self.magma_cube_count, 0..1);
+                }
+            }
+            if let Some(silverfish) = &self.silverfish_buf {
+                if self.silverfish_count >= 3 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, silverfish.slice(..));
+                    pass.draw(0..self.silverfish_count, 0..1);
                 }
             }
             if let Some(piglin) = &self.piglin_buf {
@@ -38845,6 +39026,11 @@ fn stronghold_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::STRONGHOLD_CHEST
 }
 
+/// The stronghold library book-room chest.
+fn stronghold_library_cell(x: i32, z: i32) -> bool {
+    (x, z) == rebuild_world::STRONGHOLD_LIBRARY_CHEST
+}
+
 /// The End city remnant tower chest.
 fn end_city_cell(x: i32, z: i32) -> bool {
     (x, z) == rebuild_world::END_CITY_CHEST
@@ -39541,6 +39727,28 @@ fn fresh_stronghold(has_record: bool, x: i32, z: i32, omen: bool) -> Option<Stri
         return None;
     }
     stronghold_loot(x, z, omen)
+}
+
+/// One drop from the stronghold library chest, read from the data pack.
+fn stronghold_library_loot(x: i32, z: i32, omen: bool) -> Option<String> {
+    if !stronghold_library_cell(x, z) {
+        return None;
+    }
+    match crate::loot::load_stronghold_library_chest() {
+        Ok(table) => Some(crate::loot::pick(&table, x, z, omen).to_string()),
+        Err(err) => {
+            eprintln!("loot: {err}");
+            None
+        }
+    }
+}
+
+/// The first open of the stronghold library chest.
+fn fresh_stronghold_library(has_record: bool, x: i32, z: i32, omen: bool) -> Option<String> {
+    if has_record {
+        return None;
+    }
+    stronghold_library_loot(x, z, omen)
 }
 
 /// One drop from the End city tower chest, read from the data pack.
@@ -40296,6 +40504,24 @@ mod tests {
         assert_eq!(rich, crate::loot::pick(&table, x, z, true));
         assert!(super::fresh_stronghold(true, x, z, false).is_none());
         assert!(super::fresh_stronghold(false, 0, 0, false).is_none());
+    }
+
+    #[test]
+    fn the_stronghold_library_chest_pays_once_from_the_pack() {
+        let (x, z) = rebuild_world::STRONGHOLD_LIBRARY_CHEST;
+        assert!(super::stronghold_library_cell(x, z));
+        assert!(!super::stronghold_library_cell(
+            rebuild_world::STRONGHOLD_LIBRARY.0,
+            rebuild_world::STRONGHOLD_LIBRARY.1
+        ));
+        assert!(!super::stronghold_cell(x, z));
+        let table = crate::loot::load_stronghold_library_chest().unwrap();
+        let paid = super::fresh_stronghold_library(false, x, z, false).unwrap();
+        let rich = super::fresh_stronghold_library(false, x, z, true).unwrap();
+        assert_eq!(paid, crate::loot::pick(&table, x, z, false));
+        assert_eq!(rich, crate::loot::pick(&table, x, z, true));
+        assert!(super::fresh_stronghold_library(true, x, z, false).is_none());
+        assert!(super::fresh_stronghold_library(false, 0, 0, false).is_none());
     }
 
     #[test]

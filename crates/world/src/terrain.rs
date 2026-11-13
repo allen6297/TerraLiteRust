@@ -163,6 +163,7 @@ pub fn generate_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     stamp_shipwreck(&mut blocks, chunk_x, chunk_z);
     stamp_ocean_monument(&mut blocks, chunk_x, chunk_z);
     stamp_stronghold(&mut blocks, chunk_x, chunk_z);
+    stamp_stronghold_library(&mut blocks, chunk_x, chunk_z);
     stamp_end_pocket(&mut blocks, chunk_x, chunk_z);
     stamp_end_crystals(&mut blocks, chunk_x, chunk_z);
     stamp_end_city(&mut blocks, chunk_x, chunk_z);
@@ -568,7 +569,22 @@ pub const STRONGHOLD_FRAMES: [(i32, i32); 12] = [
 /// Standing cell in the stronghold portal pit once the ring opens.
 pub const STRONGHOLD_PORTAL_IN: (i32, i32) = STRONGHOLD;
 
+/// Book room north of the portal ring — shelves + chest.
+pub const STRONGHOLD_LIBRARY: (i32, i32) = (24, -22);
+
+/// Loot chest on the west wall of the stronghold library.
+pub const STRONGHOLD_LIBRARY_CHEST: (i32, i32) = (21, -22);
+
+/// Silverfish hall east of the library (infested stone-brick walls).
+pub const STRONGHOLD_SILVERFISH: (i32, i32) = (29, -22);
+
+/// Standing floor shared by the library and silverfish hall.
+pub const STRONGHOLD_LIBRARY_FLOOR: u16 = STRONGHOLD_FLOOR;
+
 const STRONGHOLD_CHUNK: (i32, i32) = (1, -1);
+
+/// Library + silverfish wing north of the portal room.
+const STRONGHOLD_LIBRARY_CHUNK: (i32, i32) = (1, -2);
 
 /// End pocket south of the stronghold — obsidian platform over the void.
 ///
@@ -1160,6 +1176,7 @@ fn stamp_ruined_portal(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | WRECK_CHUNK
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
+            | STRONGHOLD_LIBRARY_CHUNK
             | END_CHUNK
             | VILLAGE_CHUNK
             | NETHER_CHUNK
@@ -1272,6 +1289,7 @@ fn stamp_desert_temple(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chu
             | WRECK_CHUNK
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
+            | STRONGHOLD_LIBRARY_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1381,6 +1399,7 @@ fn stamp_shipwreck(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z
             | TEMPLE_CHUNK
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
+            | STRONGHOLD_LIBRARY_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1489,6 +1508,7 @@ fn stamp_ocean_monument(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, ch
             | TEMPLE_CHUNK
             | WRECK_CHUNK
             | STRONGHOLD_CHUNK
+            | STRONGHOLD_LIBRARY_CHUNK
             | VILLAGE_CHUNK
             | (0, 0)
     );
@@ -1664,6 +1684,172 @@ fn stamp_stronghold(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_
     blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
     let torch_lx = (cx + 3 - chunk_x * 16) as u8;
     let torch_lz = (cz - 3 - chunk_z * 16) as u8;
+    blocks.push((torch_lx, floor, torch_lz, Block::new("torch", 0)));
+    // North doorway into the library corridor (clear standing + headroom).
+    for dx in -1i32..=1 {
+        let lx = (cx + dx - chunk_x * 16) as u8;
+        let lz = (cz - 4 - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y >= floor && *y <= floor + 2));
+    }
+    // Short stone-brick corridor to the north chunk edge (z = -16).
+    for wz in (cz - 8)..(cz - 4) {
+        for dx in -1i32..=1 {
+            let wx = cx + dx;
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            let edge = dx.abs() == 1;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 3)
+            });
+            blocks.push((lx, floor - 1, lz, brick));
+            if edge {
+                for dy in 0..3u16 {
+                    blocks.push((lx, floor + dy, lz, brick));
+                }
+            }
+            blocks.push((lx, floor + 3, lz, brick));
+        }
+    }
+}
+
+/// Library book room + silverfish hall north of the portal ring.
+/// Guaranteed in [`STRONGHOLD_LIBRARY_CHUNK`].
+fn stamp_stronghold_library(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, chunk_z: i32) {
+    if (chunk_x, chunk_z) != STRONGHOLD_LIBRARY_CHUNK {
+        return;
+    }
+    let floor = STRONGHOLD_LIBRARY_FLOOR;
+    let brick = Block::new("stone_bricks", 0);
+    let mossy = Block::new("mossy_stone_bricks", 0);
+    let cracked = Block::new("cracked_stone_bricks", 0);
+    let infested = Block::new("infested_stone_bricks", 0);
+    let shelf = Block::new("bookshelf", 0);
+    let (lx0, lz0) = STRONGHOLD_LIBRARY;
+    // Corridor from the south chunk edge up to the library mouth.
+    for wz in (lz0 + 4)..=-17 {
+        for dx in -1i32..=1 {
+            let wx = lx0 + dx;
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            let edge = dx.abs() == 1;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 3)
+            });
+            blocks.push((lx, floor - 1, lz, brick));
+            if edge {
+                for dy in 0..3u16 {
+                    blocks.push((lx, floor + dy, lz, brick));
+                }
+            }
+            blocks.push((lx, floor + 3, lz, brick));
+        }
+    }
+    // Hollow 7×7×4 library hall centered on STRONGHOLD_LIBRARY.
+    for dz in -3i32..=3 {
+        for dx in -3i32..=3 {
+            let wx = lx0 + dx;
+            let wz = lz0 + dz;
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            let edge = dx.abs() == 3 || dz.abs() == 3;
+            // South mouth opens toward the portal corridor.
+            let mouth = dz == 3 && dx.abs() <= 1;
+            // East doorway into the silverfish hall.
+            let east_door = dx == 3 && dz.abs() <= 1;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 3)
+            });
+            let tile = match (dx + dz * 2).rem_euclid(4) {
+                0 => mossy,
+                1 => cracked,
+                _ => brick,
+            };
+            blocks.push((lx, floor - 1, lz, tile));
+            if mouth || east_door {
+                blocks.push((lx, floor + 3, lz, brick));
+                continue;
+            }
+            if edge {
+                for dy in 0..4u16 {
+                    // Book-lined walls at chest/eye height.
+                    let wall_block = if dy >= 1 && dy <= 2 {
+                        shelf
+                    } else if (wx + wz + dy as i32).rem_euclid(3) == 0 {
+                        mossy
+                    } else {
+                        brick
+                    };
+                    blocks.push((lx, floor + dy, lz, wall_block));
+                }
+            } else {
+                blocks.push((lx, floor + 3, lz, brick));
+            }
+        }
+    }
+    // Interior bookshelf stacks (not on the doorway lanes).
+    for &(dx, dz) in &[(-2i32, -2), (-2, 0), (-2, 2), (2, -2), (2, 0), (2, 2)] {
+        let lx = (lx0 + dx - chunk_x * 16) as u8;
+        let lz = (lz0 + dz - chunk_z * 16) as u8;
+        for dy in 0..2u16 {
+            blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor + dy));
+            blocks.push((lx, floor + dy, lz, shelf));
+        }
+    }
+    // Library chest + lantern.
+    let chest_lx = (STRONGHOLD_LIBRARY_CHEST.0 - chunk_x * 16) as u8;
+    let chest_lz = (STRONGHOLD_LIBRARY_CHEST.1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == chest_lx && *z == chest_lz && *y == floor));
+    blocks.push((chest_lx, floor, chest_lz, Block::new("chest", 0)));
+    let lamp_lx = (lx0 + 1 - chunk_x * 16) as u8;
+    let lamp_lz = (lz0 - 1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == lamp_lx && *z == lamp_lz && *y == floor));
+    blocks.push((lamp_lx, floor, lamp_lz, Block::new("lantern", 0)));
+
+    // Silverfish hall — tight stone-brick room east of the library.
+    let (sx, sz) = STRONGHOLD_SILVERFISH;
+    for dz in -2i32..=2 {
+        for dx in -2i32..=2 {
+            let wx = sx + dx;
+            let wz = sz + dz;
+            let lx = (wx - chunk_x * 16) as u8;
+            let lz = (wz - chunk_z * 16) as u8;
+            let edge = dx.abs() == 2 || dz.abs() == 2;
+            let west_door = dx == -2 && dz.abs() <= 1;
+            blocks.retain(|(x, y, z, _)| {
+                !(*x == lx && *z == lz && *y >= floor.saturating_sub(1) && *y <= floor + 3)
+            });
+            blocks.push((lx, floor - 1, lz, brick));
+            if west_door {
+                blocks.push((lx, floor + 3, lz, brick));
+                continue;
+            }
+            if edge {
+                for dy in 0..4u16 {
+                    // Infested bricks hide in the walls — look like stone bricks.
+                    let wall = if (wx + wz * 3 + dy as i32).rem_euclid(2) == 0 {
+                        infested
+                    } else if (wx + dy as i32).rem_euclid(3) == 0 {
+                        cracked
+                    } else {
+                        brick
+                    };
+                    blocks.push((lx, floor + dy, lz, wall));
+                }
+            } else {
+                blocks.push((lx, floor + 3, lz, brick));
+            }
+        }
+    }
+    // A few floor-level infested tiles so mining the hall always finds one.
+    for &(dx, dz) in &[(0i32, -1), (1, 1), (-1, 0)] {
+        let lx = (sx + dx - chunk_x * 16) as u8;
+        let lz = (sz + dz - chunk_z * 16) as u8;
+        blocks.retain(|(x, y, z, _)| !(*x == lx && *z == lz && *y == floor - 1));
+        blocks.push((lx, floor - 1, lz, infested));
+    }
+    let torch_lx = (sx - chunk_x * 16) as u8;
+    let torch_lz = (sz + 1 - chunk_z * 16) as u8;
+    blocks.retain(|(x, y, z, _)| !(*x == torch_lx && *z == torch_lz && *y == floor));
     blocks.push((torch_lx, floor, torch_lz, Block::new("torch", 0)));
 }
 
@@ -1848,6 +2034,7 @@ fn stamp_village_remnant(blocks: &mut Vec<(u8, u16, u8, Block)>, chunk_x: i32, c
             | WRECK_CHUNK
             | MONUMENT_CHUNK
             | STRONGHOLD_CHUNK
+            | STRONGHOLD_LIBRARY_CHUNK
             | END_CHUNK
             | (0, 0)
     );
@@ -3078,6 +3265,58 @@ mod tests {
         assert_ne!(STRONGHOLD_CHUNK, SHAFT_CHUNK);
         assert_ne!(STRONGHOLD_CHUNK, MONUMENT_CHUNK);
         assert_ne!(STRONGHOLD_CHUNK, END_CHUNK);
+        // North doorway into the library corridor.
+        let door_lz = (cz - 4 - STRONGHOLD_CHUNK.1 * 16) as u8;
+        assert!(
+            hold.block(north_lx, floor + 1, door_lz).is_air(),
+            "north doorway toward the library"
+        );
+    }
+
+    #[test]
+    fn a_stronghold_library_and_silverfish_hall_lie_north_of_the_portal() {
+        let wing = generate_chunk(STRONGHOLD_LIBRARY_CHUNK.0, STRONGHOLD_LIBRARY_CHUNK.1);
+        let floor = STRONGHOLD_LIBRARY_FLOOR;
+        let (lx, lz) = STRONGHOLD_LIBRARY;
+        let lib_x = (lx - STRONGHOLD_LIBRARY_CHUNK.0 * 16) as u8;
+        assert_eq!(
+            wing.block(lib_x, floor + 1, (lz - 3 - STRONGHOLD_LIBRARY_CHUNK.1 * 16) as u8)
+                .id,
+            "bookshelf",
+            "book-lined north wall"
+        );
+        let chest_x = (STRONGHOLD_LIBRARY_CHEST.0 - STRONGHOLD_LIBRARY_CHUNK.0 * 16) as u8;
+        let chest_z = (STRONGHOLD_LIBRARY_CHEST.1 - STRONGHOLD_LIBRARY_CHUNK.1 * 16) as u8;
+        assert_eq!(
+            wing.block(chest_x, floor, chest_z).id,
+            "chest",
+            "library loot chest"
+        );
+        let (sx, sz) = STRONGHOLD_SILVERFISH;
+        let hall_x = (sx + 2 - STRONGHOLD_LIBRARY_CHUNK.0 * 16) as u8;
+        let hall_z = (sz - STRONGHOLD_LIBRARY_CHUNK.1 * 16) as u8;
+        let wall = wing.block(hall_x, floor + 1, hall_z);
+        assert!(
+            matches!(
+                wall.id,
+                "infested_stone_bricks" | "stone_bricks" | "cracked_stone_bricks"
+            ),
+            "silverfish hall stone walls"
+        );
+        let mut infested = 0u32;
+        for z in 0..16u8 {
+            for x in 0..16u8 {
+                for y in floor.saturating_sub(1)..=floor + 3 {
+                    if wing.block(x, y, z).id == "infested_stone_bricks" {
+                        infested += 1;
+                    }
+                }
+            }
+        }
+        assert!(infested >= 3, "infested bricks hide in the silverfish hall");
+        assert_ne!(STRONGHOLD_LIBRARY_CHUNK, STRONGHOLD_CHUNK);
+        assert_ne!(STRONGHOLD_LIBRARY_CHUNK, END_CHUNK);
+        assert_ne!(STRONGHOLD_LIBRARY_CHUNK, CAMP_CHUNK);
     }
 
     #[test]

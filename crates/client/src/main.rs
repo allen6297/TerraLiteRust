@@ -344,6 +344,8 @@ struct Args {
     shot_monument: Option<std::path::PathBuf>,
     /// Stronghold end-portal room with a partial eye ring, then quit.
     shot_stronghold: Option<std::path::PathBuf>,
+    /// Stronghold library + silverfish hall, then quit.
+    shot_stronghold_library: Option<std::path::PathBuf>,
     /// Completed end portal plane in the stronghold, then quit.
     shot_end_portal: Option<std::path::PathBuf>,
     /// Ender dragon circling the End pad, then quit.
@@ -718,6 +720,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_guardian: args.shot_guardian,
         shot_monument: args.shot_monument,
         shot_stronghold: args.shot_stronghold,
+        shot_stronghold_library: args.shot_stronghold_library,
         shot_end_portal: args.shot_end_portal,
         shot_ender_dragon: args.shot_ender_dragon,
         shot_end_crystals: args.shot_end_crystals,
@@ -933,6 +936,7 @@ struct App {
     shot_guardian: Option<std::path::PathBuf>,
     shot_monument: Option<std::path::PathBuf>,
     shot_stronghold: Option<std::path::PathBuf>,
+    shot_stronghold_library: Option<std::path::PathBuf>,
     shot_end_portal: Option<std::path::PathBuf>,
     shot_ender_dragon: Option<std::path::PathBuf>,
     shot_end_crystals: Option<std::path::PathBuf>,
@@ -1377,6 +1381,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_stronghold.take() {
                     state.arm_stronghold_shot(path);
+                }
+                if let Some(path) = self.shot_stronghold_library.take() {
+                    state.arm_stronghold_library_shot(path);
                 }
                 if let Some(path) = self.shot_end_portal.take() {
                     state.arm_end_portal_shot(path);
@@ -1884,6 +1891,7 @@ where
         shot_guardian: None,
         shot_monument: None,
         shot_stronghold: None,
+        shot_stronghold_library: None,
         shot_end_portal: None,
         shot_ender_dragon: None,
         shot_end_crystals: None,
@@ -2630,6 +2638,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-stronghold".to_string())?;
                 parsed.shot_stronghold = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-stronghold-library" | "--shot-library" | "--shot-silverfish" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-stronghold-library".to_string())?;
+                parsed.shot_stronghold_library = Some(std::path::PathBuf::from(value));
             }
             "--shot-end-portal" | "--shot-end" => {
                 let value = iter

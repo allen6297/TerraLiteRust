@@ -294,6 +294,7 @@ pub fn color(id: &str, metadata: u8) -> [f32; 3] {
         "mossy_cobblestone" => [0.42, 0.52, 0.32],
         "mossy_stone_bricks" => [0.46, 0.56, 0.36],
         "stone_bricks" => [0.62, 0.62, 0.58],
+        "infested_stone_bricks" => [0.62, 0.62, 0.58],
         "cracked_stone_bricks" => [0.56, 0.54, 0.50],
         "chiseled_stone_bricks" => [0.66, 0.64, 0.60],
         "water" => [0.25, 0.45, 0.75],

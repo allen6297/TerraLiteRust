@@ -7893,6 +7893,7 @@ fn tab_of(id: &str) -> &'static str {
             | "quartz"
             | "stone_bricks"
             | "cracked_stone_bricks"
+            | "infested_stone_bricks"
             | "sandstone"
             | "end_stone"
             | "end_stone_bricks"

@@ -6487,6 +6487,252 @@ fn magma_bounds(cube: &MagmaBody) -> ([f32; 3], [f32; 3]) {
     )
 }
 
+/// Stronghold silverfish pad — emerges from the infested hall.
+pub const SILVERFISH_PAD: (i32, i32) = rebuild_world::STRONGHOLD_SILVERFISH;
+
+const SILVERFISH_HEARTS: i32 = 4;
+const SILVERFISH_HUNT: f32 = 10.0;
+const SILVERFISH_REACH: f32 = 1.05;
+const SILVERFISH_STEP: f32 = 0.16;
+const SILVERFISH_BITE_EVERY: u32 = 16;
+const SILVERFISH_MAX: usize = 8;
+
+struct SilverBody {
+    origin: [f32; 3],
+    yaw: f32,
+    hearts: i32,
+    swing: u32,
+    loose: u32,
+}
+
+/// Nest of silverfish that erupt from infested stronghold bricks.
+pub struct Silverfish {
+    bugs: Vec<SilverBody>,
+    home: [f32; 3],
+}
+
+impl Silverfish {
+    pub fn new() -> Self {
+        let (x, z) = SILVERFISH_PAD;
+        let floor = f32::from(rebuild_world::STRONGHOLD_LIBRARY_FLOOR);
+        Self {
+            bugs: Vec::new(),
+            home: [x as f32 + 0.5, floor, z as f32 + 0.5],
+        }
+    }
+
+    pub fn alive(&self) -> bool {
+        !self.bugs.is_empty()
+    }
+
+    pub fn count(&self) -> usize {
+        self.bugs.len()
+    }
+
+    pub fn origin(&self) -> [f32; 3] {
+        self.bugs
+            .first()
+            .map(|bug| bug.origin)
+            .unwrap_or(self.home)
+    }
+
+    /// Place one demo bug for shots / tests.
+    pub fn place_at(&mut self, at: [f32; 3]) {
+        self.home = at;
+        self.bugs.clear();
+        self.emerge(at);
+    }
+
+    /// Freeze skitter (proof shots).
+    pub fn hold_pose(&mut self) {
+        for bug in &mut self.bugs {
+            bug.loose = 10_000;
+        }
+    }
+
+    /// Burst a silverfish out of a broken infested brick.
+    pub fn emerge(&mut self, at: [f32; 3]) {
+        if self.bugs.len() >= SILVERFISH_MAX {
+            return;
+        }
+        let n = self.bugs.len() as f32;
+        self.bugs.push(SilverBody {
+            origin: [
+                at[0] + (n * 0.37).sin() * 0.25,
+                at[1],
+                at[2] + (n * 0.51).cos() * 0.25,
+            ],
+            yaw: n * 0.9,
+            hearts: SILVERFISH_HEARTS,
+            swing: n as u32 * 3,
+            loose: 4,
+        });
+    }
+
+    pub fn aimed_index(&self, eye: [f32; 3], forward: [f32; 3]) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, bug) in self.bugs.iter().enumerate() {
+            let center = [bug.origin[0], bug.origin[1] + 0.2, bug.origin[2]];
+            let to = [
+                center[0] - eye[0],
+                center[1] - eye[1],
+                center[2] - eye[2],
+            ];
+            let along = to[0] * forward[0] + to[1] * forward[1] + to[2] * forward[2];
+            if !(0.0..=6.0).contains(&along) {
+                continue;
+            }
+            let closest = [
+                eye[0] + forward[0] * along,
+                eye[1] + forward[1] * along,
+                eye[2] + forward[2] * along,
+            ];
+            let dx = closest[0] - center[0];
+            let dy = closest[1] - center[1];
+            let dz = closest[2] - center[2];
+            if dx * dx + dy * dy + dz * dz > 0.55 {
+                continue;
+            }
+            if best.is_none_or(|(_, so_far)| along < so_far) {
+                best = Some((index, along));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
+    pub fn aimed(&self, eye: [f32; 3], forward: [f32; 3]) -> bool {
+        self.aimed_index(eye, forward).is_some()
+    }
+
+    /// Spend hearts on the aimed bug. True when that bug dies.
+    pub fn hurt_aimed(&mut self, eye: [f32; 3], forward: [f32; 3], amount: i32) -> bool {
+        let Some(index) = self.aimed_index(eye, forward) else {
+            return false;
+        };
+        if amount <= 0 || index >= self.bugs.len() {
+            return false;
+        }
+        self.bugs[index].hearts -= amount;
+        if self.bugs[index].hearts > 0 {
+            self.bugs[index].loose = 6;
+            return false;
+        }
+        self.bugs.remove(index);
+        true
+    }
+
+    /// Skitter toward the player. True when a bite is due.
+    pub fn tick_near(&mut self, count: u32, player: [f32; 3]) -> bool {
+        if self.bugs.is_empty() {
+            return false;
+        }
+        let mut bite = false;
+        for _ in 0..count {
+            for bug in &mut self.bugs {
+                if bug.loose > 0 {
+                    bug.loose = bug.loose.saturating_sub(1);
+                    continue;
+                }
+                bug.swing = bug.swing.wrapping_add(1);
+                let dx = player[0] - bug.origin[0];
+                let dz = player[2] - bug.origin[2];
+                let dist = (dx * dx + dz * dz).sqrt();
+                if dist > 0.05 && dist < SILVERFISH_HUNT {
+                    let step = SILVERFISH_STEP.min(dist);
+                    bug.origin[0] += dx / dist * step;
+                    bug.origin[2] += dz / dist * step;
+                    face_box(&mut bug.yaw, dx, dz);
+                }
+                if dist <= SILVERFISH_REACH && bug.swing % SILVERFISH_BITE_EVERY == 0 {
+                    bite = true;
+                }
+            }
+        }
+        bite
+    }
+
+    pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let Some(bug) = self.bugs.first() else {
+            return ([0.0, -8.0, 0.0], [0.0, -8.0, 0.0]);
+        };
+        silver_bounds(bug)
+    }
+
+    pub fn all_bounds(&self) -> Vec<([f32; 3], [f32; 3])> {
+        self.bugs.iter().map(silver_bounds).collect()
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        for bug in &self.bugs {
+            let [x, y, z] = bug.origin;
+            let bob = (bug.swing as f32 * 0.45).sin() * 0.03;
+            let body = [0.72, 0.74, 0.78];
+            let dark = [0.38, 0.4, 0.44];
+            let eye = [0.12, 0.08, 0.08];
+            // Segmented silver body.
+            push_box(
+                &mut out,
+                [x, y + 0.14 + bob, z],
+                [0.22, 0.1, 0.14],
+                body,
+            );
+            push_box(
+                &mut out,
+                [x + 0.18, y + 0.12 + bob, z],
+                [0.12, 0.08, 0.1],
+                dark,
+            );
+            push_box(
+                &mut out,
+                [x - 0.18, y + 0.12 + bob, z],
+                [0.1, 0.07, 0.09],
+                dark,
+            );
+            // Tiny eyes on +Z.
+            push_box(
+                &mut out,
+                [x - 0.06, y + 0.18 + bob, z + 0.12],
+                [0.03, 0.03, 0.02],
+                eye,
+            );
+            push_box(
+                &mut out,
+                [x + 0.06, y + 0.18 + bob, z + 0.12],
+                [0.03, 0.03, 0.02],
+                eye,
+            );
+            let _ = bug.yaw;
+        }
+        out
+    }
+}
+
+fn silver_bounds(bug: &SilverBody) -> ([f32; 3], [f32; 3]) {
+    let [x, y, z] = bug.origin;
+    ([x - 0.28, y, z - 0.22], [x + 0.28, y + 0.32, z + 0.22])
+}
+
+#[cfg(test)]
+mod silverfish_tests {
+    use super::*;
+
+    #[test]
+    fn silverfish_emerge_from_infested_breaks() {
+        let mut nest = Silverfish::new();
+        assert!(!nest.alive());
+        nest.emerge([30.5, 3.0, -22.5]);
+        nest.emerge([31.5, 3.0, -22.5]);
+        assert_eq!(nest.count(), 2);
+        assert!(nest.alive());
+        let eye = [29.5, 3.2, -22.5];
+        let forward = [1.0, 0.0, 0.0];
+        assert!(nest.aimed(eye, forward));
+        assert!(nest.hurt_aimed(eye, forward, 99));
+        assert_eq!(nest.count(), 1);
+    }
+}
+
 /// Nether pocket piglin — gold-ingot barter; hostile without gold armor, angry when struck.
 pub const PIGLIN_PAD: (i32, i32) = rebuild_world::NETHER_PIGLIN;
 

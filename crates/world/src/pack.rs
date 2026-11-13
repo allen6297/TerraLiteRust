@@ -3512,6 +3512,7 @@ fn pick_block(id: &str) -> bool {
             | "cracked_stone_bricks"
             | "mossy_stone_bricks"
             | "chiseled_stone_bricks"
+            | "infested_stone_bricks"
             | "sandstone"
             | "red_sandstone"
             | "cobblestone"
