@@ -453,9 +453,63 @@ mod tests {
             let _ = volume.upload();
         }
         let ms = start.elapsed().as_secs_f64() * 1000.0 / 30.0;
+        eprintln!("soft-probe open-ground: {ms:.3} ms / 48-batch frame");
         assert!(
             ms < 1.0,
             "a debug frame of tracing stays interactive, {ms:.3} ms"
+        );
+    }
+
+    /// Post-content dense ring: demo pad + village + stronghold/library +
+    /// ancient-city stamps. Release remesure for VG-690 Soft cost.
+    #[test]
+    fn a_frame_traces_a_short_batch_on_dense_post_content() {
+        assert_eq!(BATCH, 48);
+        // Chunks cover village (0,-2), stronghold (1,-1), library (1,-2),
+        // ancient city (0,3), plus surrounding terrain after the content flood.
+        let mut chunks = Vec::new();
+        for z in -3..=4 {
+            for x in -3..=3 {
+                chunks.push(rebuild_world::generate_chunk(x, z));
+            }
+        }
+        let world = Cluster::try_from_chunks(0, 0, chunks).unwrap();
+        let light = [0.25_f32, 1.0, -0.72];
+        // Walk the village → stronghold → ancient-city mouth so probes hit
+        // roofs, halls, and dense stamp solids — not just open grass.
+        let path = [
+            [8.0_f32, 5.0, -22.0],
+            [24.0, 5.0, -8.0],
+            [24.0, 5.0, -22.0],
+            [8.0, 6.0, 49.0],
+            [8.0, 5.0, 14.0],
+        ];
+        let mut volume = Volume::new();
+        volume.advance(&world, path[0], light);
+        const FRAMES: u32 = 60;
+        let start = std::time::Instant::now();
+        for step in 0..FRAMES {
+            let t = step as f32 / (FRAMES - 1) as f32;
+            let seg = (t * (path.len() - 1) as f32).min((path.len() - 2) as f32);
+            let i = seg.floor() as usize;
+            let f = seg - i as f32;
+            let a = path[i];
+            let b = path[i + 1];
+            let eye = [
+                a[0] + (b[0] - a[0]) * f,
+                a[1] + (b[1] - a[1]) * f,
+                a[2] + (b[2] - a[2]) * f,
+            ];
+            volume.advance(&world, eye, light);
+            let _ = volume.upload();
+        }
+        let ms = start.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        eprintln!("soft-probe dense-post-content: {ms:.3} ms / 48-batch frame");
+        // Phase F baseline was ~0.23 ms debug on open ground; dense release
+        // should stay well under a millisecond so Soft stays interactive.
+        assert!(
+            ms < 1.0,
+            "dense Soft 48-probe frame stays interactive, {ms:.3} ms"
         );
     }
 

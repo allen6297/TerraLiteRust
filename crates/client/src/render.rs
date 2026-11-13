@@ -30622,8 +30622,12 @@ impl State {
         self.pin_shadows_shot_camera();
         self.shadows_shot_frames = self.shadows_shot_frames.saturating_add(1);
         // Wait for the wall mesh + soft-grid / cascade fills so the umbra settles.
-        if self.shadows_shot_frames < 220 || !self.chunk_bake.is_idle() {
-            if self.shadows_shot_frames > 900 {
+        // Soft remesh can stay busy under landmark + mod ticks; after a settle
+        // floor, capture anyway so Soft umbra proofs are not blocked by far bakes.
+        let settled = self.shadows_shot_frames >= 220
+            && (self.chunk_bake.is_idle() || self.shadows_shot_frames >= 900);
+        if !settled {
+            if self.shadows_shot_frames > 1800 {
                 eprintln!("shadows shot timed out");
                 self.shadows_shot_path = None;
                 self.quit = true;
@@ -30653,8 +30657,10 @@ impl State {
         };
         self.pin_bounce_shot_camera();
         self.bounce_shot_frames = self.bounce_shot_frames.saturating_add(1);
-        if self.bounce_shot_frames < 220 || !self.chunk_bake.is_idle() {
-            if self.bounce_shot_frames > 900 {
+        let settled = self.bounce_shot_frames >= 220
+            && (self.chunk_bake.is_idle() || self.bounce_shot_frames >= 900);
+        if !settled {
+            if self.bounce_shot_frames > 1800 {
                 eprintln!("bounce shot timed out");
                 self.bounce_shot_path = None;
                 self.quit = true;
@@ -30685,8 +30691,14 @@ impl State {
         };
         self.pin_lighting_presence_camera();
         self.lighting_presence_frames = self.lighting_presence_frames.saturating_add(1);
-        if self.lighting_presence_frames < 240 || !self.chunk_bake.is_idle() {
-            if self.lighting_presence_frames > 1200 {
+        // Soft remesh under landmark + mod density can stay non-idle; after a
+        // settle floor, still write the Soft mood still (VG-690). Per-scene
+        // frame count resets in setup_lighting_presence_scene after each write.
+        let scene_frames = self.lighting_presence_frames;
+        let settled = scene_frames >= 240
+            && (self.chunk_bake.is_idle() || scene_frames >= 900);
+        if !settled {
+            if scene_frames > 2400 {
                 eprintln!(
                     "lighting presence timed out on {}",
                     LightingPresenceScene::ALL[self.lighting_presence_index].filename()
