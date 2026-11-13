@@ -117,7 +117,7 @@ pub use mods_enable::{
 pub use rebuild_rosegold::{GuiElement, GuiScreen, SettingOption};
 pub use region::{load_chunk_from_path, load_chunk_from_region};
 pub use registry::Registry;
-pub use rosegold::{ScriptHook, ScriptView, load_dir, load_source};
+pub use rosegold::{InvOp, ScriptHook, ScriptView, load_dir, load_source};
 pub use shape::{
     COAL_ORE, CellBox, DEEPSLATE, IRON_ORE, LANTERN, MeshFace, OAK_STAIRS, Plane, SIGN, STONE,
     Shape,

@@ -377,6 +377,16 @@ impl Hooks {
         self.scripts.drain_screen_opens()
     }
 
+    /// Hotbar edits from `player.take` / `player.give` during the last hook.
+    pub fn drain_inv_ops(&self) -> Vec<crate::rosegold::InvOp> {
+        self.scripts.drain_inv_ops()
+    }
+
+    /// Cell remembered by the last `block_entity.open_at`.
+    pub fn machine_focus(&self) -> Option<(i32, i32, i32)> {
+        self.scripts.machine_focus()
+    }
+
     /// One mob tick. The game drives `"player"`, `"sheep"`, `"pig"`, and `"zombie"`.
     pub fn entity_tick(&self, world: &mut Cluster, kind: &str) {
         self.scripts.entity_tick(world, kind);

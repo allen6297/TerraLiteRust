@@ -14517,6 +14517,7 @@ impl State {
         }
         if cancel {
             self.flush_script_writes();
+            self.flush_script_inv();
             self.flush_script_screens();
             return true;
         }
@@ -14549,6 +14550,7 @@ impl State {
         } else {
             let _ = self.hooks.drain_writes();
         }
+        self.flush_script_inv();
         self.flush_script_screens();
         cancel
     }
@@ -14566,6 +14568,41 @@ impl State {
                 self.clear_motion();
                 self.set_capture(false);
             }
+        }
+    }
+
+    /// Apply `player.take` / `player.give` queued during a script hook.
+    fn flush_script_inv(&mut self) {
+        let ops = self.hooks.drain_inv_ops();
+        if ops.is_empty() {
+            return;
+        }
+        let mut dirty = false;
+        for op in ops {
+            match op {
+                rebuild_world::InvOp::Take { n } => {
+                    let selected = self.hotbar.selected();
+                    for _ in 0..n {
+                        if self.hotbar.count(selected) == 0 {
+                            break;
+                        }
+                        self.hotbar.consume_at(selected);
+                        dirty = true;
+                    }
+                }
+                rebuild_world::InvOp::Give { id, n } => {
+                    for _ in 0..n {
+                        if self.hotbar.collect(&id) {
+                            dirty = true;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if dirty {
+            self.hotbar_dirty = true;
         }
     }
 
@@ -32171,6 +32208,7 @@ impl State {
         {
             self.gui.push_chat(&line);
         }
+        self.flush_script_inv();
         self.gui
             .sync_built(&rebuild_world::Pack::builtin().gui_screens());
     }
@@ -36372,6 +36410,7 @@ impl State {
             self.entity_time -= steps as f32 * 0.05;
             self.hooks.drive_entities(&mut self.world, steps);
             self.flush_script_writes();
+            self.flush_script_inv();
             let feet = [self.camera.eye.x, self.camera.eye.z];
             if self.shadows_shot_path.is_none()
                 && self.bounce_shot_path.is_none()

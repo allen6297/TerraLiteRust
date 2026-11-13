@@ -421,11 +421,24 @@ pub(crate) struct ScriptTable {
     lines: std::cell::RefCell<Vec<String>>,
     /// GUIAPI screen names `gui.open` asked for during the hook.
     pending_screens: std::cell::RefCell<Vec<String>>,
+    /// Hotbar edits from `player.take` / `player.give` during the hook.
+    pending_inv: std::cell::RefCell<Vec<InvOp>>,
+    /// Machine focus from the last `block_entity.open_at`.
+    machine_focus: std::cell::RefCell<Option<(i32, i32, i32)>>,
     /// Fill place/remove hooks deferred until the outer `Host::call` returns.
     /// Firing them inside `answer` would re-enter the host and deadlock.
     pending_fills: std::cell::RefCell<Vec<PendingFill>>,
     /// Hotbar the server last heard. Empty until a hotbar packet arrives.
     inventory: std::cell::RefCell<SyncedBar>,
+}
+
+/// One hotbar mutation queued by a script hook.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InvOp {
+    /// Remove `n` from the selected stack.
+    Take { n: i32 },
+    /// Add `n` of `id` into the hotbar.
+    Give { id: String, n: i32 },
 }
 
 /// One fill transition waiting to run `fill_place` / `fill_remove`.
@@ -506,6 +519,8 @@ impl ScriptTable {
             live_spawns: std::cell::RefCell::new(Vec::new()),
             lines: std::cell::RefCell::new(Vec::new()),
             pending_screens: std::cell::RefCell::new(Vec::new()),
+            pending_inv: std::cell::RefCell::new(Vec::new()),
+            machine_focus: std::cell::RefCell::new(None),
             pending_fills: std::cell::RefCell::new(Vec::new()),
             inventory: std::cell::RefCell::new(SyncedBar {
                 selected: 0,
@@ -540,6 +555,14 @@ impl ScriptTable {
 
     pub(crate) fn drain_screen_opens(&self) -> Vec<String> {
         self.pending_screens.borrow_mut().drain(..).collect()
+    }
+
+    pub(crate) fn drain_inv_ops(&self) -> Vec<InvOp> {
+        self.pending_inv.borrow_mut().drain(..).collect()
+    }
+
+    pub(crate) fn machine_focus(&self) -> Option<(i32, i32, i32)> {
+        *self.machine_focus.borrow()
     }
 
     pub(crate) fn has(&self, kind: &str, id: &str) -> bool {
@@ -2158,6 +2181,34 @@ fn answer(
         }
         Query::Slot { index } => Ok(Answer::Text(hotbar_slot(view.slots, index).0)),
         Query::Count { index } => Ok(Answer::Int(i64::from(hotbar_slot(view.slots, index).1))),
+        Query::Take { n } => {
+            if !(1..=64).contains(&n) || view.selected <= 0 {
+                return Ok(Answer::Bool(false));
+            }
+            let (id, count) = hotbar_slot(view.slots, view.selected);
+            if id.is_empty() || count < n {
+                return Ok(Answer::Bool(false));
+            }
+            table
+                .pending_inv
+                .borrow_mut()
+                .push(InvOp::Take { n });
+            Ok(Answer::Bool(true))
+        }
+        Query::Give { id, n } => {
+            if !(1..=64).contains(&n) || id.is_empty() || id == "air" || !pack.contains_item(&id)
+            {
+                return Ok(Answer::Bool(false));
+            }
+            if !hotbar_room_for(view.slots, &id, n) {
+                return Ok(Answer::Bool(false));
+            }
+            table
+                .pending_inv
+                .borrow_mut()
+                .push(InvOp::Give { id, n });
+            Ok(Answer::Bool(true))
+        }
         Query::IsAir { x, y, z } => Ok(Answer::Bool(
             world.in_bounds(x, y, z) && world.block_at(x, y, z).is_air(),
         )),
@@ -2376,6 +2427,35 @@ fn answer(
             Ok(Answer::Bool(had))
         }
         Query::TileHas { x, y, z } => Ok(Answer::Bool(pack.tile_has(x, y, z))),
+        Query::OpenAt { x, y, z, name } => {
+            if !pack.has_gui_screen(&name) {
+                return Ok(Answer::Bool(false));
+            }
+            *table.machine_focus.borrow_mut() = Some((x, y, z));
+            pending_screens.borrow_mut().push(name);
+            Ok(Answer::Bool(true))
+        }
+        Query::FocusX => Ok(Answer::Int(
+            table
+                .machine_focus
+                .borrow()
+                .map(|(x, _, _)| i64::from(x))
+                .unwrap_or(0),
+        )),
+        Query::FocusY => Ok(Answer::Int(
+            table
+                .machine_focus
+                .borrow()
+                .map(|(_, y, _)| i64::from(y))
+                .unwrap_or(0),
+        )),
+        Query::FocusZ => Ok(Answer::Int(
+            table
+                .machine_focus
+                .borrow()
+                .map(|(_, _, z)| i64::from(z))
+                .unwrap_or(0),
+        )),
         Query::OpenGui { name } => {
             if !pack.has_gui_screen(&name) {
                 return Ok(Answer::Bool(false));
@@ -2426,6 +2506,30 @@ fn soft_light(
 
 fn axis(view: &ScriptView<'_>, index: usize) -> f64 {
     view.eye.map(|eye| f64::from(eye[index])).unwrap_or(0.0)
+}
+
+fn hotbar_room_for(slots: &[(String, i32)], id: &str, n: i32) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut need = n;
+    let mut empty = 0i32;
+    for (have, count) in slots {
+        if have.is_empty() {
+            empty += 1;
+            continue;
+        }
+        if have == id {
+            let room = (64i32).saturating_sub(*count);
+            if room > 0 {
+                need -= room.min(need);
+                if need <= 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    need <= empty.saturating_mul(64)
 }
 
 fn hotbar_slot(slots: &[(String, i32)], index: i32) -> (String, i32) {
@@ -3950,6 +4054,71 @@ fn main(): Int {
         let said = hooks.screen_row(&mut world, "talk", "oak", &ScriptView::bare());
         assert_eq!(said, vec!["oak noted".to_string()]);
         assert_eq!(world.block_at(1, 1, 1).id, "stone");
+    }
+
+    #[test]
+    fn a_script_machine_opens_with_focus_and_deposits_from_the_hotbar() {
+        let source = r#"
+import ModAPI;
+import Blocks;
+import BlockEntities;
+import GUIAPI;
+
+fn on_use(item: String, block: String, x: Int, y: Int, z: Int): Bool {
+    if (block != "demo:kiln") {
+        return true;
+    }
+    BlockEntities.openAt(x, y, z, "kiln_ui");
+    return false;
+}
+
+fn on_press(row: String) {
+    if (row == "put_in") {
+        if (BlockEntities.depositFocus("in")) {
+            chat.say("in ok");
+        } else {
+            chat.say("in fail");
+        }
+    }
+}
+
+fn on_init() {
+    var Mod: TLMod = ModAPI.createMod("demo", "1.0.0");
+    var Register: TLRegister = ModAPI.createRegister(Mod);
+    Register.BLOCK.open();
+    Register.BLOCK_ENTITY.open();
+    Register.SCREEN.open();
+    var kiln = Blocks.defineBlock("demo", "kiln", "", "", 1.0, 0);
+    BlockEntities.bind(kiln.id);
+    Register.BLOCK_ENTITY.register("demo", "kiln");
+    var panel = GUIAPI.createScreen("kiln_ui", GUIAPI.vec(200.0, 120.0), GUIAPI.vec(16.0, 16.0));
+    GUIAPI.addElement(panel, GUIAPI.button("put_in", "Put"));
+    GUIAPI.on_press(panel, "m", on_press);
+    Register.SCREEN.register("demo", "ui");
+    Mod.listenUseBlock("demo-use", on_use);
+}
+
+fn main(): Int {
+    return 0;
+}
+"#;
+        let mut hooks = Hooks::new();
+        load_source(source, &mut hooks).unwrap();
+        let pack = Pack::builtin();
+        assert!(pack.is_script_block_entity("demo:kiln"));
+        assert!(pack.has_gui_screen("kiln_ui"));
+        let mut world = sample();
+        assert!(world.set_block(2, 1, 1, Block::new("demo:kiln", 0)));
+        let slots = vec![("sand".to_string(), 8)];
+        let view = hand(&slots);
+        assert!(!hooks.use_block(&mut world, "sand", "demo:kiln", 2, 1, 1, &view));
+        assert_eq!(hooks.machine_focus(), Some((2, 1, 1)));
+        assert_eq!(hooks.drain_screen_opens(), vec!["kiln_ui".to_string()]);
+        let said = hooks.screen_row(&mut world, "kiln_ui", "put_in", &view);
+        assert_eq!(said, vec!["in ok".to_string()]);
+        assert_eq!(hooks.drain_inv_ops(), vec![InvOp::Take { n: 1 }]);
+        assert_eq!(pack.tile_get(2, 1, 1, "in"), "sand");
+        assert_eq!(pack.tile_get_int(2, 1, 1, "in_n"), 1);
     }
 
     #[test]

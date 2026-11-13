@@ -294,6 +294,15 @@ pub enum Query {
     Count {
         index: i32,
     },
+    /// Remove `n` from the held hotbar stack (`1..=64`).
+    Take {
+        n: i32,
+    },
+    /// Add `n` of `id` into the hotbar (`1..=64`).
+    Give {
+        id: String,
+        n: i32,
+    },
     IsAir {
         x: i32,
         y: i32,
@@ -416,6 +425,19 @@ pub enum Query {
         y: i32,
         z: i32,
     },
+    /// `block_entity.open_at(x, y, z, name)` — focus this cell and open a GUIAPI screen.
+    OpenAt {
+        x: i32,
+        y: i32,
+        z: i32,
+        name: String,
+    },
+    /// `block_entity.focus_x()` — machine focus from the last `open_at`.
+    FocusX,
+    /// `block_entity.focus_y()`.
+    FocusY,
+    /// `block_entity.focus_z()`.
+    FocusZ,
     /// `gui.open(name)` — open a GUIAPI screen from a hook.
     OpenGui {
         name: String,
@@ -879,6 +901,13 @@ fn query_of(name: &str, args: &[Value]) -> Result<Query, String> {
         "player.held" => Ok(Query::Held),
         "player.selected" => Ok(Query::Selected),
         "player.present" => Ok(Query::Present),
+        "player.take" => Ok(Query::Take {
+            n: int_at(args, 0)?,
+        }),
+        "player.give" => Ok(Query::Give {
+            id: text_at(args, 0)?,
+            n: int_at(args, 1)?,
+        }),
         "player.x" => Ok(Query::PlayerX),
         "player.y" => Ok(Query::PlayerY),
         "player.z" => Ok(Query::PlayerZ),
@@ -942,6 +971,15 @@ fn query_of(name: &str, args: &[Value]) -> Result<Query, String> {
             y: int_at(args, 1)?,
             z: int_at(args, 2)?,
         }),
+        "block_entity.open_at" => Ok(Query::OpenAt {
+            x: int_at(args, 0)?,
+            y: int_at(args, 1)?,
+            z: int_at(args, 2)?,
+            name: text_at(args, 3)?,
+        }),
+        "block_entity.focus_x" => Ok(Query::FocusX),
+        "block_entity.focus_y" => Ok(Query::FocusY),
+        "block_entity.focus_z" => Ok(Query::FocusZ),
         "gui.open" => Ok(Query::OpenGui {
             name: text_at(args, 0)?,
         }),

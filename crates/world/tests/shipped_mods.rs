@@ -8,7 +8,7 @@ use rebuild_world::{Hooks, load_dir};
 fn shipped_mods_still_load_with_the_guide() {
     let mut hooks = Hooks::new();
     let loaded = load_dir(Path::new(r"C:\CODE\TerraLite\mods"), &mut hooks).expect("mods load");
-    assert_eq!(loaded.len(), 4);
+    assert_eq!(loaded.len(), 5);
     let guide = Path::new("k's-guide").join("src").join("mod.rg");
     assert!(
         loaded
@@ -30,10 +30,18 @@ fn shipped_mods_still_load_with_the_guide() {
             .iter()
             .any(|(path, _hooks)| path.ends_with("craft-story.rg"))
     );
+    assert!(
+        loaded
+            .iter()
+            .any(|(path, _hooks)| path.ends_with("kiln.rg"))
+    );
     let pack = rebuild_world::Pack::builtin();
     assert!(pack.contains_block("guide:marker"));
     assert!(pack.contains_block("ember:glow_brick"));
+    assert!(pack.contains_block("kiln:kiln"));
     assert!(pack.contains_block("craft:paver"));
+    assert!(pack.is_script_block_entity("kiln:kiln"));
+    assert!(pack.has_gui_screen("kiln_panel"));
     assert_eq!(
         pack.script_block_loot("dirt").as_deref(),
         Some(&["torch".to_string(), "apple".to_string()][..])
