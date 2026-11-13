@@ -41,6 +41,12 @@ pub enum Sound {
     Horn,
     /// A heavy mace hit.
     Mace,
+    /// A soft melee hit impact (lighter than a mace).
+    Hit,
+    /// A soft hurt grunt when hearts drop.
+    Hurt,
+    /// A soft shield block knock.
+    Block,
     /// A wind-charge burst.
     Gust,
     /// A short soft hiss while the afternoon fog is up.
@@ -695,6 +701,9 @@ impl Audio {
             Sound::Note(pitch) => thud(note_hz(pitch), 0.22, 0.34),
             Sound::Horn => horn_call(),
             Sound::Mace => thud(70.0, 0.16, 0.5),
+            Sound::Hit => soft_hit(),
+            Sound::Hurt => soft_hurt(),
+            Sound::Block => soft_block(),
             Sound::Gust => thud(520.0, 0.12, 0.28),
             Sound::Rain => rain_hiss(),
             Sound::Bite => bite(),
@@ -1191,6 +1200,39 @@ fn chest_scrape() -> Vec<i16> {
         let scrape = (t * 780.0 * std::f32::consts::TAU).sin() * 0.14;
         let env = (t / 0.02).min(1.0) * (1.0 - t / seconds).max(0.0);
         samples.push(((n * 0.22 + wood + scrape) * 0.13 * env * 32_767.0) as i16);
+    }
+    samples
+}
+
+/// Soft melee hit. Mid thud with a short low under-layer (Mace/Gust kin).
+fn soft_hit() -> Vec<i16> {
+    let mut wave = thud(190.0, 0.08, 0.34);
+    wave.extend(thud(95.0, 0.06, 0.18));
+    wave
+}
+
+/// Soft hurt grunt when hearts drop. Lower and quieter than a hit.
+fn soft_hurt() -> Vec<i16> {
+    let mut wave = thud(130.0, 0.11, 0.26);
+    wave.extend(thud(70.0, 0.08, 0.14));
+    wave
+}
+
+/// Soft shield block knock. Brighter sibling of the wood lever thunk.
+fn soft_block() -> Vec<i16> {
+    let seconds = 0.09;
+    let count = (22_050.0 * seconds) as usize;
+    let mut noise = 101u32;
+    let mut samples = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = index as f32 / 22_050.0;
+        noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let n = ((noise >> 16) as i32 % 2001 - 1000) as f32 / 1000.0;
+        let wood = (t * 240.0 * std::f32::consts::TAU).sin() * 0.4
+            + (t * 420.0 * std::f32::consts::TAU).sin() * 0.22;
+        let rim = (t * 1_280.0 * std::f32::consts::TAU).sin() * 0.14;
+        let env = (t / 0.007).min(1.0) * (1.0 - t / seconds).max(0.0).powf(1.35);
+        samples.push(((n * 0.16 + wood + rim) * 0.18 * env * 32_767.0) as i16);
     }
     samples
 }
@@ -1789,6 +1831,21 @@ mod tests {
         audio.set_muted(true);
         audio.play(Sound::Thunk);
         assert_eq!(audio.played, vec![Sound::Thunk]);
+    }
+
+    #[test]
+    fn combat_foley_hit_hurt_block_play_and_respect_mute() {
+        let mut audio = Audio::new();
+        audio.play(Sound::Hit);
+        audio.play(Sound::Hurt);
+        audio.play(Sound::Block);
+        assert_eq!(audio.played, vec![Sound::Hit, Sound::Hurt, Sound::Block]);
+        assert!(audio.last_wave.len() > 44);
+        audio.set_muted(true);
+        audio.play(Sound::Hit);
+        audio.play(Sound::Hurt);
+        audio.play(Sound::Block);
+        assert_eq!(audio.played, vec![Sound::Hit, Sound::Hurt, Sound::Block]);
     }
 
     #[test]

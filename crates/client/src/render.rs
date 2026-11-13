@@ -3944,6 +3944,11 @@ impl State {
         self.shield_raised = true;
         self.shield_show = 1.0;
         self.slot_punch = 0.7;
+        // Soft combat Foley tip for listen proof (dedicated block knock).
+        self.play_world(
+            crate::audio::Sound::Block,
+            [eye.x, eye.y, eye.z],
+        );
         // Quiet other feel plates so the "block" cue is the one that reads.
         self.crouch = 0.0;
         self.sprint_show = 0.0;
@@ -6910,7 +6915,7 @@ impl State {
         self.shield_raised = false;
     }
 
-    /// Spend a raised shield against a melee/projectile hit. Plays a thud.
+    /// Spend a raised shield against a melee/projectile hit. Plays soft block Foley.
     fn try_shield_block(&mut self) -> bool {
         if !self.shield_raised || !self.holding_shield() {
             return false;
@@ -6921,9 +6926,9 @@ impl State {
         }
         self.hotbar_dirty = true;
         let source = self.camera.eye.to_array();
-        self.play_world(crate::audio::Sound::Thunk, source);
+        self.play_world(crate::audio::Sound::Block, source);
         self.gui.push_chat("blocked");
-        // Keep the raise readable for a beat after the thud.
+        // Keep the raise readable for a beat after the knock.
         self.slot_punch = self.slot_punch.max(0.85);
         true
     }
@@ -10817,6 +10822,8 @@ impl State {
         if self.dead || amount <= 0 || self.menu.creative() {
             return;
         }
+        let source = self.camera.eye.to_array();
+        self.play_world(crate::audio::Sound::Hurt, source);
         self.hurt_flash = 1.0;
         self.hit_kick = 1.0;
         if self.hearts - amount <= 0 && self.try_totem_save() {
@@ -12799,6 +12806,8 @@ impl State {
         self.camera = Camera::looking_at(eye, focus);
         self.camera.velocity_y = 0.0;
         self.camera.on_ground = true;
+        // Soft combat Foley tip for listen proof (slash is no longer chat-only).
+        self.play_world(crate::audio::Sound::Hit, eye.to_array());
         let (yaw, pitch) = self.camera.yaw_pitch();
         self.cook_shot_eye = eye;
         self.cook_shot_yaw = yaw;
@@ -36566,7 +36575,12 @@ impl State {
                     let blocked = self.try_shield_block();
                     let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                     self.apply_damage(amount);
-                    self.gui.push_chat(if blocked { "block" } else { "slash" });
+                    if blocked {
+                        self.gui.push_chat("block");
+                    } else {
+                        self.play_world(crate::audio::Sound::Hit, eye3);
+                        self.gui.push_chat("slash");
+                    }
                 }
                 // Tip when gold (or its absence) first matters near the piglin.
                 let dx = feet[0] - from[0];
@@ -36647,7 +36661,12 @@ impl State {
                     let blocked = self.try_shield_block();
                     let amount = body::bite_hearts(blocked, 1, self.armor_soak());
                     self.apply_damage(amount);
-                    self.gui.push_chat("slash");
+                    if blocked {
+                        self.gui.push_chat("block");
+                    } else {
+                        self.play_world(crate::audio::Sound::Hit, eye3);
+                        self.gui.push_chat("slash");
+                    }
                 }
                 if self.wither.rest(dt) {
                     self.rebuild_wither();
