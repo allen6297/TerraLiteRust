@@ -5,8 +5,10 @@
 //! is not saved and does not enter the hotbar until the player walks into
 //! it. A full hotbar leaves it where it is, unless the caller also offers
 //! the inventory. Nearby loot gently homes toward the player after a short
-//! settle (tunable magnet — not a whole-chunk vacuum). Sparks stay small
-//! untextured cubes.
+//! settle (tunable magnet — not a whole-chunk vacuum). Feel motes (fireflies,
+//! rain splash, embers, cold breath, leaves, smoke) sample Whimscape particle
+//! sprites when that overlay is enabled; otherwise they stay small untextured
+//! cubes.
 
 use rebuild_world::Block;
 
@@ -52,6 +54,8 @@ struct Mote {
     /// Snow footprint: sits on the snow layer and fades.
     print: bool,
     half: f32,
+    /// Pack particle atlas path when Whimscape supplies a 16×16 sprite.
+    sprite: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -89,7 +93,7 @@ impl Drops {
                 life: 0.35,
                 rise: false,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.04,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.04,
             });
         }
     }
@@ -113,7 +117,7 @@ impl Drops {
                 life: 0.7,
                 rise: false,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.04,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.04,
             });
         }
     }
@@ -189,6 +193,7 @@ impl Drops {
                 hover: false,
                 tumble: false,
                 frost: true, print: false,
+                sprite: Some(crate::texture::PARTICLE_FREEZING),
                 half: 0.06,
             });
             count += 1;
@@ -233,6 +238,7 @@ impl Drops {
             frost: false,
             print: true,
             half,
+            sprite: None,
         });
     }
 
@@ -259,7 +265,8 @@ impl Drops {
             life: 0.55,
             rise: false,
             hover: false,
-            tumble: false,            frost: false, print: false,            half: 0.07,
+            tumble: false,            frost: false, print: false,
+            sprite: Some(crate::texture::PARTICLE_DRIP), half: 0.07,
         });
         self.motes.push(Mote {
             center: [origin[0] + 0.06, origin[1] + 0.16, origin[2] - 0.05],
@@ -269,7 +276,8 @@ impl Drops {
             life: 0.45,
             rise: false,
             hover: false,
-            tumble: false,            frost: false, print: false,            half: 0.06,
+            tumble: false,            frost: false, print: false,
+            sprite: Some(crate::texture::PARTICLE_DRIP), half: 0.06,
         });
         // Flat ripples: both rise+hover marks rain splash (not smoke, not firefly).
         // Keep centers above the top face so expanding cubes do not Z-fight grass.
@@ -298,7 +306,8 @@ impl Drops {
                 life,
                 rise: true,
                 hover: true,
-                tumble: false,                frost: false, print: false,                half: 0.08,
+                tumble: false,                frost: false, print: false,
+                sprite: Some(crate::texture::PARTICLE_SPLASH), half: 0.08,
             });
         }
     }
@@ -313,7 +322,7 @@ impl Drops {
             life: 10.0,
             rise: false,
             hover: true,
-            tumble: false,            frost: false, print: false,            half: 0.11,
+            tumble: false,            frost: false, print: false,            sprite: None, half: 0.11,
         });
     }
 
@@ -361,6 +370,7 @@ impl Drops {
             hover: true,
             tumble: false,
             frost: false, print: false,
+            sprite: Some(crate::texture::PARTICLE_FIREFLY),
             // Tiny warm points — blink grows half in tick_motes.
             half: 0.035,
         });
@@ -415,7 +425,8 @@ impl Drops {
             life,
             rise: false,
             hover: false,
-            tumble: true,            frost: false, print: false,            half: 0.055,
+            tumble: true,            frost: false, print: false,
+            sprite: Some(crate::texture::PARTICLE_LEAF), half: 0.055,
         });
     }
 
@@ -429,7 +440,7 @@ impl Drops {
             life: 0.7,
             rise: false,
             hover: true,
-            tumble: false,            frost: false, print: false,            half: 0.08,
+            tumble: false,            frost: false, print: false,            sprite: None, half: 0.08,
         });
         self.motes.push(Mote {
             center: [origin[0], origin[1] + 0.06, origin[2]],
@@ -439,7 +450,7 @@ impl Drops {
             life: 0.65,
             rise: false,
             hover: true,
-            tumble: false,            frost: false, print: false,            half: 0.05,
+            tumble: false,            frost: false, print: false,            sprite: None, half: 0.05,
         });
     }
 
@@ -475,7 +486,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
-                tumble: false,                frost: false, print: false,                half: 0.035,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.035,
             });
         }
     }
@@ -507,7 +518,7 @@ impl Drops {
                 life: 0.95,
                 rise: false,
                 hover: false,
-                tumble: true,                frost: false, print: false,                half: 0.06,
+                tumble: true,                frost: false, print: false,                sprite: None, half: 0.06,
             });
         }
     }
@@ -534,7 +545,7 @@ impl Drops {
                 life: 0.7,
                 rise: false,
                 hover: false,
-                tumble: true,                frost: false, print: false,                half: 0.05,
+                tumble: true,                frost: false, print: false,                sprite: None, half: 0.05,
             });
         }
     }
@@ -566,7 +577,7 @@ impl Drops {
                 life: 0.85,
                 rise: false,
                 hover: false,
-                tumble: true,                frost: false, print: false,                half: 0.055,
+                tumble: true,                frost: false, print: false,                sprite: None, half: 0.055,
             });
         }
     }
@@ -595,7 +606,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.06,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.06,
             });
         }
     }
@@ -625,7 +636,7 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.07,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.07,
             });
         }
     }
@@ -652,7 +663,7 @@ impl Drops {
                 life: 1.1,
                 rise: true,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.08,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.08,
             });
         }
     }
@@ -716,7 +727,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
-                tumble: false,                frost: false, print: false,                half: 0.05,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.05,
             });
         }
     }
@@ -753,7 +764,7 @@ impl Drops {
                 life,
                 rise: false,
                 hover: true,
-                tumble: false,                frost: false, print: false,                half: 0.055,
+                tumble: false,                frost: false, print: false,                sprite: None, half: 0.055,
             });
         }
     }
@@ -793,7 +804,8 @@ impl Drops {
                 life,
                 rise: false,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.04,
+                tumble: false,                frost: false, print: false,
+                sprite: Some(crate::texture::PARTICLE_FLAME), half: 0.04,
             });
             n += 1;
         }
@@ -855,7 +867,8 @@ impl Drops {
                 life,
                 rise: true,
                 hover: false,
-                tumble: false,                frost: false, print: false,                half: 0.12,
+                tumble: false,                frost: false, print: false,
+                sprite: Some(crate::texture::PARTICLE_SMOKE), half: 0.12,
             });
             smoke_n += 1;
         }
@@ -1136,7 +1149,7 @@ impl Drops {
             .min_by(|left, right| dist2(left.center, at).total_cmp(&dist2(right.center, at)))
     }
 
-    /// Items face +Z. Sparks stay cubes. Tests use this facing.
+    /// Items face +Z. Sparks stay cubes unless a pack particle sprite lands.
     #[cfg(test)]
     pub fn vertices(&self) -> Vec<Vertex> {
         self.vertices_facing([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
@@ -1150,12 +1163,12 @@ impl Drops {
             push_billboard(&mut vertices, drop.center, HALF, drop.id, right, up);
         }
         for mote in &self.motes {
-            push_box(&mut vertices, mote.center, mote.half, mote.color, mote.block);
+            push_mote(&mut vertices, mote, right, up);
         }
         vertices
     }
 
-    /// Each item points at `eye`. Sparks stay cubes.
+    /// Each item points at `eye`. Feel motes prefer pack particle billboards.
     pub fn vertices_toward(&self, eye: [f32; 3]) -> Vec<Vertex> {
         let mut vertices = Vec::with_capacity(self.items.len() * 6 + self.motes.len() * 36);
         for drop in &self.items {
@@ -1163,7 +1176,8 @@ impl Drops {
             push_billboard(&mut vertices, drop.center, HALF, drop.id, right, up);
         }
         for mote in &self.motes {
-            push_box(&mut vertices, mote.center, mote.half, mote.color, mote.block);
+            let (right, up) = axes_toward(mote.center, eye);
+            push_mote(&mut vertices, mote, right, up);
         }
         vertices
     }
@@ -1229,6 +1243,29 @@ fn dist2(from: [f32; 3], to: [f32; 3]) -> f32 {
 
 fn overlaps(center: [f32; 3], min: [f32; 3], max: [f32; 3]) -> bool {
     (0..3).all(|axis| center[axis] + HALF > min[axis] && center[axis] - HALF < max[axis])
+}
+
+fn push_mote(out: &mut Vec<Vertex>, mote: &Mote, right: [f32; 3], up: [f32; 3]) {
+    if let Some(path) = mote.sprite {
+        let textured = crate::texture::particle_face(path);
+        if textured > 0.0 {
+            // Pack sprites are sparse 16×16 tiles — grow the quad a touch so the
+            // art reads against cubes that used to fill the same half-extent.
+            let half = (mote.half * 1.85).clamp(0.05, 0.28);
+            push_particle_billboard(
+                out,
+                mote.center,
+                half,
+                textured,
+                mote.color,
+                mote.block,
+                right,
+                up,
+            );
+            return;
+        }
+    }
+    push_box(out, mote.center, mote.half, mote.color, mote.block);
 }
 
 fn push_box(
@@ -1312,6 +1349,42 @@ fn push_billboard(
     } else {
         color
     };
+    let tri = [0, 1, 2, 0, 2, 3];
+    for index in tri {
+        out.push(Vertex {
+            position: corner[index],
+            color,
+            normal,
+            uv: uv[index],
+            textured,
+            block,
+            bounce: [0.0, 0.0, 0.0],
+            ao: 1.0,
+        });
+    }
+}
+
+/// Camera-facing mote quad that multiplies pack particle RGB by mote tint.
+fn push_particle_billboard(
+    out: &mut Vec<Vertex>,
+    center: [f32; 3],
+    half: f32,
+    textured: f32,
+    color: [f32; 3],
+    block: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+) {
+    let right = scale(right, half);
+    let up = scale(up, half);
+    let corner = [
+        add(center, add(scale(right, -1.0), scale(up, -1.0))),
+        add(center, add(right, scale(up, -1.0))),
+        add(center, add(right, up)),
+        add(center, add(scale(right, -1.0), up)),
+    ];
+    let uv = [[0.0, 0.999], [0.999, 0.999], [0.999, 0.0], [0.0, 0.0]];
+    let normal = normalize(cross(right, up));
     let tri = [0, 1, 2, 0, 2, 3];
     for index in tri {
         out.push(Vertex {
@@ -1538,7 +1611,8 @@ mod tests {
         drops.firefly([9.0, 2.2, 25.0]);
         assert_eq!(drops.firefly_count(), 2);
         let before = drops.vertices().len();
-        assert!(before >= 2 * 36);
+        // Pack particle billboard = 6 verts; procedural cube = 36.
+        assert!(before >= 2 * 6);
         let half_a = drops.motes[0].half;
         assert!(drops.tick_motes(0.2));
         assert_eq!(drops.firefly_count(), 2);
@@ -1562,6 +1636,49 @@ mod tests {
         assert!(drops.firefly_count() <= 2);
         assert!(drops.dawn_fireflies(2.0));
         assert_eq!(drops.firefly_count(), 0);
+    }
+
+    #[test]
+    fn feel_motes_sample_pack_particle_sprites_when_bridged() {
+        let prev = rebuild_world::resource_pack_selection();
+        let mut sel = prev.clone();
+        sel.set_enabled("whimscape", true);
+        rebuild_world::install_pack_selection(sel).expect("enable whimscape");
+        crate::texture::reload_atlas();
+        let firefly_tex = crate::texture::particle_face(crate::texture::PARTICLE_FIREFLY);
+        let leaf_tex = crate::texture::particle_face(crate::texture::PARTICLE_LEAF);
+        let flame_tex = crate::texture::particle_face(crate::texture::PARTICLE_FLAME);
+        let splash_tex = crate::texture::particle_face(crate::texture::PARTICLE_SPLASH);
+        let frost_tex = crate::texture::particle_face(crate::texture::PARTICLE_FREEZING);
+        let smoke_tex = crate::texture::particle_face(crate::texture::PARTICLE_SMOKE);
+        assert!(
+            firefly_tex > 0.0
+                && leaf_tex > 0.0
+                && flame_tex > 0.0
+                && splash_tex > 0.0
+                && frost_tex > 0.0
+                && smoke_tex > 0.0,
+            "whimscape particle bridge missing"
+        );
+
+        let mut drops = Drops::new();
+        drops.firefly([1.0, 2.0, 3.0]);
+        drops.leaf([1.0, 4.0, 3.0], [0.4, 0.7, 0.2]);
+        drops.embers([2.0, 2.0, 2.0]);
+        drops.rain_splash([3.0, 1.0, 3.0]);
+        drops.frost_breath([4.0, 2.0, 4.0], [0.0, 0.0, -1.0]);
+        drops.smoke([5.0, 2.0, 5.0]);
+        let verts = drops.vertices_toward([8.0, 3.0, 8.0]);
+        assert!(verts.iter().any(|v| (v.textured - firefly_tex).abs() < 0.01));
+        assert!(verts.iter().any(|v| (v.textured - leaf_tex).abs() < 0.01));
+        assert!(verts.iter().any(|v| (v.textured - flame_tex).abs() < 0.01));
+        assert!(verts.iter().any(|v| (v.textured - splash_tex).abs() < 0.01));
+        assert!(verts.iter().any(|v| (v.textured - frost_tex).abs() < 0.01));
+        assert!(verts.iter().any(|v| (v.textured - smoke_tex).abs() < 0.01));
+        // Billboards are 6 verts; cubes stay 36 when the pack is off.
+        assert!(verts.len() < drops.motes.len() * 36);
+        let _ = rebuild_world::install_pack_selection(prev);
+        crate::texture::reload_atlas();
     }
 
     #[test]

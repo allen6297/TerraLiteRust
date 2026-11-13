@@ -102,8 +102,39 @@ const HUD_ATLAS_PATHS: &[&str] = &[
     HUD_CHROME_TIP,
 ];
 
+/// Whimscape feel-particle sprites (16×16 bridge under textures/particle/).
+pub const PARTICLE_FIREFLY: &str = "assets/terralite/textures/particle/firefly.png";
+pub const PARTICLE_FLAME: &str = "assets/terralite/textures/particle/flame.png";
+pub const PARTICLE_SPARK: &str = "assets/terralite/textures/particle/spark.png";
+pub const PARTICLE_SPLASH: &str = "assets/terralite/textures/particle/splash.png";
+pub const PARTICLE_DRIP: &str = "assets/terralite/textures/particle/drip.png";
+pub const PARTICLE_LEAF: &str = "assets/terralite/textures/particle/leaf.png";
+pub const PARTICLE_FREEZING: &str = "assets/terralite/textures/particle/freezing.png";
+pub const PARTICLE_SMOKE: &str = "assets/terralite/textures/particle/smoke.png";
+pub const PARTICLE_GLOW: &str = "assets/terralite/textures/particle/glow.png";
+
+const PARTICLE_ATLAS_PATHS: &[&str] = &[
+    PARTICLE_FIREFLY,
+    PARTICLE_FLAME,
+    PARTICLE_SPARK,
+    PARTICLE_SPLASH,
+    PARTICLE_DRIP,
+    PARTICLE_LEAF,
+    PARTICLE_FREEZING,
+    PARTICLE_SMOKE,
+    PARTICLE_GLOW,
+];
+
 /// Atlas column for a HUD GUI PNG (`slot + 1`), or `0` when missing.
 pub fn hud_face(path: &str) -> f32 {
+    texture_slot(path)
+        .map(|slot| (slot + 1) as f32)
+        .unwrap_or(0.0)
+}
+
+/// Atlas column for a feel-particle PNG (`slot + 1`), or `0` when the pack
+/// overlay does not supply that sprite (procedural mote cubes stay flat).
+pub fn particle_face(path: &str) -> f32 {
     texture_slot(path)
         .map(|slot| (slot + 1) as f32)
         .unwrap_or(0.0)
@@ -367,6 +398,10 @@ fn build_atlas() -> Atlas {
     for path in HUD_ATLAS_PATHS {
         push_tile(path, &mut tiles, &mut slots);
     }
+    // Feel particles (firefly / splash / ember / breath / leaf / smoke).
+    for path in PARTICLE_ATLAS_PATHS {
+        push_tile(path, &mut tiles, &mut slots);
+    }
     if tiles.is_empty() {
         return Atlas {
             image: Image {
@@ -444,6 +479,24 @@ mod tests {
             let tex = hud_face(path);
             assert!(tex > 0.0, "missing hud tile {path}");
         }
+    }
+
+    #[test]
+    fn particle_sprites_land_in_atlas_when_whimscape_bridged() {
+        let prev = rebuild_world::resource_pack_selection();
+        let mut sel = prev.clone();
+        sel.set_enabled("whimscape", true);
+        rebuild_world::install_pack_selection(sel).expect("enable whimscape");
+        reload_atlas();
+        for path in PARTICLE_ATLAS_PATHS {
+            let tex = particle_face(path);
+            assert!(
+                tex > 0.0,
+                "missing particle tile {path} after enabling whimscape"
+            );
+        }
+        let _ = rebuild_world::install_pack_selection(prev);
+        reload_atlas();
     }
 
     #[test]

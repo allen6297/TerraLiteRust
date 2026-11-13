@@ -13,3 +13,4 @@ MUD=mud.png / packed_mud.png / mud_bricks.png
 DEEP_DARK=reinforced_deepslate <- *_side.png; chiseled_deepslate / cracked_deepslate_bricks; soul_soil; ancient_debris <- *_side.png
 CTM_HYGIENE=solid gravel/moss_block/pale_moss_block/podzol_top bridged (never CTM overlays/20_gravel|50_podzol|80_pale_moss|81_moss masks)
 HUD_CHROME=gui/hud/{crosshair,crosshair_ready,buff_plate,chrome_panel,chrome_button,chrome_tip}.png padded/resized 16x16 from Whimscape sprites + gui/chrome
+PARTICLES=textures/particle/{firefly,flame,spark,splash,drip,leaf,freezing,smoke,glow}.png padded/resized 16x16 from Whimscape minecraft/textures/particle (feel motes sample these when overlay is on)
