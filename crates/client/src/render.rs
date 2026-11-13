@@ -1543,6 +1543,8 @@ pub struct State {
     found_reed: bool,
     /// Once: stood near the ancient city and heard the hush drip bed.
     found_hush: bool,
+    /// Once: stood near the mine mouth and heard the gravel hush drip bed.
+    found_gravel: bool,
     /// Eased night cricket mix, `0` day through `1` deep night.
     cricket_mix: f32,
     /// Eased dawn bird mix, `0` elsewhere through `1` at sunrise peak.
@@ -2916,6 +2918,7 @@ impl State {
             reed_mix: 0.0,
             found_reed: false,
             found_hush: false,
+            found_gravel: false,
             cricket_mix: 0.0,
             bird_mix: 0.0,
             crackle_mix: 0.0,
@@ -18589,11 +18592,18 @@ impl State {
         self.mine_shot_frames = 0;
         self.playing = true;
         self.menu.close_menu();
+        self.gui.close();
+        self.map_open = false;
         self.apply_chosen_size();
         rebuild_world::seed_terrain_ring(&mut self.world);
-        let _ = self
-            .world
-            .replace_chunk(rebuild_world::generate_chunk(-2, 2));
+        let (mx, mz) = rebuild_world::SHAFT_MOUTH;
+        let chunk_x = mx.div_euclid(16);
+        let chunk_z = mz.div_euclid(16);
+        for &(dx, dz) in &[(-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)] {
+            let _ = self
+                .world
+                .replace_chunk(rebuild_world::generate_chunk(chunk_x + dx, chunk_z + dz));
+        }
         self.clock.set_time_of_day(0.42);
         let light = self.sun_light();
         self.wanted_sun = light.direction;
@@ -18607,11 +18617,12 @@ impl State {
                 break;
             }
         }
+        // Stand on the gravel apron looking at the mouth chest (~6 of landmark).
         let focus = glam::Vec3::new(cx as f32 + 0.5, cy as f32 + 0.9, cz as f32 + 0.5);
         let eye = glam::Vec3::new(
-            cx as f32 + 4.5,
+            mx as f32 + 0.5,
             cy as f32 + 1.2 + body::EYE_HEIGHT,
-            cz as f32 + 0.5,
+            mz as f32 + 0.5,
         );
         self.camera = Camera::looking_at(eye, focus);
         let (yaw, pitch) = self.camera.yaw_pitch();
@@ -18623,9 +18634,10 @@ impl State {
         self.posed_pitch = pitch;
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
+        self.gui.age_chat(60.0);
         for dx in -1..=1 {
             for dz in -1..=1 {
-                self.chunk_bake.touch(cx + dx * 8, cz + dz * 8);
+                self.chunk_bake.touch(mx + dx * 8, mz + dz * 8);
             }
         }
         let _ = self.window.focus_window();
@@ -18654,7 +18666,10 @@ impl State {
         };
         self.pin_mine_shot_camera();
         self.mine_shot_frames = self.mine_shot_frames.saturating_add(1);
-        if self.mine_shot_frames < 110 || !self.chunk_bake.is_idle() {
+        // Hold ~3s so A3 gravel/drip can ease in (listen proof), then snap even if bake is busy.
+        let ready = self.mine_shot_frames >= 180
+            && (self.chunk_bake.is_idle() || self.mine_shot_frames >= 240);
+        if !ready {
             if self.mine_shot_frames > 600 {
                 eprintln!("mine shot timed out");
                 self.mine_shot_path = None;
@@ -18671,7 +18686,7 @@ impl State {
             }
             Err(err) => {
                 eprintln!("mine shot failed: {err}");
-                if self.mine_shot_frames > 250 {
+                if self.mine_shot_frames > 320 {
                     self.mine_shot_path = None;
                     self.quit = true;
                 }
@@ -35190,21 +35205,34 @@ impl State {
         };
         let was_dry = self.rain_mix < 0.35;
         let cover = cave_drip_mix(&self.world, eye);
-        let city = ancient_city_hush(eye, cover);
-        // A5: duck surface highs under roof; mouth/hall proximity also ducks.
-        let surface = surface_bed_open(sky_open, city);
+        // A3/A5: structure pockets keyed off landmark mouth distance (+ city discovery).
+        let city = ancient_city_hush(eye, cover, self.found_ancient_city);
+        let mine = mine_mouth_pocket(eye);
+        let pocket = city.max(mine);
+        // A5: duck surface highs under roof; A3 pockets also mute highs.
+        let surface = surface_bed_open(sky_open, pocket);
         let want_cricket = night * surface;
         let want_bird = dawn * surface;
         self.cricket_mix += (want_cricket - self.cricket_mix) * (dt * 0.7).min(1.0);
         self.bird_mix += (want_bird - self.bird_mix) * (dt * 0.8).min(1.0);
         self.rain_mix += (wet - self.rain_mix) * (dt * 1.1).min(1.0);
-        self.wind_mix += (open - self.wind_mix) * (dt * 0.9).min(1.0);
-        // A5 city hush: boost drip near mouth / under cover in the remnant.
-        let want_drip = cover.max(city * 0.85).clamp(0.0, 1.0);
+        // Soft gravel hush: thin the open-sky wind bed near the mine mouth.
+        let want_wind = open * (1.0 - mine * 0.7);
+        self.wind_mix += (want_wind - self.wind_mix) * (dt * 0.9).min(1.0);
+        // A3/A5: boost drip near city remnant, mine mouth, or deep cover.
+        // Mine mouth rises even under a thin oak frame (cover alone stays quiet).
+        let want_drip = cover
+            .max(city * 0.85)
+            .max(mine * 0.8)
+            .clamp(0.0, 1.0);
         self.drip_mix += (want_drip - self.drip_mix) * (dt * 1.4).min(1.0);
         if city > 0.35 && self.drip_mix > 0.3 && !self.found_hush {
             self.found_hush = true;
             self.gui.push_chat("hush");
+        }
+        if mine > 0.35 && self.drip_mix > 0.25 && !self.found_gravel {
+            self.found_gravel = true;
+            self.gui.push_chat("gravel");
         }
         // Rain still hits the canopy when leaves block open sky.
         let (leaf_cover, leaf_at) = leaf_canopy_mix(&self.world, eye);
@@ -39112,26 +39140,40 @@ fn open_sky(world: &Cluster, eye: [f32; 3]) -> bool {
     true
 }
 
-/// How open surface beds (cricket/bird) should stay. Roof zeros them; city hush ducks.
-fn surface_bed_open(sky_open: bool, city_hush: f32) -> f32 {
+/// How open surface beds (cricket/bird) should stay. Roof zeros them; structure pockets duck.
+fn surface_bed_open(sky_open: bool, pocket_hush: f32) -> f32 {
     let open = if sky_open { 1.0 } else { 0.0 };
-    (open * (1.0 - city_hush * 0.85)).clamp(0.0, 1.0)
+    (open * (1.0 - pocket_hush * 0.85)).clamp(0.0, 1.0)
 }
 
 /// Proximity hush near the ancient-city mouth / hall (`0` far → `1` at the remnant).
 ///
 /// Cover inside the hall raises the bed; the open mouth still reads within ~12 blocks.
-fn ancient_city_hush(eye: [f32; 3], cover: f32) -> f32 {
+/// After `ancient_city` discovery the remnant bed holds a little farther (~14).
+fn ancient_city_hush(eye: [f32; 3], cover: f32, discovered: bool) -> f32 {
     let (mx, mz) = rebuild_world::ANCIENT_CITY_MOUTH;
     let (cx, cz) = rebuild_world::ANCIENT_CITY;
     let mouth = ((eye[0] - mx as f32).powi(2) + (eye[2] - mz as f32).powi(2)).sqrt();
     let hall = ((eye[0] - cx as f32).powi(2) + (eye[2] - cz as f32).powi(2)).sqrt();
-    let near = (1.0 - mouth.min(hall) / 12.0).clamp(0.0, 1.0);
+    let reach = if discovered { 14.0 } else { 12.0 };
+    let near = (1.0 - mouth.min(hall) / reach).clamp(0.0, 1.0);
     if near <= 0.0 {
         return 0.0;
     }
     // Open mouth still hushes a bit; under cover the dark bed takes over.
     (near * cover.max(0.4)).clamp(0.0, 1.0)
+}
+
+/// Mine-mouth drip/gravel hush within ~12 of the mine landmark (`SHAFT_MOUTH`).
+///
+/// Unlike deep-cover drips, the oak frame still reads — proximity alone drives the bed.
+fn mine_mouth_pocket(eye: [f32; 3]) -> f32 {
+    let (mx, mz) = rebuild_world::SHAFT_MOUTH;
+    let dx = eye[0] - (mx as f32 + 0.5);
+    let dz = eye[2] - (mz as f32 + 0.5);
+    let dist = (dx * dx + dz * dz).sqrt();
+    // Linear reach matches the A3 8–12 pocket ring (campfire stays squared).
+    (1.0 - dist / 12.0).clamp(0.0, 1.0)
 }
 
 /// Cave-like cover above the eye. Needs a few solids so thin roofs stay quiet.
@@ -40721,17 +40763,69 @@ mod tests {
             6.0,
             rebuild_world::ANCIENT_CITY_MOUTH.1 as f32 + 0.5,
         ];
-        let near = super::ancient_city_hush(mouth, 0.0);
+        let near = super::ancient_city_hush(mouth, 0.0, false);
         assert!(near > 0.3, "open mouth still hushes {near}");
-        let far = super::ancient_city_hush([200.0, 6.0, 200.0], 1.0);
+        let far = super::ancient_city_hush([200.0, 6.0, 200.0], 1.0, true);
         assert_eq!(far, 0.0);
         let hall = [
             rebuild_world::ANCIENT_CITY.0 as f32 + 0.5,
             5.0,
             rebuild_world::ANCIENT_CITY.1 as f32 + 0.5,
         ];
-        let deep = super::ancient_city_hush(hall, 1.0);
+        let deep = super::ancient_city_hush(hall, 1.0, true);
         assert!(deep > 0.7, "covered hall hush {deep}");
+        // Discovery widens the remnant reach a little past the approach ring.
+        let rim = [
+            rebuild_world::ANCIENT_CITY_MOUTH.0 as f32 + 0.5 + 12.5,
+            6.0,
+            rebuild_world::ANCIENT_CITY_MOUTH.1 as f32 + 0.5,
+        ];
+        let undiscovered = super::ancient_city_hush(rim, 0.5, false);
+        let discovered = super::ancient_city_hush(rim, 0.5, true);
+        assert_eq!(undiscovered, 0.0, "pre-discovery rim stays quiet");
+        assert!(discovered > 0.0, "post-discovery remnant still reads {discovered}");
+    }
+
+    #[test]
+    fn mine_mouth_pocket_rises_within_twelve_of_shaft() {
+        let mouth = [
+            rebuild_world::SHAFT_MOUTH.0 as f32 + 0.5,
+            5.0,
+            rebuild_world::SHAFT_MOUTH.1 as f32 + 0.5,
+        ];
+        let at = super::mine_mouth_pocket(mouth);
+        assert!(at > 0.9, "standing on the mouth {at}");
+        let apron = [
+            rebuild_world::SHAFT_MOUTH.0 as f32 + 0.5 + 6.0,
+            5.0,
+            rebuild_world::SHAFT_MOUTH.1 as f32 + 0.5,
+        ];
+        let near = super::mine_mouth_pocket(apron);
+        assert!(near > 0.35 && near < at, "apron gravel hush {near}");
+        let ring = [
+            rebuild_world::SHAFT_MOUTH.0 as f32 + 0.5 + 10.0,
+            5.0,
+            rebuild_world::SHAFT_MOUTH.1 as f32 + 0.5,
+        ];
+        let outer = super::mine_mouth_pocket(ring);
+        assert!(outer > 0.1 && outer < near, "outer 10-block ring {outer}");
+        let far = super::mine_mouth_pocket([200.0, 5.0, 200.0]);
+        assert_eq!(far, 0.0);
+        let edge = [
+            rebuild_world::SHAFT_MOUTH.0 as f32 + 0.5 + 12.5,
+            5.0,
+            rebuild_world::SHAFT_MOUTH.1 as f32 + 0.5,
+        ];
+        assert_eq!(super::mine_mouth_pocket(edge), 0.0);
+        // Pocket ducks surface highs the same way city hush does.
+        let ducked = super::surface_bed_open(true, near);
+        assert!(ducked < 0.8, "mine pocket mutes highs {ducked}");
+        // A3 gap: thin oak frame (cover=0) still gets a drip bed from the landmark.
+        let thin_cover = 0.0_f32;
+        let want_drip = thin_cover.max(near * 0.8);
+        assert!(want_drip > 0.25, "mine mouth drips without deep cover {want_drip}");
+        let plains = super::mine_mouth_pocket([16.5, 5.0, 32.5]);
+        assert_eq!(plains, 0.0, "plains idle has no mine pocket");
     }
 
     #[test]
