@@ -8,7 +8,7 @@ use rebuild_world::{Hooks, load_dir};
 fn shipped_mods_still_load_with_the_guide() {
     let mut hooks = Hooks::new();
     let loaded = load_dir(Path::new(r"C:\CODE\TerraLite\mods"), &mut hooks).expect("mods load");
-    assert_eq!(loaded.len(), 5);
+    assert_eq!(loaded.len(), 6);
     let guide = Path::new("k's-guide").join("src").join("mod.rg");
     assert!(
         loaded
@@ -34,6 +34,11 @@ fn shipped_mods_still_load_with_the_guide() {
         loaded
             .iter()
             .any(|(path, _hooks)| path.ends_with("kiln.rg"))
+    );
+    assert!(
+        loaded
+            .iter()
+            .any(|(path, _hooks)| path.ends_with("first-hour.rg"))
     );
     let pack = rebuild_world::Pack::builtin();
     assert!(pack.contains_block("guide:marker"));
@@ -141,4 +146,42 @@ fn shipped_mods_still_load_with_the_guide() {
     );
     assert!(pack.contains_block("rosegold:rose_block"));
     assert!(pack.contains_item("rosegold:rose"));
+    // VG-695 first-hour: item + shaped + Guest (datapack loot proved separately).
+    assert!(pack.contains_item("hour:charm"));
+    assert_eq!(pack.max_stack("hour:charm"), 16);
+    assert!(
+        pack.script_patterns()
+            .iter()
+            .any(|(result, pattern)| {
+                result == "hour:charm"
+                    && pattern.as_slice()
+                        == [
+                            "cobblestone".to_string(),
+                            String::new(),
+                            String::new(),
+                            "torch".to_string(),
+                            String::new(),
+                            String::new(),
+                            "oak_log".to_string(),
+                            String::new(),
+                            String::new(),
+                        ]
+            })
+    );
+    assert!(
+        pack.script_entity_def("hour:wisp")
+            .is_some_and(|def| !def.hostile)
+    );
+    // Datapack overlay: sand → sand + hour:charm (register+datapack story).
+    let prior = rebuild_world::datapack_selection();
+    let mut sel = prior.clone();
+    sel.set_enabled("first-hour", true);
+    rebuild_world::install_datapack_selection(sel).expect("enable first-hour datapack");
+    let sand_drops = rebuild_world::break_loot_of("sand");
+    assert!(
+        sand_drops.iter().any(|(id, _)| id == "hour:charm"),
+        "expected hour:charm in sand loot, got {sand_drops:?}"
+    );
+    assert!(sand_drops.iter().any(|(id, _)| id == "sand"));
+    rebuild_world::install_datapack_selection(prior).expect("restore datapacks");
 }

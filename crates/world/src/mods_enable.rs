@@ -275,6 +275,7 @@ mod tests {
         assert!(ids.contains(&"k's-guide"));
         assert!(ids.contains(&"craft-story"));
         assert!(ids.contains(&"kiln"));
+        assert!(ids.contains(&"first-hour"));
     }
 
     #[test]

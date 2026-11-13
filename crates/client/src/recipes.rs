@@ -1434,6 +1434,24 @@ mod tests {
     }
 
     #[test]
+    fn first_hour_shaped_shows_in_emi_without_engine_edits() {
+        // VG-695: Register.shaped alone reaches EMI CRAFTING / USES.
+        let mut hooks = rebuild_world::Hooks::new();
+        let _ = rebuild_world::load_dir(std::path::Path::new(r"C:\CODE\TerraLite\mods"), &mut hooks)
+            .expect("mods load");
+        let book = load_emi().unwrap();
+        assert!(book.entries().iter().any(|id| id == "hour:charm"));
+        assert!(
+            book.pattern_of("hour:charm").is_some_and(|pattern| {
+                pattern[0] == "cobblestone" && pattern[3] == "torch" && pattern[6] == "oak_log"
+            })
+        );
+        assert!(book.uses_of("torch").iter().any(|id| id == "hour:charm"));
+        assert!(book.uses_of("cobblestone").iter().any(|id| id == "hour:charm"));
+        assert!(book.uses_of("oak_log").iter().any(|id| id == "hour:charm"));
+    }
+
+    #[test]
     fn a_script_recipe_shows_in_the_book() {
         let pack = rebuild_world::Pack::builtin();
         let _ = pack.register_item("meshkit", "petal");

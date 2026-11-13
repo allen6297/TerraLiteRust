@@ -195,6 +195,8 @@ struct Args {
     shot_emi: Option<std::path::PathBuf>,
     /// ModAPI craft-story recipe (paver) in EMI, then quit.
     shot_mod_recipe: Option<std::path::PathBuf>,
+    /// First-hour shaped charm in EMI (VG-695), then quit.
+    shot_first_hour: Option<std::path::PathBuf>,
     /// Datapack / mod loot table demo, then quit.
     shot_loot: Option<std::path::PathBuf>,
     /// Mod / datapack furnace smelt recipe demo, then quit.
@@ -649,6 +651,7 @@ the world size, a southern or northern sun, sound, view bob (full, low, or off),
         shot_creative: args.shot_creative,
         shot_emi: args.shot_emi,
         shot_mod_recipe: args.shot_mod_recipe,
+        shot_first_hour: args.shot_first_hour,
         shot_loot: args.shot_loot,
         shot_smelt: args.shot_smelt,
         shot_tips: args.shot_tips,
@@ -866,6 +869,7 @@ struct App {
     /// EMI recipe sidebar with torch ghost-fill, then quit.
     shot_emi: Option<std::path::PathBuf>,
     shot_mod_recipe: Option<std::path::PathBuf>,
+    shot_first_hour: Option<std::path::PathBuf>,
     shot_loot: Option<std::path::PathBuf>,
     shot_smelt: Option<std::path::PathBuf>,
     shot_tips: Option<std::path::PathBuf>,
@@ -1162,6 +1166,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some(path) = self.shot_mod_recipe.take() {
                     state.arm_mod_recipe_shot(path);
+                }
+                if let Some(path) = self.shot_first_hour.take() {
+                    state.arm_first_hour_shot(path);
                 }
                 if let Some(path) = self.shot_loot.take() {
                     state.arm_loot_hook_shot(path);
@@ -1830,6 +1837,7 @@ where
         shot_creative: None,
         shot_emi: None,
         shot_mod_recipe: None,
+        shot_first_hour: None,
         shot_loot: None,
         shot_smelt: None,
         shot_tips: None,
@@ -2189,6 +2197,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --shot-mod-recipe".to_string())?;
                 parsed.shot_mod_recipe = Some(std::path::PathBuf::from(value));
+            }
+            "--shot-first-hour" | "--shot-hour-charm" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --shot-first-hour".to_string())?;
+                parsed.shot_first_hour = Some(std::path::PathBuf::from(value));
             }
             "--shot-loot" | "--shot-loot-hook" | "--shot-datapack-loot" => {
                 let value = iter

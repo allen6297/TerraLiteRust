@@ -381,6 +381,7 @@ mod tests {
                 .any(|pack| pack.id == DATA_BASE_PACK_ID && pack.base)
         );
         assert!(packs.iter().any(|pack| pack.id == "demo-extra"));
+        assert!(packs.iter().any(|pack| pack.id == "first-hour"));
         assert!(
             packs
                 .iter()
