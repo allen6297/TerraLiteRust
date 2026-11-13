@@ -27957,17 +27957,19 @@ impl State {
         self.pose_dirty = true;
         self.wanted_focus = chunk_of(self.camera.eye);
 
-        // craft:pole shaped column (oak_log in 0/3/6) — needs the full 3×3.
+        // EMI beside the table + ghost Fill of a shaped 3×3 (VG-694 loop).
         let _ = self.gui.open_craft();
-        let _ = self.gui.give_craft_at(0, "oak_log");
-        let _ = self.gui.give_craft_at(3, "oak_log");
-        let _ = self.gui.give_craft_at(6, "oak_log");
+        self.gui.set_emi_query("torch");
+        self.gui.select_emi("torch");
+        let _ = self.gui.ghost_fill_emi();
         self.gui.select_craft(9);
-        self.gui.push_chat("crafting");
+        self.gui.push_chat("craft table + emi fill");
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.collect("oak_log");
         let _ = self.hotbar.collect("oak_log");
         let _ = self.hotbar.collect("stone");
+        let _ = self.hotbar.collect("stick");
+        let _ = self.hotbar.collect("coal_ore");
         self.hotbar_dirty = true;
         self.set_capture(false);
         for dx in -1..=1 {
@@ -28026,6 +28028,7 @@ impl State {
 
         // Stack two clay + two logs: the first cook finishes during the shot
         // wait, then the second leaves input/fuel/output + a mid progress bar.
+        // EMI selects glass so CRAFTING shows the sand smelt path (VG-694).
         let _ = self.gui.open_furnace();
         let _ = self.gui.give_furnace("clay");
         let _ = self.gui.give_furnace("clay");
@@ -28033,7 +28036,11 @@ impl State {
         let _ = self.gui.give_furnace("oak_log");
         let _ = self.gui.give_furnace("oak_log");
         self.gui.select_furnace(0);
-        self.gui.push_chat("furnace");
+        self.gui.set_emi_query("glass");
+        self.gui.select_emi("glass");
+        let tip = crate::gui::tip_for("clay", Some(2));
+        self.gui.pin_tip(tip);
+        self.gui.push_chat("furnace + emi heat");
         self.hotbar.install_saved(0, &[]);
         let _ = self.hotbar.collect("clay");
         let _ = self.hotbar.collect("oak_log");

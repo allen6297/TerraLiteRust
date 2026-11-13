@@ -1,10 +1,11 @@
 //! egui menus on top of the existing wgpu world pass.
 //!
 //! Pause / settings / main / worlds / creative / player inventory draw here at
-//! [`SCALE`] (~1.5x). Player inventory and creative host an EMI sidebar
-//! (search + CRAFTING / USES from the recipe book). RoseGold GUIAPI screens
-//! and block stations stay on the legacy quad path (`gui::Gui::paint`) during
-//! the transition.
+//! [`SCALE`] (~1.5x). Player inventory, creative, crafting table, and furnace
+//! host an EMI sidebar (search + CRAFTING / USES from the recipe book —
+//! datapack craft + RoseGold + heats). Long-tail RoseGold GUIAPI / note
+//! stations stay on the legacy quad path (`gui::Gui::paint`) during the
+//! transition.
 //!
 //! Visual language matches the legacy HUD: dark well, light top lip, warm
 //! select — not default egui purple/gray.
@@ -345,7 +346,7 @@ impl EguiHost {
                 }
                 draw_pinned_tip(ui, gui, icons);
             } else if gui.furnace_open() {
-                if draw_furnace(ui, gui, hotbar, icons) {
+                if draw_furnace(ui, gui, hotbar, bag, icons) {
                     touched = true;
                 }
                 draw_pinned_tip(ui, gui, icons);
@@ -2981,7 +2982,7 @@ fn draw_anvil(
                             if has_item {
                                 let tip = gui::tip_for(&held, Some(held_uses));
                                 let tex = icon_texture(ui.ctx(), icons, &held);
-                                let _ = slot_button(
+                                let resp = slot_button(
                                     ui,
                                     icons,
                                     tex,
@@ -2992,6 +2993,7 @@ fn draw_anvil(
                                         None
                                     },
                                 );
+                                resp.on_hover_ui(|ui| show_tip(ui, icons, &tip));
                                 ui.add_space(8.0);
                                 ui.vertical(|ui| {
                                     ui.label(
@@ -3939,130 +3941,184 @@ fn draw_crafting_table(
 ) -> (bool, bool) {
     let mut touched = false;
     let mut crafted = false;
-    let selected = gui.craft_selected();
-    let preview = gui.craft_preview();
-    let has_result = preview.is_some();
 
     egui::CentralPanel::default()
         .frame(Frame::new().fill(backdrop()))
         .show_inside(ui, |ui| {
+            let max_w = chrome_max_width(ui);
+            let panel_w = clamped_panel_width(max_w, INV_COLS, true);
+            let emi_w = EMI_SIDE_W.max(180.0);
+            let side_by_side = panel_w + 12.0 + emi_w <= max_w + 0.5;
+            let emi_list_h = creative_grid_height(ui.available_height(), side_by_side);
             ui.vertical_centered(|ui| {
-                ui.add_space(20.0);
-                let panel_w = (grid_pitch(INV_COLS) + 48.0).min(ui.available_width() - 24.0).max(420.0);
-                show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, icons, "CRAFTING");
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("3×3 table · shaped recipes welcome · digit keys stash")
-                            .size(13.0)
-                            .color(MUTED),
-                    );
-                    ui.add_space(10.0);
+                ui.add_space(16.0);
+                ui.set_max_width(max_w);
+                if side_by_side {
                     ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new("Grid").size(12.0).color(DETAIL));
-                            ui.add_space(2.0);
-                            let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
-                            chrome_well(ui, well, ROW, |ui| {
-                                ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                                for row in 0..3 {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
-                                        for col in 0..3 {
-                                            let index = row * 3 + col;
-                                            if table_craft_input(
-                                                ui, gui, hotbar, bag, icons, index, selected,
-                                            ) {
-                                                touched = true;
-                                            }
-                                        }
-                                    });
-                                }
-                            });
-                        });
-                        ui.add_space(18.0);
-                        ui.vertical(|ui| {
-                            ui.add_space(SLOT + 8.0);
-                            ui.label(RichText::new("Result").size(12.0).color(DETAIL));
-                            ui.add_space(2.0);
-                            let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
-                            chrome_well(ui, well, ROW, |ui| {
-                                let tex = preview
-                                    .as_deref()
-                                    .and_then(|id| icon_texture(ui.ctx(), icons, id));
-                                let on = selected == 9 || has_result;
-                                let resp = slot_button(ui, icons, tex, on, None);
-                                if let Some(id) = preview.as_deref() {
-                                    let tip = gui::tip_for(id, Some(1));
-                                    resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
-                                    ui.label(
-                                        RichText::new(&tip.name).size(13.0).color(INK),
-                                    );
-                                } else {
-                                    ui.label(
-                                        RichText::new("—").size(13.0).color(MUTED),
-                                    );
-                                }
-                                if resp.clicked() && has_result {
-                                    gui.select_craft(9);
-                                    gui.request_craft_take();
-                                    touched = true;
-                                    crafted = true;
-                                }
-                            });
-                        });
-                    });
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(
-                            preview
-                                .as_deref()
-                                .map(|id| format!("ready · {id}"))
-                                .unwrap_or_else(|| "put items in the grid".to_string()),
-                        )
-                        .size(12.0)
-                        .color(MUTED),
-                    );
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.add_enabled_ui(has_result, |ui| {
-                            if chrome_button(
-                                ui,
-                                icons,
-                                if has_result { "Take result" } else { "No match" },
-                                has_result,
-                                Vec2::new(140.0, 32.0),
-                                14.0,
-                            )
-                            .clicked()
-                            {
-                                gui.request_craft_take();
-                                touched = true;
-                                crafted = true;
-                            }
-                        });
-                    });
-                    ui.add_space(12.0);
-                    ui.label(RichText::new("Inventory").size(13.0).color(DETAIL));
-                    ui.add_space(4.0);
-                    draw_table_inv_body(ui, gui, hotbar, bag, icons);
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Hotbar").size(13.0).color(DETAIL));
-                    ui.add_space(4.0);
-                    draw_hotbar_row(ui, Some(gui), hotbar, icons);
-                    ui.add_space(8.0);
-                    if close_button(ui, icons, "Close (Esc)").clicked() {
-                        for id in gui.drain_craft() {
-                            if !hotbar.collect(id) {
-                                let _ = bag.collect(id);
-                            }
+                        ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
+                        let (panel_touched, panel_crafted) =
+                            draw_crafting_table_panel(ui, gui, hotbar, bag, icons, panel_w);
+                        if panel_touched {
+                            touched = true;
                         }
-                        let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                        if panel_crafted {
+                            crafted = true;
+                        }
+                        if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
+                            touched = true;
+                        }
+                    });
+                } else {
+                    let (panel_touched, panel_crafted) =
+                        draw_crafting_table_panel(ui, gui, hotbar, bag, icons, panel_w);
+                    if panel_touched {
                         touched = true;
+                    }
+                    if panel_crafted {
+                        crafted = true;
+                    }
+                    ui.add_space(10.0);
+                    if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
+                        touched = true;
+                    }
+                }
+            });
+        });
+    (touched, crafted)
+}
+
+fn draw_crafting_table_panel(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
+    icons: &mut HashMap<String, TextureHandle>,
+    panel_w: f32,
+) -> (bool, bool) {
+    let mut touched = false;
+    let mut crafted = false;
+    let selected = gui.craft_selected();
+    let preview = gui.craft_preview();
+    let has_result = preview.is_some() && !gui.craft_is_ghost();
+    let ghost_preview = gui.craft_is_ghost() && preview.is_some();
+
+    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
+        title_label(ui, icons, "CRAFTING");
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("3×3 table · EMI Fill ghosts shaped recipes · digit keys stash")
+                .size(13.0)
+                .color(MUTED),
+        );
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Grid").size(12.0).color(DETAIL));
+                ui.add_space(2.0);
+                let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                chrome_well(ui, well, ROW, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                    for row in 0..3 {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                            for col in 0..3 {
+                                let index = row * 3 + col;
+                                if table_craft_input(
+                                    ui, gui, hotbar, bag, icons, index, selected,
+                                ) {
+                                    touched = true;
+                                }
+                            }
+                        });
+                    }
+                });
+            });
+            ui.add_space(18.0);
+            ui.vertical(|ui| {
+                ui.add_space(SLOT + 8.0);
+                ui.label(RichText::new("Result").size(12.0).color(DETAIL));
+                ui.add_space(2.0);
+                let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                chrome_well(ui, well, ROW, |ui| {
+                    let tex = preview
+                        .as_deref()
+                        .and_then(|id| icon_texture(ui.ctx(), icons, id));
+                    let on = selected == 9 || has_result;
+                    let resp = if ghost_preview {
+                        slot_button_ghost(ui, icons, tex, on, None)
+                    } else {
+                        slot_button(ui, icons, tex, on, None)
+                    };
+                    if let Some(id) = preview.as_deref() {
+                        let tip = gui::tip_for(id, Some(1));
+                        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                        ui.label(RichText::new(&tip.name).size(13.0).color(INK));
+                    } else {
+                        ui.label(RichText::new("—").size(13.0).color(MUTED));
+                    }
+                    if resp.clicked() && has_result {
+                        gui.select_craft(9);
+                        gui.request_craft_take();
+                        touched = true;
+                        crafted = true;
                     }
                 });
             });
         });
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(if ghost_preview {
+                format!(
+                    "EMI ghost · {}",
+                    preview.as_deref().unwrap_or("")
+                )
+            } else {
+                preview
+                    .as_deref()
+                    .map(|id| format!("ready · {id}"))
+                    .unwrap_or_else(|| "put items in the grid".to_string())
+            })
+            .size(12.0)
+            .color(MUTED),
+        );
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(has_result, |ui| {
+                if chrome_button(
+                    ui,
+                    icons,
+                    if has_result { "Take result" } else { "No match" },
+                    has_result,
+                    Vec2::new(140.0, 32.0),
+                    14.0,
+                )
+                .clicked()
+                {
+                    gui.request_craft_take();
+                    touched = true;
+                    crafted = true;
+                }
+            });
+        });
+        ui.add_space(12.0);
+        ui.label(RichText::new("Inventory").size(13.0).color(DETAIL));
+        ui.add_space(4.0);
+        draw_table_inv_body(ui, gui, hotbar, bag, icons);
+        ui.add_space(8.0);
+        ui.label(RichText::new("Hotbar").size(13.0).color(DETAIL));
+        ui.add_space(4.0);
+        draw_hotbar_row(ui, Some(gui), hotbar, icons);
+        ui.add_space(8.0);
+        if close_button(ui, icons, "Close (Esc)").clicked() {
+            for id in gui.drain_craft() {
+                if !hotbar.collect(id) {
+                    let _ = bag.collect(id);
+                }
+            }
+            let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+            touched = true;
+        }
+    });
     (touched, crafted)
 }
 
@@ -4077,18 +4133,29 @@ fn table_craft_input(
 ) -> bool {
     let id = gui.craft_slot(index).unwrap_or("").to_string();
     let count = gui.craft_count(index);
+    let ghost = gui.craft_is_ghost();
     let tex = if id.is_empty() {
         None
     } else {
         icon_texture(ui.ctx(), icons, &id)
     };
-    let resp = slot_button(
-        ui,
-        icons,
-        tex,
-        selected == index,
-        if count > 1 { Some(count) } else { None },
-    );
+    let resp = if ghost && !id.is_empty() {
+        slot_button_ghost(
+            ui,
+            icons,
+            tex,
+            selected == index,
+            if count > 1 { Some(count) } else { None },
+        )
+    } else {
+        slot_button(
+            ui,
+            icons,
+            tex,
+            selected == index,
+            if count > 1 { Some(count) } else { None },
+        )
+    };
     if !id.is_empty() {
         let tip = gui::tip_for(&id, Some(count.max(1)));
         resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
@@ -4169,7 +4236,52 @@ fn draw_furnace(
     ui: &mut Ui,
     gui: &mut Gui,
     hotbar: &mut Hotbar,
+    bag: &mut hotbar::Bag,
     icons: &mut HashMap<String, TextureHandle>,
+) -> bool {
+    let mut touched = false;
+
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(backdrop()))
+        .show_inside(ui, |ui| {
+            let max_w = chrome_max_width(ui);
+            let panel_w = 460.0_f32.min(max_w);
+            let emi_w = EMI_SIDE_W.max(180.0);
+            let side_by_side = panel_w + 12.0 + emi_w <= max_w + 0.5;
+            let emi_list_h = creative_grid_height(ui.available_height(), side_by_side);
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.set_max_width(max_w);
+                if side_by_side {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(12.0, 0.0);
+                        if draw_furnace_panel(ui, gui, hotbar, icons, panel_w) {
+                            touched = true;
+                        }
+                        if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
+                            touched = true;
+                        }
+                    });
+                } else {
+                    if draw_furnace_panel(ui, gui, hotbar, icons, panel_w) {
+                        touched = true;
+                    }
+                    ui.add_space(10.0);
+                    if draw_emi_sidebar(ui, gui, hotbar, bag, icons, emi_list_h) {
+                        touched = true;
+                    }
+                }
+            });
+        });
+    touched
+}
+
+fn draw_furnace_panel(
+    ui: &mut Ui,
+    gui: &mut Gui,
+    hotbar: &mut Hotbar,
+    icons: &mut HashMap<String, TextureHandle>,
+    panel_w: f32,
 ) -> bool {
     let mut touched = false;
     let selected = gui.furnace_selected();
@@ -4186,104 +4298,101 @@ fn draw_furnace(
         .unwrap_or_default();
     let can_add = selected < 2 && !held.is_empty();
 
-    egui::CentralPanel::default()
-        .frame(Frame::new().fill(backdrop()))
-        .show_inside(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(32.0);
-                show_panel(ui, 460.0, panel_chrome(ui.ctx(), icons), |ui| {
-                    title_label(ui, icons, title);
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("Input · fuel · output — digit keys stash from the hotbar")
-                            .size(13.0)
-                            .color(MUTED),
-                    );
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        for (index, label) in [(0, "Input"), (1, "Fuel"), (2, "Output")] {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(label).size(12.0).color(DETAIL));
-                                ui.add_space(2.0);
-                                let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
-                                chrome_well(ui, well, ROW, |ui| {
-                                    let id = gui.furnace_slot(index).map(str::to_string);
-                                    let count = gui.furnace_count(index);
-                                    let on = selected == index;
-                                    let tex = id
-                                        .as_deref()
-                                        .and_then(|id| icon_texture(ui.ctx(), icons, id));
-                                    let response = slot_button(
-                                        ui,
-                                        icons,
-                                        tex,
-                                        on,
-                                        if count > 1 { Some(count) } else { None },
-                                    );
-                                    if response.clicked() {
-                                        if index == 2 && has_output {
-                                            gui.request_furnace_take();
-                                            touched = true;
-                                        } else if index < 2 {
-                                            gui.select_furnace(index);
-                                            touched = true;
-                                        }
-                                    }
-                                    if let Some(id) = id.as_deref() {
-                                        let tip = gui::tip_for(id, Some(count.max(1)));
-                                        ui.label(
-                                            RichText::new(&tip.name).size(12.0).color(INK),
-                                        );
-                                    } else {
-                                        ui.label(
-                                            RichText::new("—").size(12.0).color(MUTED),
-                                        );
-                                    }
-                                });
-                            });
-                            if index < 2 {
-                                ui.add_space(10.0);
+    show_panel(ui, panel_w, panel_chrome(ui.ctx(), icons), |ui| {
+        title_label(ui, icons, title);
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("Input · fuel · output — EMI shows smelt recipes · digit keys stash")
+                .size(13.0)
+                .color(MUTED),
+        );
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            for (index, label) in [(0, "Input"), (1, "Fuel"), (2, "Output")] {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(label).size(12.0).color(DETAIL));
+                    ui.add_space(2.0);
+                    let well = chrome_texture(ui.ctx(), icons, CHROME_SLOT);
+                    chrome_well(ui, well, ROW, |ui| {
+                        let id = gui.furnace_slot(index).map(str::to_string);
+                        let count = gui.furnace_count(index);
+                        let on = selected == index;
+                        let tex = id
+                            .as_deref()
+                            .and_then(|id| icon_texture(ui.ctx(), icons, id));
+                        let response = slot_button(
+                            ui,
+                            icons,
+                            tex,
+                            on,
+                            if count > 1 { Some(count) } else { None },
+                        );
+                        if let Some(id) = id.as_deref() {
+                            let tip = gui::tip_for(id, Some(count.max(1)));
+                            response
+                                .clone()
+                                .on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                            if response.hovered() {
+                                gui.select_emi(id);
+                            }
+                            ui.label(RichText::new(&tip.name).size(12.0).color(INK));
+                        } else {
+                            ui.label(RichText::new("—").size(12.0).color(MUTED));
+                        }
+                        if response.clicked() {
+                            if index == 2 && has_output {
+                                gui.request_furnace_take();
+                                touched = true;
+                            } else if index < 2 {
+                                gui.select_furnace(index);
+                                touched = true;
                             }
                         }
                     });
-                    ui.add_space(12.0);
-                    ui.label(RichText::new("Cook progress").size(12.0).color(DETAIL));
-                    ui.add_space(2.0);
-                    let bar_w = 320.0;
-                    let (bar_rect, _) =
-                        ui.allocate_exact_size(Vec2::new(bar_w, 14.0), Sense::hover());
-                    if ui.is_rect_visible(bar_rect) {
-                        ui.painter().rect_filled(bar_rect, CornerRadius::same(3), SLOT_WELL);
-                        ui.painter().rect_stroke(
-                            bar_rect,
-                            CornerRadius::same(3),
-                            Stroke::new(1.0, SLOT_EDGE),
-                            StrokeKind::Outside,
-                        );
-                        if frac > 0.0 {
-                            let mut fill = bar_rect;
-                            fill.set_width(bar_rect.width() * frac);
-                            ui.painter()
-                                .rect_filled(fill, CornerRadius::same(3), SELECT);
-                        }
-                    }
-                    ui.label(
-                        RichText::new(format!(
-                            "{cook}/{goal}{}",
-                            preview
-                                .as_deref()
-                                .map(|id| format!(" · → {id}"))
-                                .unwrap_or_default()
-                        ))
-                        .size(12.0)
-                        .color(MUTED),
-                    );
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(status).size(12.0).color(MUTED));
+                });
+                if index < 2 {
                     ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.add_enabled_ui(can_add, |ui| {
-                            if chrome_button(
+                }
+            }
+        });
+        ui.add_space(12.0);
+        ui.label(RichText::new("Cook progress").size(12.0).color(DETAIL));
+        ui.add_space(2.0);
+        let bar_w = (panel_w - 48.0).clamp(200.0, 320.0);
+        let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, 14.0), Sense::hover());
+        if ui.is_rect_visible(bar_rect) {
+            ui.painter()
+                .rect_filled(bar_rect, CornerRadius::same(3), SLOT_WELL);
+            ui.painter().rect_stroke(
+                bar_rect,
+                CornerRadius::same(3),
+                Stroke::new(1.0, SLOT_EDGE),
+                StrokeKind::Outside,
+            );
+            if frac > 0.0 {
+                let mut fill = bar_rect;
+                fill.set_width(bar_rect.width() * frac);
+                ui.painter()
+                    .rect_filled(fill, CornerRadius::same(3), SELECT);
+            }
+        }
+        ui.label(
+            RichText::new(format!(
+                "{cook}/{goal}{}",
+                preview
+                    .as_deref()
+                    .map(|id| format!(" · → {id}"))
+                    .unwrap_or_default()
+            ))
+            .size(12.0)
+            .color(MUTED),
+        );
+        ui.add_space(8.0);
+        ui.label(RichText::new(status).size(12.0).color(MUTED));
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(can_add, |ui| {
+                if chrome_button(
                                 ui,
                                 icons,
                                 if can_add { "Add held" } else { "Select slot" },
@@ -4321,10 +4430,9 @@ fn draw_furnace(
                     ui.add_space(8.0);
                     if close_button(ui, icons, "Close (Esc)").clicked() {
                         let _ = gui.on_press(winit::keyboard::KeyCode::Escape);
+                        touched = true;
                     }
-                });
-            });
-        });
+    });
     touched
 }
 
@@ -4373,14 +4481,16 @@ fn draw_brewing(
                                 );
                             } else {
                                 for (id, count) in bottles.iter().take(3) {
+                                    let tip = gui::tip_for(id, Some(*count));
                                     let tex = icon_texture(ui.ctx(), icons, id);
-                                    let _ = slot_button(
+                                    let resp = slot_button(
                                         ui,
                                         icons,
                                         tex,
                                         false,
                                         if *count > 1 { Some(*count) } else { None },
                                     );
+                                    resp.on_hover_ui(|ui| show_tip(ui, icons, &tip));
                                     ui.add_space(4.0);
                                 }
                                 if bottles.len() > 3 {
@@ -4404,7 +4514,8 @@ fn draw_brewing(
                                     let tip = gui::tip_for(id, Some(1));
                                     let tex = icon_texture(ui.ctx(), icons, id);
                                     ui.horizontal(|ui| {
-                                        let _ = slot_button(ui, icons, tex, false, None);
+                                        let resp = slot_button(ui, icons, tex, false, None);
+                                        resp.on_hover_ui(|ui| show_tip(ui, icons, &tip));
                                         ui.label(
                                             RichText::new(&tip.name).size(13.0).color(INK),
                                         );
@@ -5337,6 +5448,39 @@ fn draw_emi_sidebar(
                 ui.add_space(4.0);
                 match gui.emi_crafting() {
                     Some(inputs) if !inputs.is_empty() => {
+                        let heat_only = gui.emi_is_heat_only();
+                        if let Some(heat) = gui.emi_heat_label() {
+                            ui.label(
+                                RichText::new(if heat_only {
+                                    format!("{heat} · cook at station")
+                                } else {
+                                    format!("also {heat}s")
+                                })
+                                .size(11.0)
+                                .color(MUTED),
+                            );
+                            ui.add_space(2.0);
+                            if let Some(input) = gui.emi_heat_input() {
+                                if !heat_only {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
+                                        let tip = gui::tip_for(&input, None);
+                                        let tex = icon_texture(ui.ctx(), icons, &input);
+                                        let resp = slot_button(ui, icons, tex, false, None);
+                                        resp.clone().on_hover_ui(|ui| show_tip(ui, icons, &tip));
+                                        if resp.clicked() {
+                                            gui.select_emi(&input);
+                                        }
+                                        ui.label(
+                                            RichText::new(format!("→ {heat}"))
+                                                .size(12.0)
+                                                .color(DETAIL),
+                                        );
+                                    });
+                                    ui.add_space(4.0);
+                                }
+                            }
+                        }
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = Vec2::splat(SLOT_GAP);
                             for input in &inputs {
@@ -5404,15 +5548,17 @@ fn draw_emi_sidebar(
                                     fill_click = true;
                                 }
                             }
-                            if chrome_button(
-                                ui,
-                                icons,
-                                "Craft",
-                                false,
-                                Vec2::new(72.0, 24.0),
-                                13.0,
-                            )
-                            .clicked()
+                            // Heat-only EMI lines cook at a station — hide Craft.
+                            if !gui.emi_is_heat_only()
+                                && chrome_button(
+                                    ui,
+                                    icons,
+                                    "Craft",
+                                    false,
+                                    Vec2::new(72.0, 24.0),
+                                    13.0,
+                                )
+                                .clicked()
                             {
                                 craft_click = true;
                             }
@@ -5451,7 +5597,11 @@ fn draw_emi_sidebar(
         }
     });
     if fill_click {
-        let _ = refund_inv_craft(gui, hotbar, bag);
+        if gui.craft_open() {
+            let _ = gui.drain_craft();
+        } else {
+            let _ = refund_inv_craft(gui, hotbar, bag);
+        }
         if gui.ghost_fill_emi() {
             touched = true;
         }

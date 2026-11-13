@@ -694,6 +694,8 @@ pub struct Gui {
     /// `0..9` is the grid. `9` is the result.
     craft_selected: usize,
     craft: hotbar::Bag,
+    /// EMI ghost layout on the 3×3 — preview only until the player places real items.
+    craft_ghost: bool,
     /// Set when egui asks render to pull the crafting result.
     craft_take: bool,
     /// Player-inventory Craft tab 2×2 (slots `0..3`). Preview-only until taken.
@@ -906,6 +908,7 @@ impl Gui {
                 craft_open: false,
                 craft_selected: 0,
                 craft: hotbar::Bag::new(),
+                craft_ghost: false,
                 craft_take: false,
                 inv_craft: hotbar::Bag::new(),
                 inv_craft_ghost: false,
@@ -1040,6 +1043,7 @@ impl Gui {
                     craft_open: false,
                     craft_selected: 0,
                     craft: hotbar::Bag::new(),
+                    craft_ghost: false,
                     craft_take: false,
                     inv_craft: hotbar::Bag::new(),
                     inv_craft_ghost: false,
@@ -1143,7 +1147,8 @@ impl Gui {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_screen(screen: Screen) -> Self {
-        let book = recipes::load_book().unwrap_or_else(|_| Book::empty());
+        // Same EMI book as runtime (`load_emi`): datapack craft + heats + RoseGold.
+        let book = recipes::load_emi().unwrap_or_else(|_| Book::empty());
         Self::from_parts(screen, book)
     }
 
@@ -1184,6 +1189,7 @@ impl Gui {
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
+            craft_ghost: false,
             craft_take: false,
             inv_craft: hotbar::Bag::new(),
             inv_craft_ghost: false,
@@ -1539,7 +1545,7 @@ impl Gui {
         rows
     }
 
-    /// Ingredients that craft the selected EMI item, when it is a result.
+    /// Ingredients that craft or cook the selected EMI item, when it is a result.
     pub fn emi_crafting(&self) -> Option<Vec<String>> {
         let id = self.emi_id.as_deref()?;
         self.book.inputs(id)
@@ -1551,7 +1557,32 @@ impl Gui {
         self.book.pattern_of(id).map(|cells| cells.to_vec())
     }
 
-    /// Results that use the selected EMI item as an ingredient.
+    /// Heat station label for an EMI result that cooks (`smelt` / `smoke` / `blast`).
+    pub fn emi_heat_label(&self) -> Option<&'static str> {
+        let id = self.emi_id.as_deref()?;
+        match self.book.heat_station_of(id)? {
+            rebuild_world::HeatStation::Furnace => Some("smelt"),
+            rebuild_world::HeatStation::Smoker => Some("smoke"),
+            rebuild_world::HeatStation::Blast => Some("blast"),
+        }
+    }
+
+    /// Heat input id when the EMI selection cooks at a station.
+    pub fn emi_heat_input(&self) -> Option<String> {
+        let id = self.emi_id.as_deref()?;
+        self.book
+            .heat_line_of(id)
+            .map(|(input, _)| input.to_string())
+    }
+
+    /// True when EMI Craft / Fill must stay off (heat-only result).
+    pub fn emi_is_heat_only(&self) -> bool {
+        self.emi_id
+            .as_deref()
+            .is_some_and(|id| self.book.is_heat_only(id))
+    }
+
+    /// Results that use the selected EMI item as an ingredient or heat input.
     pub fn emi_uses(&self) -> Vec<String> {
         let Some(id) = self.emi_id.as_deref() else {
             return Vec::new();
@@ -1596,8 +1627,12 @@ impl Gui {
     }
 
     /// Prefer the EMI selection; fall back to the legacy items-list row.
+    /// Heat-only results stay on the furnace path — never invent via Craft.
     fn craft_job_for_emi(&self) -> Option<(String, Vec<String>)> {
         if let Some(id) = self.emi_id.clone() {
+            if self.book.is_heat_only(&id) {
+                return None;
+            }
             let inputs = self.book.inputs(&id)?;
             if !inputs.is_empty() {
                 return Some((id, inputs));
@@ -1872,10 +1907,16 @@ impl Gui {
             return false;
         }
         self.craft = hotbar::Bag::new();
+        self.craft_ghost = false;
         self.craft_selected = 0;
         self.craft_take = false;
         self.craft_open = true;
         true
+    }
+
+    /// True when the 3×3 holds an EMI ghost layout (not real items).
+    pub fn craft_is_ghost(&self) -> bool {
+        self.craft_ghost
     }
 
     pub fn craft_open(&self) -> bool {
@@ -1912,12 +1953,19 @@ impl Gui {
         if !self.craft_open || index >= 9 {
             return false;
         }
+        if self.craft_ghost {
+            self.clear_craft_ghost();
+        }
         self.craft.insert_at(index, id)
     }
 
     /// Take one from a grid cell back toward the player.
     pub fn take_craft_slot(&mut self, index: usize) -> Option<&'static str> {
         if !self.craft_open || index >= 9 {
+            return None;
+        }
+        if self.craft_ghost {
+            self.clear_craft_ghost();
             return None;
         }
         self.craft.take_one(index)
@@ -1936,6 +1984,9 @@ impl Gui {
         if !self.craft_open || self.craft_selected >= 9 {
             return false;
         }
+        if self.craft_ghost {
+            self.clear_craft_ghost();
+        }
         self.craft.insert_at(self.craft_selected, id)
     }
 
@@ -1952,6 +2003,9 @@ impl Gui {
 
     /// Spend one of each ingredient and return the result id.
     pub fn pull_craft(&mut self) -> Option<String> {
+        if self.craft_ghost {
+            return None;
+        }
         let result = self.craft_preview()?;
         let inputs = self.book.inputs(&result)?;
         for id in &inputs {
@@ -1963,7 +2017,16 @@ impl Gui {
 
     pub fn drain_craft(&mut self) -> Vec<&'static str> {
         self.craft_take = false;
+        if self.craft_ghost {
+            self.clear_craft_ghost();
+            return Vec::new();
+        }
         self.craft.drain()
+    }
+
+    fn clear_craft_ghost(&mut self) {
+        self.craft = hotbar::Bag::new();
+        self.craft_ghost = false;
     }
 
     /// Player-inventory Craft tab input cells (`0..3`).
@@ -2050,15 +2113,29 @@ impl Gui {
         self.inv_craft_ghost = false;
     }
 
-    /// Ghost-fill the Craft tab 2×2 from the selected EMI recipe when it fits.
+    /// Ghost-fill from the selected EMI recipe into the open craft surface.
     ///
-    /// Shaped recipes must live in the top-left 2×2 of the 3×3. Shapeless
-    /// recipes need at most four ingredients. Opens the Craft tab on success.
-    /// Caller should [`Self::drain_inv_craft`] / refund real items first.
+    /// Crafting table (3×3) takes the full shaped pattern or up to nine
+    /// shapeless inputs. Player Craft tab keeps the 2×2 top-left fit rule.
+    /// Heat-only EMI lines do not fill a craft grid. Caller should refund
+    /// real items first when leaving a ghost layout.
     pub fn ghost_fill_emi(&mut self) -> bool {
         let Some(id) = self.emi_id.clone() else {
             return false;
         };
+        if self.craft_open {
+            let Some(cells) = self.emi_table_ghost_cells(&id) else {
+                return false;
+            };
+            self.craft = hotbar::Bag::new();
+            for (index, cell) in cells.iter().enumerate() {
+                if let Some(item) = cell {
+                    let _ = self.craft.insert_at(index, item);
+                }
+            }
+            self.craft_ghost = true;
+            return true;
+        }
         let Some(cells) = self.emi_ghost_cells(&id) else {
             return false;
         };
@@ -2073,15 +2150,24 @@ impl Gui {
         true
     }
 
-    /// True when the selected EMI recipe can ghost-fill the Craft 2×2.
+    /// True when the selected EMI recipe can ghost-fill the active craft surface.
     pub fn emi_can_ghost_fill(&self) -> bool {
-        self.emi_id
-            .as_deref()
-            .is_some_and(|id| self.emi_ghost_cells(id).is_some())
+        let Some(id) = self.emi_id.as_deref() else {
+            return false;
+        };
+        if self.craft_open {
+            self.emi_table_ghost_cells(id).is_some()
+        } else {
+            self.emi_ghost_cells(id).is_some()
+        }
     }
 
-    /// Four Craft-tab cells for `id`, or `None` when the recipe needs a 3×3.
+    /// Four Craft-tab cells for `id`, or `None` when the recipe needs a 3×3
+    /// or is heat-only.
     fn emi_ghost_cells(&self, id: &str) -> Option<[Option<String>; 4]> {
+        if self.book.is_heat_only(id) {
+            return None;
+        }
         if let Some(pattern) = self.book.pattern_of(id) {
             if pattern.len() != 9 {
                 return None;
@@ -2104,6 +2190,32 @@ impl Gui {
             return None;
         }
         let mut cells = [None, None, None, None];
+        for (i, item) in inputs.iter().enumerate() {
+            cells[i] = Some(item.clone());
+        }
+        Some(cells)
+    }
+
+    /// Nine crafting-table cells for `id`, or `None` for heat-only results.
+    fn emi_table_ghost_cells(&self, id: &str) -> Option<[Option<String>; 9]> {
+        if self.book.is_heat_only(id) {
+            return None;
+        }
+        if let Some(pattern) = self.book.pattern_of(id) {
+            if pattern.len() != 9 {
+                return None;
+            }
+            let mut cells = [None, None, None, None, None, None, None, None, None];
+            for (i, cell) in pattern.iter().enumerate() {
+                cells[i] = pattern_cell(cell);
+            }
+            return Some(cells);
+        }
+        let inputs = self.book.inputs(id)?;
+        if inputs.is_empty() || inputs.len() > 9 {
+            return None;
+        }
+        let mut cells = [None, None, None, None, None, None, None, None, None];
         for (i, item) in inputs.iter().enumerate() {
             cells[i] = Some(item.clone());
         }
@@ -9941,6 +10053,7 @@ mod tests {
             craft_open: false,
             craft_selected: 0,
             craft: hotbar::Bag::new(),
+            craft_ghost: false,
             craft_take: false,
             inv_craft: hotbar::Bag::new(),
             inv_craft_ghost: false,
@@ -11659,6 +11772,41 @@ mod tests {
         assert!(gui.pull_inv_craft().is_none(), "ghosts do not craft");
         assert!(gui.drain_inv_craft().is_empty(), "ghosts do not refund");
         assert!(!gui.inv_craft_is_ghost());
+    }
+
+    #[test]
+    fn emi_heats_and_table_ghost_fill_for_vg694() {
+        let mut gui = Gui::from_screen(shipped());
+        gui.select_emi("netherite_scrap");
+        assert_eq!(
+            gui.emi_crafting().as_deref(),
+            Some(&["ancient_debris".to_string()][..])
+        );
+        assert_eq!(gui.emi_heat_label(), Some("blast"));
+        assert!(gui.emi_is_heat_only());
+        assert!(!gui.emi_can_ghost_fill(), "heat-only skips craft Fill");
+        assert!(!gui.craft_selected_into(
+            &mut hotbar::Hotbar::new(),
+            &mut hotbar::Bag::new()
+        ));
+
+        gui.select_emi("glass");
+        assert_eq!(gui.emi_heat_label(), Some("smelt"));
+        assert_eq!(gui.emi_heat_input().as_deref(), Some("sand"));
+        assert!(!gui.emi_is_heat_only());
+
+        gui.select_emi("sand");
+        assert!(gui.emi_uses().iter().any(|id| id == "glass"));
+
+        assert!(gui.open_craft());
+        gui.select_emi("torch");
+        assert!(gui.emi_can_ghost_fill());
+        assert!(gui.ghost_fill_emi());
+        assert!(gui.craft_is_ghost());
+        assert_eq!(gui.craft_preview().as_deref(), Some("torch"));
+        assert!(gui.pull_craft().is_none(), "table ghosts do not craft");
+        assert!(gui.drain_craft().is_empty(), "table ghosts do not refund");
+        assert!(!gui.craft_is_ghost());
     }
 
     #[test]

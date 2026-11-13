@@ -70,11 +70,18 @@ impl Book {
     }
 
     /// Results and ingredients, sorted, each id once.
+    ///
+    /// Includes furnace / smoker / blast heats so EMI lists smelt-only items
+    /// the same way as craft results (datapack + RoseGold).
     pub fn entries(&self) -> Vec<String> {
         let mut ids = Vec::new();
         for recipe in &self.recipes {
             ids.push(recipe.result.clone());
             ids.extend(recipe.ingredients.iter().cloned());
+        }
+        for heat in &self.heats {
+            ids.push(heat.result.clone());
+            ids.push(heat.input.clone());
         }
         ids.sort();
         ids.dedup();
@@ -97,10 +104,23 @@ impl Book {
             };
             return format!("{inputs} {verb} {}", display_name(&recipe.result));
         }
+        if let Some(heat) = self.heats.iter().find(|heat| heat.result == id) {
+            return format!(
+                "{} {}s into {}",
+                display_name(&heat.input),
+                heat_verb(heat.station),
+                display_name(&heat.result)
+            );
+        }
         let mut uses = Vec::new();
         for recipe in &self.recipes {
             if recipe.ingredients.iter().any(|item| item == id) {
                 uses.push(display_name(&recipe.result));
+            }
+        }
+        for heat in &self.heats {
+            if heat.input == id {
+                uses.push(display_name(&heat.result));
             }
         }
         uses.sort();
@@ -126,15 +146,20 @@ impl Book {
         })
     }
 
-    /// Furnace / smoker / blast cook. An existing input for that station stays.
+    /// Furnace / smoker / blast cook.
+    ///
+    /// A later line for the same input + station replaces the earlier one so
+    /// RoseGold `recipe.smelt` / `smoke` / `blast` can override datapack heats.
     pub fn add_heat(&mut self, result: String, input: String, station: HeatStation) {
-        if result.is_empty()
-            || input.is_empty()
-            || self
-                .heats
-                .iter()
-                .any(|line| line.input == input && line.station == station)
+        if result.is_empty() || input.is_empty() {
+            return;
+        }
+        if let Some(existing) = self
+            .heats
+            .iter_mut()
+            .find(|line| line.input == input && line.station == station)
         {
+            existing.result = result;
             return;
         }
         self.heats.push(HeatLine {
@@ -151,9 +176,15 @@ impl Book {
             .map(|line| line.result.clone())
     }
 
-    /// Add a mod recipe. An existing result stays as it was.
+    /// Add a mod / script recipe. Same result id replaces the prior line so
+    /// RoseGold can override a datapack craft with the same result.
     pub fn add_line(&mut self, result: String, ingredients: Vec<String>) {
-        if ingredients.is_empty() || self.recipes.iter().any(|recipe| recipe.result == result) {
+        if ingredients.is_empty() {
+            return;
+        }
+        if let Some(existing) = self.recipes.iter_mut().find(|recipe| recipe.result == result) {
+            existing.ingredients = ingredients;
+            existing.pattern = None;
             return;
         }
         self.recipes.push(Recipe {
@@ -165,12 +196,10 @@ impl Book {
 
     /// A shaped mod recipe. `pattern` is nine cells, blanks empty.
     ///
-    /// The shape can sit in any corner of the crafting grid. An existing result stays.
+    /// The shape can sit in any corner of the crafting grid. Same result id
+    /// replaces a prior shapeless or shaped line (RoseGold wins over datapack).
     pub fn add_shaped(&mut self, result: String, pattern: Vec<String>) {
-        if pattern.len() != 9
-            || pattern.iter().all(|cell| cell.is_empty())
-            || self.recipes.iter().any(|recipe| recipe.result == result)
-        {
+        if pattern.len() != 9 || pattern.iter().all(|cell| cell.is_empty()) {
             return;
         }
         let ingredients = pattern
@@ -178,6 +207,11 @@ impl Book {
             .filter(|cell| !cell.is_empty())
             .cloned()
             .collect();
+        if let Some(existing) = self.recipes.iter_mut().find(|recipe| recipe.result == result) {
+            existing.ingredients = ingredients;
+            existing.pattern = Some(pattern);
+            return;
+        }
         self.recipes.push(Recipe {
             result,
             ingredients,
@@ -316,12 +350,24 @@ impl Book {
         (result != "cooked" && result != "bricks").then_some(result)
     }
 
-    /// Ingredients that craft `id`, when `id` is a result.
+    /// Ingredients that craft or cook `id`, when `id` is a result.
+    ///
+    /// Craft lines win when both exist; otherwise a heat input is returned so
+    /// EMI CRAFTING shows furnace / smoker / blast the same as shapeless craft.
     pub fn inputs(&self, id: &str) -> Option<Vec<String>> {
-        self.recipes
+        if let Some(recipe) = self.recipes.iter().find(|recipe| recipe.result == id) {
+            return Some(recipe.ingredients.clone());
+        }
+        self.heats
             .iter()
-            .find(|recipe| recipe.result == id)
-            .map(|recipe| recipe.ingredients.clone())
+            .find(|heat| heat.result == id)
+            .map(|heat| vec![heat.input.clone()])
+    }
+
+    /// True when `id` is only produced by a heat line (no craft recipe).
+    pub fn is_heat_only(&self, id: &str) -> bool {
+        !self.recipes.iter().any(|recipe| recipe.result == id)
+            && self.heats.iter().any(|heat| heat.result == id)
     }
 
     /// Nine-cell shape for `id`, when the recipe is shaped.
@@ -332,7 +378,20 @@ impl Book {
             .and_then(|recipe| recipe.pattern.as_deref())
     }
 
-    /// Results that list `id` as an ingredient (EMI USES panel).
+    /// Heat cook that produces `id`, even when a craft line also exists.
+    pub fn heat_line_of(&self, id: &str) -> Option<(&str, HeatStation)> {
+        self.heats
+            .iter()
+            .find(|heat| heat.result == id)
+            .map(|heat| (heat.input.as_str(), heat.station))
+    }
+
+    /// Heat station that cooks into `id` (prefer first matching heat line).
+    pub fn heat_station_of(&self, id: &str) -> Option<HeatStation> {
+        self.heat_line_of(id).map(|(_, station)| station)
+    }
+
+    /// Results that list `id` as a craft ingredient or heat input (EMI USES).
     pub fn uses_of(&self, id: &str) -> Vec<String> {
         let mut uses = Vec::new();
         for recipe in &self.recipes {
@@ -340,9 +399,22 @@ impl Book {
                 uses.push(recipe.result.clone());
             }
         }
+        for heat in &self.heats {
+            if heat.input == id {
+                uses.push(heat.result.clone());
+            }
+        }
         uses.sort();
         uses.dedup();
         uses
+    }
+}
+
+fn heat_verb(station: HeatStation) -> &'static str {
+    match station {
+        HeatStation::Furnace => "smelt",
+        HeatStation::Smoker => "smoke",
+        HeatStation::Blast => "blast",
     }
 }
 
@@ -1454,5 +1526,72 @@ mod tests {
         let smoked = load_emi().unwrap();
         assert_eq!(smoked.smoke("wheat").as_deref(), Some("apple"));
         assert!(smoked.smelt("wheat").is_none());
+    }
+
+    #[test]
+    fn emi_surfaces_heats_and_rosegold_overrides() {
+        let book = load_emi().unwrap();
+        assert!(book.entries().iter().any(|id| id == "glass"));
+        assert!(book.entries().iter().any(|id| id == "sand"));
+        // Glass has both a craft pile and a sand smelt — EMI keeps both.
+        assert_eq!(
+            book.inputs("glass").as_deref(),
+            Some(&["iron_ore".to_string(), "stone".to_string()][..])
+        );
+        assert_eq!(
+            book.heat_line_of("glass"),
+            Some(("sand", rebuild_world::HeatStation::Furnace))
+        );
+        assert!(!book.is_heat_only("glass"));
+        assert!(book.uses_of("sand").iter().any(|id| id == "glass"));
+        assert_eq!(
+            book.inputs("netherite_scrap").as_deref(),
+            Some(&["ancient_debris".to_string()][..])
+        );
+        assert!(book.is_heat_only("netherite_scrap"));
+        assert_eq!(
+            book.heat_station_of("netherite_scrap"),
+            Some(rebuild_world::HeatStation::Blast)
+        );
+
+        let mut overridden = Book::empty();
+        overridden.add_line(
+            "stone".into(),
+            vec!["cobblestone".into()],
+        );
+        overridden.add_line("stone".into(), vec!["dirt".into()]);
+        assert_eq!(
+            overridden.inputs("stone").as_deref(),
+            Some(&["dirt".to_string()][..])
+        );
+        overridden.add_shaped(
+            "stone".into(),
+            vec![
+                "oak_log".into(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
+        );
+        assert_eq!(
+            overridden.pattern_of("stone").map(|p| p[0].as_str()),
+            Some("oak_log")
+        );
+        overridden.add_heat(
+            "glass".into(),
+            "sand".into(),
+            rebuild_world::HeatStation::Furnace,
+        );
+        overridden.add_heat(
+            "torch".into(),
+            "sand".into(),
+            rebuild_world::HeatStation::Furnace,
+        );
+        assert_eq!(overridden.smelt("sand").as_deref(), Some("torch"));
     }
 }
